@@ -107,7 +107,7 @@ internal sealed class SessionController : IDisposable
     }
 
     /// <summary>The output already there can be reused: the same floating window, or fullscreen on the same screen at the same size.</summary>
-    private bool IsSameOutput(OutputPlacement placement) => _output is { IsAlive: true } current && (placement.IsFloating
+    private bool IsSameOutput(OutputPlacement placement) => !CloseOutputForReopen && _output is { IsAlive: true } current && (placement.IsFloating
         ? current.IsFloating
         : !current.IsFloating && current.Monitor.IsSameScreen(placement.Monitor) && current.Monitor.Bounds == placement.Monitor.Bounds);
 
@@ -143,6 +143,7 @@ internal sealed class SessionController : IDisposable
 
             if (previous is not null && !previous.IsSameSource(source)) PreviousSource = previous;
             Source = source;
+            UpdatePrivatePreview();
             output.Reveal();
             SetState(SessionState.Presenting);
             SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
@@ -415,6 +416,24 @@ internal sealed class SessionController : IDisposable
     /// <summary>Moves the output (and whatever it shows) to another screen.</summary>
     public Task MoveOutputAsync(DisplayMonitor monitor, bool topMost) => MoveOutputAsync(new OutputPlacement(monitor, topMost));
 
+    /// <summary>Re-creates the output with new window settings (e.g. "keep on top"), showing the same thing.</summary>
+    public async Task ReopenOutputAsync(OutputPlacement placement)
+    {
+        if (_output is { IsAlive: true, IsFloating: true } current) placement = placement with { Window = current.WindowBounds };
+        CloseOutputForReopen = true;
+        try
+        {
+            await MoveOutputAsync(placement);
+        }
+        finally
+        {
+            CloseOutputForReopen = false;
+        }
+    }
+
+    /// <summary>Forces <see cref="IsSameOutput"/> false for one move so the window is rebuilt.</summary>
+    private bool CloseOutputForReopen { get; set; }
+
     /// <summary>Moves the output (and whatever it shows) to another screen, or into / out of a floating window.</summary>
     public async Task MoveOutputAsync(OutputPlacement placement)
     {
@@ -513,6 +532,23 @@ internal sealed class SessionController : IDisposable
     private void OnOutputResized(object? sender, EventArgs e)
     {
         if (_output is { } output) _engine?.OnOutputResized(output.ClientSize);
+        UpdatePrivatePreview();
+    }
+
+    /// <summary>True while a floating window shows the screen it is on (a private preview).</summary>
+    public bool IsPrivatePreview { get; private set; }
+
+    /// <summary>
+    /// A floating window showing the very screen it sits on becomes a private preview: hidden from
+    /// capture, so sharing that screen never shows it and it never mirrors itself endlessly.
+    /// </summary>
+    private void UpdatePrivatePreview()
+    {
+        bool preview = _output is { IsAlive: true, IsFloating: true } o && Source?.Screen is { } screen && screen.IsSameScreen(o.Monitor);
+        _output?.SetPrivatePreview(preview);
+        if (preview == IsPrivatePreview) return;
+        IsPrivatePreview = preview;
+        SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>

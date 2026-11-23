@@ -81,6 +81,30 @@ public class SessionControllerTests
     }
 
     [Fact]
+    public async Task Showing_your_own_screen_in_the_window_makes_it_a_private_preview()
+    {
+        // One laptop screen, the window on it, the whole laptop screen shown (Teams-style preview).
+        await _session.PresentAsync(SourceWindow.ForScreen(TestData.Laptop), Floating);
+        Assert.True(_session.IsPrivatePreview);
+        Assert.True(_platform.Outputs[0].PrivatePreview); // hidden from capture: no endless mirror, never in the share
+
+        await _session.PresentAsync(Notepad, Floating); // a window: shareable again
+        Assert.False(_session.IsPrivatePreview);
+        Assert.False(_platform.Outputs[0].PrivatePreview);
+
+        await _session.PresentAsync(SourceWindow.ForScreen(TestData.Tv), Floating); // another screen: shareable
+        Assert.False(_platform.Outputs[0].PrivatePreview);
+    }
+
+    [Fact]
+    public async Task A_full_screen_output_is_never_made_private()
+    {
+        await _session.PresentAsync(SourceWindow.ForScreen(TestData.Laptop), TestData.Tv, true);
+        Assert.False(_session.IsPrivatePreview);
+        Assert.False(_platform.Outputs[0].PrivatePreview);
+    }
+
+    [Fact]
     public async Task Minimising_the_floating_window_warns_that_Zoom_shows_nothing()
     {
         await _session.PresentAsync(Notepad, Floating);
@@ -602,6 +626,10 @@ internal sealed class FakeOutput(DisplayMonitor monitor) : IOutputSurface
 
     /// <summary>The user clicks ✕ on the floating window.</summary>
     public void UserCloses() => CloseRequested?.Invoke(this, EventArgs.Empty);
+
+    public bool PrivatePreview { get; private set; }
+
+    public void SetPrivatePreview(bool on) => PrivatePreview = on;
 
     public void SetMinimized(bool minimized)
     {

@@ -29,12 +29,31 @@ public class OutputWindowTests
         Assert.True(style.HasFlag(WINDOW_STYLE.WS_CAPTION), "has a title bar to drag");
         Assert.False(ex.HasFlag(WINDOW_EX_STYLE.WS_EX_TOOLWINDOW), "tool windows don't appear in Zoom's window list");
         Assert.False(ex.HasFlag(WINDOW_EX_STYLE.WS_EX_NOACTIVATE));
-        Assert.False(ex.HasFlag(WINDOW_EX_STYLE.WS_EX_TOPMOST), "a floating window never covers the presenter's work");
+        Assert.True(ex.HasFlag(WINDOW_EX_STYLE.WS_EX_TOPMOST), "kept on top while presenting (the default), like Teams' preview");
         Assert.True(window.ShowInTaskbar);
         Assert.Equal("ScreenCast Presenter output", window.Text);
         Assert.False(DwmHelpers.IsExcludedFromCapture((HWND)window.Handle), "Zoom must see it (FR-14)");
         Assert.True(DwmHelpers.IsCloaked((HWND)window.Handle), "created cloaked (NFR-12)");
         Assert.Equal(bounds, window.WindowBounds);
+    }
+
+    [Fact]
+    public void Floating_window_can_be_an_ordinary_window_too()
+    {
+        using var window = new OutputWindow(new OutputPlacement(Screen, TopMost: false, OutputPlacement.DefaultWindow(Screen)));
+        window.CreateControl();
+        Assert.False(Styles(window.Handle).Ex.HasFlag(WINDOW_EX_STYLE.WS_EX_TOPMOST));
+    }
+
+    [Fact]
+    public void Private_preview_hides_the_window_from_capture_and_back()
+    {
+        using var window = new OutputWindow(new OutputPlacement(Screen, true, OutputPlacement.DefaultWindow(Screen)));
+        window.ShowCloaked(); // as in the app: shown (cloaked, so nothing appears) before it shows a source
+        window.SetPrivatePreview(true);
+        Assert.True(DwmHelpers.IsExcludedFromCapture((HWND)window.Handle));
+        window.SetPrivatePreview(false);
+        Assert.False(DwmHelpers.IsExcludedFromCapture((HWND)window.Handle), "back to shareable (FR-14)");
     }
 
     [Fact]

@@ -87,6 +87,9 @@ internal static class DwmHelpers
         return PInvoke.SetWindowDisplayAffinity(hwnd, WINDOW_DISPLAY_AFFINITY.WDA_EXCLUDEFROMCAPTURE);
     }
 
+    /// <summary>Lets screen capture see the window again (undoes <see cref="ExcludeFromCapture"/>).</summary>
+    public static bool IncludeInCapture(HWND hwnd) => PInvoke.SetWindowDisplayAffinity(hwnd, WINDOW_DISPLAY_AFFINITY.WDA_NONE);
+
     public static bool IsExcludedFromCapture(HWND hwnd) =>
         PInvoke.GetWindowDisplayAffinity(hwnd, out uint affinity) && affinity == (uint)WINDOW_DISPLAY_AFFINITY.WDA_EXCLUDEFROMCAPTURE;
 

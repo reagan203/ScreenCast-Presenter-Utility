@@ -76,6 +76,9 @@ internal sealed class AppSettings
     /// <summary>"Screen" (fullscreen on OutputDevice) or "Window" (a floating window, FR-11).</summary>
     public string OutputMode { get; set; } = "Screen";
 
+    /// <summary>The floating output window stays above every other window while presenting.</summary>
+    public bool FloatingOnTop { get; set; } = true;
+
     /// <summary>Where the floating output window was last (physical pixels); null = a default corner.</summary>
     public WindowBounds? FloatingWindow { get; set; }
 

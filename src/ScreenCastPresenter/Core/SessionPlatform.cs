@@ -24,6 +24,13 @@ internal interface IOutputSurface : IDisposable
     bool IsAlive { get; }
     event EventHandler? Resized;
 
+    /// <summary>
+    /// Private preview: hidden from screen capture. Used when a floating window shows the very
+    /// screen it sits on, so sharing that screen in Teams/Zoom never shows the window (and never
+    /// mirrors it endlessly). Normally off: Zoom must be able to share the output (FR-14).
+    /// </summary>
+    void SetPrivatePreview(bool on);
+
     /// <summary>The user closed the floating window.</summary>
     event EventHandler? CloseRequested;
 

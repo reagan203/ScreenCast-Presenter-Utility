@@ -29,7 +29,7 @@ internal sealed class OutputWindow : Form, IOutputSurface
     public OutputWindow(OutputPlacement placement)
     {
         Monitor = placement.Monitor;
-        _topMost = placement.TopMost && !placement.IsFloating;
+        _topMost = placement.TopMost; // a floating window may stay on top too ("Keep on top")
         _floating = placement.IsFloating;
 
         Text = "ScreenCast Presenter output";
@@ -82,6 +82,18 @@ internal sealed class OutputWindow : Form, IOutputSurface
 
     public bool IsMinimized => WindowState == FormWindowState.Minimized;
 
+    public bool IsPrivatePreview { get; private set; }
+
+    public void SetPrivatePreview(bool on)
+    {
+        if (on == IsPrivatePreview || !IsAlive) return;
+        IsPrivatePreview = on;
+        var hwnd = (HWND)Handle;
+        if (on) DwmHelpers.ExcludeFromCapture(hwnd);
+        else DwmHelpers.IncludeInCapture(hwnd);
+        Text = on ? "ScreenCast Presenter preview (private)" : "ScreenCast Presenter output";
+    }
+
     // Showing the output must never take keyboard focus away from the presenter's work.
     protected override bool ShowWithoutActivation => true;
 
@@ -101,7 +113,11 @@ internal sealed class OutputWindow : Form, IOutputSurface
     protected override void OnMove(EventArgs e)
     {
         base.OnMove(e);
-        if (_floating && IsHandleCreated && DisplayHelpers.FromWindow(Handle) is { } now && !now.IsSameScreen(Monitor)) Monitor = now;
+        if (_floating && IsHandleCreated && DisplayHelpers.FromWindow(Handle) is { } now && !now.IsSameScreen(Monitor))
+        {
+            Monitor = now;
+            Resized?.Invoke(this, EventArgs.Empty); // the session re-checks whether it now shows its own screen
+        }
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -120,7 +136,12 @@ internal sealed class OutputWindow : Form, IOutputSurface
         get
         {
             CreateParams cp = base.CreateParams;
-            if (_floating) return cp; // an ordinary window the user moves and resizes
+            if (_floating)
+            {
+                // An ordinary window the user moves and resizes; optionally above every other window.
+                if (_topMost) cp.ExStyle |= (int)WINDOW_EX_STYLE.WS_EX_TOPMOST;
+                return cp;
+            }
             // Tool window: not in Alt+Tab or the taskbar (FR-13). No-activate: clicks don't steal focus.
             // Topmost is set here rather than via Form.TopMost, which activates the window.
             var ex = (WINDOW_EX_STYLE)cp.ExStyle | WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_NOACTIVATE;

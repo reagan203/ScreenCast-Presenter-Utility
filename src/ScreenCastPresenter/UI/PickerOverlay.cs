@@ -203,7 +203,10 @@ internal sealed class PickerOverlay : ThemedForm
         foreach (DisplayMonitor m in _app.Monitors)
         {
             DisplayMonitor monitor = m;
-            bool isOutput = !record && output is not null && m.IsSameScreen(output); // recording the TV screen is fine: no mirror loop
+            // Recording the TV screen is fine, and so is showing your own screen in a floating window
+            // (a private preview); only a full-screen output can't show the screen it covers.
+            bool floating = _app.Session.State != SessionState.Off ? _app.Session.OutputIsFloating : _app.Settings.OutputInWindow;
+            bool isOutput = !record && !floating && output is not null && m.IsSameScreen(output);
             var pill = new PillButton($"Display {m.Number}", PillKind.Secondary)
             {
                 Detail = isOutput ? "  · your output is here" : $"  · {m.ShortName} · {m.Bounds.Width} × {m.Bounds.Height}",

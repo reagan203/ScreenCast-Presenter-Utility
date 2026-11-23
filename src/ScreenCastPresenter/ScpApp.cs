@@ -137,7 +137,7 @@ internal sealed class ScpApp : IDisposable
                     ? _monitors.FirstOrDefault(m => m.WorkArea.Contains(new Point(r.Left + r.Width / 2, r.Top + 12)))
                     : PresenterScreen();
                 if (host is null) return null;
-                return new OutputPlacement(host, false, restored ?? OutputPlacement.DefaultWindow(host));
+                return new OutputPlacement(host, Settings.FloatingOnTop, restored ?? OutputPlacement.DefaultWindow(host));
             }
             return ChosenOutput is { } m ? new OutputPlacement(m, _monitors.Count > 1) : null;
         }
@@ -317,12 +317,12 @@ internal sealed class ScpApp : IDisposable
         DisplayMonitor output = _session.OutputIsFloating && _session.OutputMonitor is { } at ? at : placement.Monitor;
         if (source.Screen is { } screen)
         {
-            // FR-14: a screen that holds the output would show itself, endlessly.
-            if (screen.IsSameScreen(output))
+            // FR-14: a screen that holds a full-screen output would show itself, endlessly. A
+            // floating window on that screen is fine: it becomes a private preview (hidden from
+            // capture), like Teams' sharing preview.
+            if (screen.IsSameScreen(output) && !placement.IsFloating)
             {
-                Message(placement.IsFloating
-                    ? $"The output window is on Display {screen.Number}, so that screen can't be shown in it. Move the window to another screen, or pick another screen."
-                    : $"Display {screen.Number} is where the output is, so it can't be shown on itself. Pick another screen or move the output.");
+                Message($"Display {screen.Number} is where the output is, so it can't be shown on itself. Pick another screen, or show it in a window (Ctrl+Alt+O).");
                 return;
             }
             if (!_monitors.Any(m => m.IsSameScreen(screen)))
@@ -354,7 +354,15 @@ internal sealed class ScpApp : IDisposable
             Message($"Cropped like last time. {ActiveShortcut("remove-crop")?.ToString() ?? "Remove the crop"} shows all of it.");
         if (onlyScreen)
             Message($"Only one screen is connected, so the output covers it. {StopHint()} {ActiveShortcut("switch-output")?.ToString() ?? "The tray menu"} shows it in a window instead.");
-        if (wasOff) GuideZoomSharing();
+        if (_session.IsPrivatePreview)
+        {
+            if (!_guidedPreview)
+            {
+                _guidedPreview = true;
+                Message("Your screen is shown in a private preview: Teams, Zoom and recordings can't see this window. Share your screen in Teams or Zoom as usual.");
+            }
+        }
+        else if (wasOff) GuideZoomSharing();
     }
 
     // ───────────────────────────── M3: crop, screenshots ─────────────────────────────
@@ -1055,6 +1063,16 @@ internal sealed class ScpApp : IDisposable
     }
 
     private bool _guidedWindow;
+    private bool _guidedPreview;
+
+    /// <summary>The floating window stays above every other window while presenting.</summary>
+    public void SetFloatingOnTop(bool on)
+    {
+        Settings.FloatingOnTop = on;
+        Save();
+        // Re-open the window with the new setting, keeping what it shows and where it is.
+        if (_session.OutputIsFloating && ChosenPlacement is { } placement) _ = _session.ReopenOutputAsync(placement);
+    }
     private bool _guidedZoom;
 
     /// <summary>

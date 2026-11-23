@@ -117,6 +117,7 @@ internal sealed class SettingsForm : ThemedForm
             !current.IsWindow && current.Screen is not null && m.IsSameScreen(current.Screen), (Action)(() => _app.SetOutputMonitor(m)))).ToList();
         choices.Add(("A window", current.IsWindow, _app.SetOutputWindow));
         AddChoice("Show on", "Fullscreen on a screen, or a window you can move and share in Zoom.", choices);
+        AddToggle("Keep the window on top", "The output window stays above every other window while you present, like Teams' sharing preview.", s.FloatingOnTop, on => _app.SetFloatingOnTop(on));
         AddButton("Sharing in Zoom", _app.Monitors.Any(m => m.IsVirtual)
                 ? "A Zoom screen is connected: share that screen in Zoom and your own screen stays private."
                 : "Share the window “ScreenCast Presenter output” in Zoom, or install a virtual display driver to get a Zoom screen.",

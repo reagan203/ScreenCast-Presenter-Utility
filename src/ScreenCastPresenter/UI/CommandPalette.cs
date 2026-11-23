@@ -203,13 +203,61 @@ internal sealed class CommandPalette : ThemedForm
             SourceWindow screen = SourceWindow.ForScreen(m);
             items.Add(new($"Show the whole of Display {m.Number} ({m.ShortName})", "Screen", null, "screen monitor desktop whole", PaletteKind.Action, () => app.PresentAsync(screen)));
         }
+        // Recording (FR-52/53): the record shortcut entry above toggles; these pick a source or the sound.
+        items.Add(new("Record a window or screen…", "Recording", null, "record video webinar capture", PaletteKind.Action, () =>
+        {
+            app.OpenRecordPicker();
+            return Task.CompletedTask;
+        }));
+        if (app.Session.State != SessionState.Off && !app.Recording.IsActive)
+        {
+            items.Add(new("Record what the TV shows", "Recording", null, "record video output presentation", PaletteKind.Action, () =>
+            {
+                app.RecordOutput();
+                return Task.CompletedTask;
+            }));
+        }
+        foreach ((Recording.MeetingSound sound, string label) in new[]
+        {
+            (Recording.MeetingSound.App, "Recording sound: only the recorded app"),
+            (Recording.MeetingSound.All, "Recording sound: all computer sound"),
+            (Recording.MeetingSound.None, "Recording sound: no computer sound"),
+        })
+        {
+            Recording.MeetingSound s = sound;
+            items.Add(new(label, app.Settings.MeetingSound == sound ? "current" : "", null, "audio meeting sound record", PaletteKind.Action, () =>
+            {
+                app.SetRecordSound(s);
+                return Task.CompletedTask;
+            }));
+        }
+        items.Add(new(app.Settings.RecordMicrophone ? "Recording: turn the microphone off" : "Recording: turn the microphone on", "", null, "mic microphone audio room record", PaletteKind.Action, () =>
+        {
+            app.SetRecordMicrophone(!app.Settings.RecordMicrophone);
+            return Task.CompletedTask;
+        }));
+        items.Add(new("Open recordings folder", "", null, "videos files record", PaletteKind.Action, () =>
+        {
+            app.OpenRecordingsFolder();
+            return Task.CompletedTask;
+        }));
+        List<SourceWindow> windows = WindowEnumerator.GetPresentableWindows();
+        foreach (SourceWindow w in windows)
+        {
+            SourceWindow window = w;
+            items.Add(new($"Record “{w.Title}”", w.AppName, null, "record window webinar", PaletteKind.Window, () =>
+            {
+                app.RecordSource(window);
+                return Task.CompletedTask;
+            }));
+        }
         items.Add(new("Quit ScreenCast Presenter", "", null, "exit close", PaletteKind.Action, () =>
         {
             app.RequestQuit();
             return Task.CompletedTask;
         }));
 
-        foreach (SourceWindow w in WindowEnumerator.GetPresentableWindows())
+        foreach (SourceWindow w in windows)
         {
             SourceWindow window = w;
             items.Add(new($"Show “{w.Title}”", w.AppName, null, "window present", PaletteKind.Window, () => app.PresentAsync(window)));

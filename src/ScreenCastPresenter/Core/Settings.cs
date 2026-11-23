@@ -55,6 +55,19 @@ internal sealed class AppSettings
     /// <summary>Where recordings go; null = Videos\Screen Recordings, like the Snipping Tool (FR-52).</summary>
     public string? RecordingFolder { get; set; }
 
+    /// <summary>Computer sound in recordings (FR-53, FR-58): "App" (only the recorded app), "All" or "None".</summary>
+    public string RecordSound { get; set; } = "App";
+
+    /// <summary>Record the microphone too (people in the room, FR-53).</summary>
+    public bool RecordMicrophone { get; set; }
+
+    [JsonIgnore]
+    public Recording.MeetingSound MeetingSound
+    {
+        get => Enum.TryParse(RecordSound, ignoreCase: true, out Recording.MeetingSound sound) && Enum.IsDefined(sound) ? sound : Recording.MeetingSound.App;
+        set => RecordSound = value.ToString();
+    }
+
     [JsonIgnore]
     public bool PreferWgc => string.Equals(CaptureEngine, "WGC", StringComparison.OrdinalIgnoreCase);
 
@@ -92,6 +105,7 @@ internal sealed class AppSettings
         SavedCrops = crops;
         if (string.IsNullOrWhiteSpace(ScreenshotFolder)) ScreenshotFolder = null;
         if (string.IsNullOrWhiteSpace(RecordingFolder)) RecordingFolder = null;
+        RecordSound = MeetingSound.ToString();
         BlankMessage = string.IsNullOrWhiteSpace(BlankMessage) ? "We'll be right back" : BlankMessage.Trim();
         if (BlankMessage.Length > MaxMessageLength) BlankMessage = BlankMessage[..MaxMessageLength];
         return this;

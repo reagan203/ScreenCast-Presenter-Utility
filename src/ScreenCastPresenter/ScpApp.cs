@@ -3,6 +3,7 @@ using Microsoft.Win32;
 using ScreenCastPresenter.Capture;
 using ScreenCastPresenter.Core;
 using ScreenCastPresenter.Interop;
+using ScreenCastPresenter.Recording;
 using ScreenCastPresenter.UI;
 
 namespace ScreenCastPresenter;
@@ -22,6 +23,7 @@ internal sealed class ScpApp : IDisposable
     private readonly PresentingBadge _badge;
     private readonly SourceOutline _outline;
     private readonly TrayIcon _tray;
+    private readonly RecordingController _recording;
     private readonly System.Windows.Forms.Timer _trimTimer = new() { Interval = 3000 };
     private List<DisplayMonitor> _monitors;
     private PickerOverlay? _picker;
@@ -42,6 +44,7 @@ internal sealed class ScpApp : IDisposable
         _hotkeys = new HotkeyManager();
         _badge = new PresentingBadge(PresenterScreen);
         _outline = new SourceOutline();
+        _recording = new RecordingController(() => new RecordingHelperProcess());
         _tray = new TrayIcon(this);
 
         _session.StateChanged += (_, _) => OnSessionChanged(reveal: true);
@@ -51,6 +54,9 @@ internal sealed class ScpApp : IDisposable
             Diag("session: " + message);
             _badge.ShowMessage(message);
         };
+        _recording.Changed += (_, _) => OnRecordingChanged();
+        _recording.Warning += (_, text) => Message(text, BadgeDot.Warning);
+        _recording.Finished += (_, result) => OnRecordingFinished(result);
         _hotkeys.Pressed += (_, id) =>
         {
             Diag("shortcut: " + id);
@@ -97,6 +103,7 @@ internal sealed class ScpApp : IDisposable
 
     public AppSettings Settings => _store.Current;
     public SessionController Session => _session;
+    public RecordingController Recording => _recording;
     public IReadOnlyList<DisplayMonitor> Monitors => _monitors;
     public IReadOnlyList<ShortcutBinding> Shortcuts => _hotkeys.Bindings;
     public bool ShortcutsPaused { get; private set; }
@@ -179,6 +186,8 @@ internal sealed class ScpApp : IDisposable
                 case "crop": await CropCurrentAsync(); break;
                 case "remove-crop": await RemoveCropAsync(); break;
                 case "screenshot": await TakeScreenshotAsync(); break;
+                case "record": ToggleRecording(); break;
+                case "pause-recording": TogglePauseRecording(); break;
                 default:
                     if (TrySlot(id, "save-favourite-", out int save)) SaveFavourite(save);
                     else if (TrySlot(id, "favourite-", out int show)) await ShowFavouriteAsync(show);
@@ -256,6 +265,28 @@ internal sealed class ScpApp : IDisposable
     /// <summary>Lets the user crop <paramref name="source"/>; presents it with the crop if asked (picker "Crop…").</summary>
     public async Task CropAsync(SourceWindow source, bool present)
     {
+        if (await ChoosePartAsync(source, "Drag to choose what to show") is not { } choice) return;
+        CropRegion? crop = choice.Crop;
+        if (!source.IsScreen)
+        {
+            if (crop is null) Settings.SavedCrops.Remove(source.AppName);
+            else Settings.SavedCrops[source.AppName] = crop;
+            Save();
+        }
+
+        if (present) await PresentAsync(source with { Crop = crop });
+        else await _session.SetCropAsync(crop);
+        if (crop is not null) Message($"Showing part of “{source.Title}”. {ActiveShortcut("remove-crop")?.ToString() ?? "Remove the crop"} shows all of it.");
+    }
+
+    private sealed record PartChoice(CropRegion? Crop);
+
+    /// <summary>
+    /// Lets the user drag a part of a window or screen. Null when cancelled or impossible (the
+    /// reason is shown); a null crop inside means "all of it".
+    /// </summary>
+    private async Task<PartChoice?> ChoosePartAsync(SourceWindow source, string hint)
+    {
         Rectangle client;
         if (source.Screen is { } screen) client = screen.Bounds;
         else
@@ -264,12 +295,12 @@ internal sealed class ScpApp : IDisposable
             if (alive is null)
             {
                 Message($"“{source.Title}” has closed.");
-                return;
+                return null;
             }
             if (alive.IsMinimized)
             {
-                Message($"Restore “{source.Title}” first, then crop it.");
-                return;
+                Message($"Restore “{source.Title}” first, then choose the part you want.");
+                return null;
             }
             client = WindowEnumerator.ClientBoundsOnScreen(source.Handle);
         }
@@ -283,26 +314,16 @@ internal sealed class ScpApp : IDisposable
         Rectangle area = host is null ? Rectangle.Empty : Rectangle.Intersect(host.Bounds, client);
         if (host is null || Area(area) < Area(client) / 3)
         {
-            Message("Move the window onto your own screen to crop it.");
-            return;
+            Message("Move the window onto your own screen first, then choose the part you want.");
+            return null;
         }
 
         Rectangle? initial = source.Crop?.ToScreen(client);
-        Rectangle? chosen = await RegionSelector.SelectAsync(area, initial, "Drag to choose what to show", host.Scale);
-        if (chosen is not { } selection) return;
+        Rectangle? chosen = await RegionSelector.SelectAsync(area, initial, hint, host.Scale);
+        if (chosen is not { } selection) return null;
 
         CropRegion? crop = CropRegion.FromScreen(selection, client);
-        if (crop is { IsFull: true }) crop = null;
-        if (!source.IsScreen)
-        {
-            if (crop is null) Settings.SavedCrops.Remove(source.AppName);
-            else Settings.SavedCrops[source.AppName] = crop;
-            Save();
-        }
-
-        if (present) await PresentAsync(source with { Crop = crop });
-        else await _session.SetCropAsync(crop);
-        if (crop is not null) Message($"Showing part of “{source.Title}”. {ActiveShortcut("remove-crop")?.ToString() ?? "Remove the crop"} shows all of it.");
+        return new PartChoice(crop is { IsFull: true } ? null : crop);
     }
 
     private static long Area(Rectangle r) => r.Width <= 0 || r.Height <= 0 ? 0 : (long)r.Width * r.Height;
@@ -395,6 +416,221 @@ internal sealed class ScpApp : IDisposable
         ]);
         ScheduleTrim();
     }
+
+    // ───────────────────────────── recording (FR-52–FR-61) ─────────────────────────────
+
+    /// <summary>The record shortcut: stops a running recording; otherwise records what the TV shows, or asks what to record.</summary>
+    private void ToggleRecording()
+    {
+        if (_recording.IsActive)
+        {
+            _recording.Stop();
+            return;
+        }
+        if (_session.State == SessionState.Presenting) RecordOutput();
+        else OpenRecordPicker();
+    }
+
+    private void TogglePauseRecording()
+    {
+        if (!_recording.IsActive)
+        {
+            Message("Nothing is being recorded.");
+            return;
+        }
+        _recording.TogglePause();
+    }
+
+    /// <summary>
+    /// FR-52 default / FR-55: records the output's screen, cropped to the output, so the file shows
+    /// exactly what the audience sees through switches, blank and freeze. (Capturing the output
+    /// window itself would miss the DWM thumbnail it displays: window capture leaves thumbnails out.)
+    /// SCP's own windows are excluded from capture, so they never appear (FR-56). The recording
+    /// stops when presenting stops or the output moves to another screen (see OnSessionChanged).
+    /// </summary>
+    public void RecordOutput()
+    {
+        if (_session.State == SessionState.Off || _session.OutputMonitor is not { } monitor || _session.OutputHandle == 0)
+        {
+            Message("Nothing is being shown. Pick what to record instead.");
+            OpenRecordPicker();
+            return;
+        }
+        Rectangle outputBounds = DwmHelpers.GetVisibleBounds((Windows.Win32.Foundation.HWND)_session.OutputHandle);
+        CropRegion? crop = outputBounds.IsEmpty ? null : CropRegion.FromScreen(Rectangle.Intersect(outputBounds, monitor.Bounds), monitor.Bounds);
+        var source = SourceWindow.ForScreen(monitor) with { Crop = crop is { IsFull: false } ? crop : null };
+        _recordedOutput = monitor;
+        StartRecording(source, $"What {OutputName()} shows", followsOutput: true);
+    }
+
+    /// <summary>The output screen a "what the TV shows" recording captures; null otherwise.</summary>
+    private DisplayMonitor? _recordedOutput;
+    private string? _recordingEndNote;
+
+    /// <summary>A "what the TV shows" recording ends when the presentation ends or moves screen.</summary>
+    private void StopOutputRecordingIfOrphaned()
+    {
+        if (!_recording.IsActive || !_recording.FollowsOutput || _recordedOutput is not { } recorded) return;
+        if (_recording.Status == RecordingStatus.Stopping) return;
+        if (_session.State == SessionState.Off)
+            _recordingEndNote = "Presentation ended, recording saved";
+        else if (_session.OutputMonitor is { } now && !now.IsSameScreen(recorded))
+            _recordingEndNote = "The output moved screen, recording saved";
+        else return;
+        _recording.Stop();
+    }
+
+    /// <summary>Records a window or screen chosen in the picker (FR-57: carries on while you work).</summary>
+    public void RecordSource(SourceWindow source)
+    {
+        if (!source.IsScreen && source.Handle == _session.OutputHandle)
+        {
+            RecordOutput();
+            return;
+        }
+        string description = source.Screen is { } screen ? $"Display {screen.Number}" : Shorten(source.Title, 40);
+        StartRecording(source, description, followsOutput: false);
+        if (!source.IsScreen && source.IsMinimized)
+            Message($"“{Shorten(source.Title, 40)}” is minimised, so only its sound is recorded until you restore it. Move it aside instead of minimising.", BadgeDot.Warning);
+    }
+
+    /// <summary>Records part of a window or screen (picker "Part of it…").</summary>
+    public async Task RecordPartAsync(SourceWindow source)
+    {
+        if (await ChoosePartAsync(source, "Drag the part to record") is not { } choice) return;
+        await Task.Delay(150); // let the selection overlay go (it's excluded from capture anyway)
+        RecordSource(source with { Crop = choice.Crop });
+    }
+
+    private void StartRecording(SourceWindow source, string description, bool followsOutput)
+    {
+        string folder = Settings.RecordingFolder ?? SavedFiles.DefaultRecordingFolder;
+        string path = SavedFiles.NextPath(folder, "Screen Recording", DateTime.Now, ".mp4", File.Exists);
+        var request = new RecordingRequest(source, Settings.ShowCursor, Settings.MeetingSound, Settings.RecordMicrophone, path);
+        if (_recording.Start(request, description, followsOutput) is { } problem)
+        {
+            Message("Recording didn't start: " + problem, BadgeDot.Warning);
+            return;
+        }
+        Diag($"recording: start {description} sound={Settings.MeetingSound} mic={Settings.RecordMicrophone}");
+        UpdateBadge(reveal: true);
+    }
+
+    public void SetRecordSound(MeetingSound sound)
+    {
+        Settings.MeetingSound = sound;
+        Save();
+        if (_recording.IsActive) Message("The sound choice applies to your next recording.");
+    }
+
+    public void SetRecordMicrophone(bool on)
+    {
+        Settings.RecordMicrophone = on;
+        Save();
+        if (_recording.IsActive) Message("The microphone choice applies to your next recording.");
+    }
+
+    public void OpenRecordingsFolder()
+    {
+        string folder = Settings.RecordingFolder ?? SavedFiles.DefaultRecordingFolder;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            ShellOpen(folder);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Message(SavedFiles.Explain(ex), BadgeDot.Warning);
+        }
+    }
+
+    /// <summary>FR-59: stop by itself after this much recording (null = only when stopped or the window closes).</summary>
+    public TimeSpan? RecordingStopAfter { get; private set; }
+
+    public void SetRecordingStopAfter(TimeSpan? limit)
+    {
+        RecordingStopAfter = limit;
+        if (limit is { } l && _recording.IsActive)
+            Message($"The recording stops by itself after {DurationWords(l)}.", BadgeDot.Recording);
+        StopRecordingIfDue();
+    }
+
+    private void StopRecordingIfDue()
+    {
+        if (RecordingStopAfter is not { } limit || !_recording.IsActive || _recording.Status == RecordingStatus.Stopping) return;
+        if (_recording.Elapsed < limit) return;
+        _recordingEndNote = $"Stopped after {DurationWords(limit)} as planned, recording saved";
+        _recording.Stop();
+    }
+
+    private void OnRecordingChanged()
+    {
+        StopRecordingIfDue();
+        UpdateBadge(reveal: false);
+        _tray.Refresh();
+    }
+
+    private void OnRecordingFinished(RecordingResult result)
+    {
+        Diag($"recording: finished {result.End} {result.Length} {result.Bytes} bytes saved={result.Saved} {result.Detail}");
+        UpdateBadge(reveal: false);
+        _tray.Refresh();
+        if (!result.Saved)
+        {
+            _recordingEndNote = null;
+            _recordedOutput = null;
+            RecordingStopAfter = null;
+            Message(result.Detail.Length > 0 ? "Recording not saved: " + result.Detail : "The recording didn't start.", BadgeDot.Warning);
+            ScheduleTrim();
+            return;
+        }
+
+        string? note = _recordingEndNote;
+        _recordingEndNote = null;
+        _recordedOutput = null;
+        RecordingStopAfter = null; // a time limit is for one recording
+        string title = result.End switch
+        {
+            RecordingEnd.Stopped when note is not null => note,
+            RecordingEnd.SourceClosed when _recording.FollowsOutput => "The TV was disconnected, recording saved",
+            RecordingEnd.SourceClosed => "Window closed, recording saved",
+            RecordingEnd.DiskFull => "Disk nearly full, recording saved",
+            RecordingEnd.Error => "Recording stopped early, saved so far",
+            _ => "Recording saved",
+        };
+        string path = result.Path;
+        _badge.ShowActions(title, $"{Path.GetFileName(path)} · {RecordingClockText(result.Length)}",
+        [
+            new BadgeButton("Open", true, () => ShellOpen(path)),
+            new BadgeButton("Show in folder", false, () => ShellOpen("explorer.exe", $"/select,\"{path}\"")),
+        ]);
+        ScheduleTrim();
+    }
+
+    /// <summary>"30 minutes", "1 hour", "1½ hours", "2 hours".</summary>
+    public static string DurationWords(TimeSpan t)
+    {
+        if (t.TotalMinutes < 60) return $"{(int)t.TotalMinutes} minutes";
+        double hours = t.TotalHours;
+        string number = hours % 1 == 0.5 ? $"{(int)hours}½" : ((int)Math.Round(hours)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return number == "1" ? "1 hour" : $"{number} hours";
+    }
+
+    /// <summary>"4:05" or "1:02:03".</summary>
+    public static string RecordingClockText(TimeSpan t) =>
+        t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
+
+    /// <summary>The badge's red segment (FR-54): "REC 4:05", "Paused 4:05", "Starting…", "Saving…".</summary>
+    private string? RecordingBadgeText() => _recording.Status switch
+    {
+        RecordingStatus.Starting => "Starting…",
+        RecordingStatus.Recording => "REC " + RecordingClockText(_recording.Elapsed),
+        RecordingStatus.Paused => "Paused " + RecordingClockText(_recording.Elapsed),
+        RecordingStatus.Stopping => "Saving…",
+        _ => null,
+    };
+
+    private static string Shorten(string text, int max) => text.Length > max ? text[..(max - 1)] + "…" : text;
 
     private static bool TryCopyToClipboard(Image image)
     {
@@ -643,17 +879,23 @@ internal sealed class ScpApp : IDisposable
     // ───────────────────────────── windows ─────────────────────────────
 
     /// <summary>Opens the picker on the presenter's screen, or closes it if it's already open (the shortcut toggles).</summary>
-    public void OpenPicker()
+    public void OpenPicker() => OpenPicker(PickerMode.Show);
+
+    /// <summary>The picker in "choose what to record" mode (FR-52, FR-57).</summary>
+    public void OpenRecordPicker() => OpenPicker(PickerMode.Record);
+
+    private void OpenPicker(PickerMode mode)
     {
         if (_picker is { IsDisposed: false, Visible: true })
         {
+            bool sameMode = _picker.Mode == mode;
             _picker.Dismiss();
-            return;
+            if (sameMode) return; // the shortcut toggles it; a different mode reopens it
         }
         var clock = System.Diagnostics.Stopwatch.StartNew();
         if (PresenterScreen() is not { } screen) return;
         PickerOverlay picker = EnsurePicker(screen);
-        picker.Open();
+        picker.Open(mode);
         Diag($"picker: shown {clock.ElapsedMilliseconds} ms");
     }
 
@@ -704,8 +946,7 @@ internal sealed class ScpApp : IDisposable
     /// <summary>Opt-in diagnostics for the stress harness (SCP_DIAG_LOG); does nothing otherwise.</summary>
     internal static void Diag(string message)
     {
-        if (Environment.GetEnvironmentVariable("SCP_DIAG_LOG") is not { Length: > 0 } log) return;
-        try { File.AppendAllText(log, $"{DateTime.Now:HH:mm:ss.fff} {message}\n"); } catch (IOException) { }
+        DiagLog.Write(message);
     }
 
     private static void BeginInvokeOnUi(Action action) =>
@@ -776,6 +1017,14 @@ internal sealed class ScpApp : IDisposable
         _shortcutsForm?.Close();
         _firstRun?.Close();
         await _session.StopAsync();
+        if (_recording.IsActive)
+        {
+            // FR-55: quitting finishes the recording properly. The helper would finish it on its
+            // own anyway (FR-61), but waiting lets SCP confirm it was saved.
+            Message("Saving the recording…", BadgeDot.Recording);
+            _recording.Stop();
+            await Task.WhenAny(_recording.Completion, Task.Delay(TimeSpan.FromSeconds(15)));
+        }
         QuitRequested?.Invoke(this, EventArgs.Empty);
     }
 
@@ -783,6 +1032,7 @@ internal sealed class ScpApp : IDisposable
 
     private void OnSessionChanged(bool reveal)
     {
+        StopOutputRecordingIfOrphaned();
         UpdateBadge(reveal);
         UpdateOutline();
         _tray.Refresh();
@@ -810,7 +1060,17 @@ internal sealed class ScpApp : IDisposable
             SessionState.IdleScreen => new BadgeContent(BadgeDot.Hollow, $"{OutputName()} shows a blank screen", "Pick something to show", [pick, stop]),
             _ => null,
         };
-        _badge.SetStatus(Settings.ShowBadge ? content : null, reveal);
+
+        // FR-54: the recording indicator rides on the badge; a recording alone gets its own badge.
+        if (RecordingBadgeText() is { } recording)
+        {
+            var stopRecording = new BadgeButton("Stop recording", false, () => _recording.Stop());
+            var pause = new BadgeButton(_recording.Status == RecordingStatus.Paused ? "Resume" : "Pause", false, () => _recording.TogglePause());
+            content = content is null
+                ? new BadgeContent(BadgeDot.Recording, "Recording", _recording.Description, _recording.Status is RecordingStatus.Recording or RecordingStatus.Paused ? [pause, stopRecording] : [], recording)
+                : content with { Recording = recording };
+        }
+        _badge.SetStatus(Settings.ShowBadge || _recording.IsActive ? content : null, reveal);
     }
 
     private void UpdateOutline()
@@ -942,6 +1202,7 @@ internal sealed class ScpApp : IDisposable
         _picker?.Dispose();
         _hotkeys.Dispose();
         _session.Dispose();
+        _recording.Dispose();
         _outline.Dispose();
         _badge.Dispose();
         _tray.Dispose();

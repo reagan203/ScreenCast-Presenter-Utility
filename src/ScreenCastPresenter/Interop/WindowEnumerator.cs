@@ -121,6 +121,15 @@ internal static class WindowEnumerator
 
     public static bool IsAlive(nint hwnd) => PInvoke.IsWindow((HWND)hwnd);
 
+    public static bool IsMinimized(nint hwnd) => PInvoke.IsIconic((HWND)hwnd);
+
+    /// <summary>The process behind a window, looking through the UWP frame host to the real app; 0 if gone.</summary>
+    public static uint ProcessOf(nint hwnd)
+    {
+        if (PInvoke.GetWindowThreadProcessId((HWND)hwnd, out uint pid) == 0) return 0;
+        return AppProcessId((HWND)hwnd, pid);
+    }
+
     /// <summary>The client area in screen coordinates (physical pixels); empty if the window is gone.</summary>
     public static Rectangle ClientBoundsOnScreen(nint hwnd)
     {

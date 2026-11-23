@@ -24,6 +24,7 @@ internal sealed class ScpProcess : IDisposable
 
     public int Id => _process.Id;
     public string ScreenshotDir => Path.Combine(_dir, "shots");
+    public string RecordingDir => Path.Combine(_dir, "recs");
 
     /// <summary>Capture-helper processes still running (SCP's own exe in helper mode).</summary>
     public int HelperCount => Math.Max(0, Process.GetProcessesByName("ScreenCastPresenter").Length - 1);
@@ -52,6 +53,8 @@ internal sealed class ScpProcess : IDisposable
             ["ShowOutline"] = Environment.GetEnvironmentVariable("SCP_HARNESS_NO_OVERLAYS") != "1",
             ["CaptureEngine"] = Environment.GetEnvironmentVariable("SCP_HARNESS_ENGINE") ?? "Automatic",
             ["ScreenshotFolder"] = Path.Combine(dir, "shots"),
+            ["RecordingFolder"] = Path.Combine(dir, "recs"),
+            ["RecordSound"] = "App",
             ["Favourites"] = slots,
         };
         string path = Path.Combine(dir, "settings.json");

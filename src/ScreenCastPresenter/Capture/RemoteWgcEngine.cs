@@ -49,6 +49,7 @@ internal sealed class RemoteWgcEngine : ICaptureEngine
             RedirectStandardOutput = true,
             CreateNoWindow = true,
         };
+        CaptureHost.UseUtf8(info);
         // The helper is short-lived: start it fast (tiered JIT) and skip profile-guided instrumentation.
         info.Environment["DOTNET_TieredCompilation"] = "1";
         info.Environment["DOTNET_TieredPGO"] = "0";

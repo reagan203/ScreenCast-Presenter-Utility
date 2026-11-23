@@ -24,13 +24,30 @@ internal static class CaptureHost
     private static WNDPROC? _wndProc; // keep the delegate alive while the window exists
     private static readonly object WriteLock = new();
 
+    // UTF-8 both ways, whatever the console code page: file paths may contain any character
+    // (e.g. a user folder with an accent). A byte-order mark from the other side is skipped.
+    private static readonly StreamReader Input = new(Console.OpenStandardInput(), new System.Text.UTF8Encoding(false), detectEncodingFromByteOrderMarks: true);
+    private static readonly StreamWriter Output = new(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { NewLine = "\n" };
+
+    /// <summary>Stream settings for SCP's side of the pipe, matching the helper's.</summary>
+    public static void UseUtf8(ProcessStartInfo info)
+    {
+        info.StandardInputEncoding = new System.Text.UTF8Encoding(false);
+        info.StandardOutputEncoding = new System.Text.UTF8Encoding(false);
+    }
+
     public static int Run(string[] args)
     {
         // Physical pixels, like SCP, so window and frame coordinates agree.
         PInvoke.SetProcessDpiAwarenessContext(new DPI_AWARENESS_CONTEXT(-4)); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
         try
         {
-            return args[0] == CaptureProtocol.StillSwitch ? RunStill(args) : RunPresenter();
+            return args[0] switch
+            {
+                CaptureProtocol.StillSwitch => RunStill(args),
+                Recording.RecordingProtocol.RecordSwitch => RunRecorder(),
+                _ => RunPresenter(),
+            };
         }
         catch (Exception ex)
         {
@@ -45,8 +62,8 @@ internal static class CaptureHost
         {
             try
             {
-                Console.Out.WriteLine(line);
-                Console.Out.Flush();
+                Output.WriteLine(line);
+                Output.Flush();
             }
             catch (IOException)
             {
@@ -60,7 +77,7 @@ internal static class CaptureHost
     private static unsafe int RunPresenter()
     {
         // start <parent> <source> <cursor> <frozen> <crop> <w> <h>
-        string[] start = (Console.In.ReadLine() ?? "").Split(' ');
+        string[] start = (Input.ReadLine() ?? "").Split(' ');
         if (start.Length < 8 || start[0] != "start") return 2;
         var parent = (HWND)(nint)long.Parse(start[1], System.Globalization.CultureInfo.InvariantCulture);
         SourceWindow source = CaptureProtocol.ParseSource(start[2]) ?? throw new InvalidOperationException("That window or screen is gone.");
@@ -104,7 +121,7 @@ internal static class CaptureHost
     private static void ReadCommands(WgcEngine engine, HWND child, uint mainThread)
     {
         string? line;
-        while ((line = Console.In.ReadLine()) is not null)
+        while ((line = Input.ReadLine()) is not null)
         {
             string[] p = line.Split(' ', 3);
             switch (p[0])
@@ -158,6 +175,41 @@ internal static class CaptureHost
             if (child.IsNull) throw new InvalidOperationException("Couldn't create the capture surface.");
             return child;
         }
+    }
+
+    // ───────────────────────────── recording ─────────────────────────────
+
+    /// <summary>
+    /// --record: reads one "record …" line, records until "stop", the recorded window closing, or
+    /// stdin closing (SCP exited or crashed: the file is still finished properly, FR-61).
+    /// </summary>
+    private static int RunRecorder()
+    {
+        Recording.RecordingRequest? request = Recording.RecordingProtocol.ParseStart(Input.ReadLine());
+        if (request is null)
+        {
+            Send(Recording.RecordingProtocol.Failed("That window or screen is gone."));
+            return 2;
+        }
+        using var recorder = new Recording.Recorder(request, Send);
+        recorder.Start();
+        var commands = new Thread(() =>
+        {
+            string? line;
+            while ((line = Input.ReadLine()) is not null)
+            {
+                switch (line.Trim())
+                {
+                    case "pause": recorder.Pause(); break;
+                    case "resume": recorder.Resume(); break;
+                    case "stop": recorder.Stop(); return;
+                }
+            }
+            recorder.Stop(); // SCP went away
+        }) { IsBackground = true, Name = "SCP recording commands" };
+        commands.Start();
+        recorder.Wait();
+        return recorder.End == Recording.RecordingEnd.Error ? 5 : 0;
     }
 
     // ───────────────────────────── screenshots ─────────────────────────────

@@ -58,8 +58,8 @@ internal static class ShortcutCatalog
             new("crop", "Crop the current source", ShortcutGroup.Crop, C(Keys.C), Keywords: "part area region zoom"),
             new("remove-crop", "Remove the crop", ShortcutGroup.Crop, CS(Keys.C), Keywords: "uncrop whole all"),
 
-            new("record", "Start / stop recording", ShortcutGroup.Recording, C(Keys.R), Available: false, Keywords: "video capture"),
-            new("pause-recording", "Pause / resume recording", ShortcutGroup.Recording, CS(Keys.R), Available: false),
+            new("record", "Start / stop recording", ShortcutGroup.Recording, C(Keys.R), Keywords: "video capture webinar record"),
+            new("pause-recording", "Pause / resume recording", ShortcutGroup.Recording, CS(Keys.R), Keywords: "hold break"),
             new("screenshot", "Take a screenshot", ShortcutGroup.Recording, CS(Keys.S), Keywords: "snip capture image"),
 
             new("toggle-outline", "Yellow outline on / off", ShortcutGroup.OnMyScreen, C(Keys.Y), Keywords: "border frame"),

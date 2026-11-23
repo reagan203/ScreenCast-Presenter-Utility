@@ -109,12 +109,11 @@ internal static class Direct3D
     }
 
     /// <summary>The D3D texture behind a captured frame's surface (no copy).</summary>
-    public static unsafe ID3D11Texture2D TextureOf(IDirect3DSurface surface)
+    public static ID3D11Texture2D TextureOf(IDirect3DSurface surface)
     {
-        var access = surface.As<Windows.Win32.System.WinRT.Direct3D11.IDirect3DDxgiInterfaceAccess>();
-        Guid iid = typeof(ID3D11Texture2D).GUID;
-        access.GetInterface(&iid, out void* texture);
-        return new ID3D11Texture2D((nint)texture);
+        // Raw pointers, no .NET COM wrapper: this runs for every captured frame (see RawCom).
+        nint native = ((IWinRTObject)surface).NativeObject.ThisPtr;
+        return new ID3D11Texture2D(RawCom.DxgiInterface(native, typeof(ID3D11Texture2D).GUID));
     }
 
     /// <summary>

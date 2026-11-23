@@ -20,12 +20,27 @@ Unit tests cover the logic only, with no windows or displays involved:
 - **Output and badge screens:** choosing the output screen, and choosing the presenter's screen.
 - **Outline geometry:** maximised windows, windows spanning screens, never drawing on the TV.
 - **Picker:** grid layout, keyboard movement, accent-insensitive search, cropping thumbnails while scrolling.
+- **Recording:**
+  - the audio mixer: summing, gain, running dry, clock drift over a long webinar, left/right never swapped;
+  - the recording clock (pause), frame pacing (30 fps cap, a still picture repeated every second), the disk guard;
+  - the helper protocol, including paths with accents, spaces and Japanese characters;
+  - the recording controller (driven by a fake helper): progress, pause, stop, a crashed helper, a failed start, a disk too full to start, accidental one-second recordings;
+  - one real encode on the GPU: three seconds of picture and tone, read back to check size, duration, frame count and both tracks.
 - **Session controller** (driven by fakes):
   - fades through black, blank and dim;
   - coalescing a thousand switches or blank presses;
   - a source closing mid-fade;
   - engine and watcher failures;
   - Stop cancelling queued work.
+
+### Long tests (opt-in)
+
+```
+set SCP_LONG_TESTS=1
+dotnet test --filter LongRecordingTests
+```
+
+Simulates a two-hour recording (1280×720 at 30 fps with sound) as fast as the GPU allows, about 9 minutes, and fails if memory grows more than 10 MB after warm-up (NFR-09a). It found a leak of ~70 MB per two hours that no short test showed: every COM object passed through .NET's built-in interop leaves ~200 bytes behind, so the recording hot paths use raw COM calls (`Interop/RawCom.cs`).
 
 ## 2. Stress harness (minutes; uses your desktop)
 
@@ -49,6 +64,7 @@ The harness opens windows, presses keys and covers the screen. **Run it when you
 | `hostile` | Constantly resizing, retitling, 4K, tiny and frozen sources; source closed mid-fade 50–1,000 times | No crash; SCP responsive while the source is frozen |
 | `pressure` | Every CPU core at 100% while switching | UI round trip < 500 ms |
 | `flash` | Records the output screen at display rate during 100 switches between two dark windows | Zero frames with more than 10% of pixels brighter than #303030 (NFR-16) |
+| `record` | Records what the TV shows through a switch, blank and pause; stops presenting during a second TV recording; records a window in the background and closes it | Three playable files; the TV recording ends with the presentation; the window recording stops by itself; no recorder left running |
 | `soak --minutes N` | A switch every 2 s and a blank every 20 s, sampled every 10 s | Memory drift < 5 MB (NFR-09) |
 | `quick` / `full` | Every scenario above, at small or large counts | All pass |
 

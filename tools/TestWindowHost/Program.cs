@@ -39,7 +39,9 @@ internal static partial class Program
     private static void ReadCommands()
     {
         string? line;
-        while ((line = Console.In.ReadLine()) is not null)
+        // UTF-8 whatever the console code page; skips a byte-order mark (Windows PowerShell 5.1 writes one).
+        using var input = new StreamReader(Console.OpenStandardInput(), new System.Text.UTF8Encoding(false), detectEncodingFromByteOrderMarks: true);
+        while ((line = input.ReadLine()) is not null)
         {
             string command = line;
             try
@@ -112,6 +114,7 @@ internal static partial class Program
             _ = DwmSetWindowAttribute(form.Handle, 13 /* DWMWA_CLOAK */, ref cloak, sizeof(int));
         }
         if (kind == "resizer") StartTimer(form, 16, f => f.Width = f.Width == 900 ? 700 : 900);
+        if (kind == "animator") StartTimer(form, 16, f => f.Invalidate()); // a new picture every frame, like a video
         if (kind == "retitler")
         {
             int n = 0;
@@ -157,6 +160,13 @@ internal static partial class Program
             using var brush = new SolidBrush(dark ? Color.FromArgb(0x24, 0x24, 0x2A) : Color.FromArgb(0xE0, 0x7A, 0x5F));
             e.Graphics.FillRectangle(brush, ClientSize.Width / 8, ClientSize.Height / 6, ClientSize.Width / 2, ClientSize.Height / 10);
             e.Graphics.FillRectangle(brush, ClientSize.Width / 8, ClientSize.Height / 3, ClientSize.Width / 3, ClientSize.Height / 3);
+            if (kind == "animator")
+            {
+                // A moving bar, so every frame differs.
+                int x = (int)(Environment.TickCount64 / 4 % Math.Max(1, ClientSize.Width));
+                using var bar = new SolidBrush(Color.FromArgb(0x5F, 0xC0, 0xE0));
+                e.Graphics.FillRectangle(bar, x, 0, 24, ClientSize.Height);
+            }
         }
     }
 }

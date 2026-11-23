@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using ScreenCastPresenter.Core;
+using ScreenCastPresenter.Recording;
 using Windows.Win32;
 using Windows.Win32.UI.WindowsAndMessaging;
 
@@ -16,12 +17,14 @@ internal sealed class TrayIcon : IDisposable
     private readonly ContextMenuStrip _menu;
     private readonly Icon _idleIcon;
     private readonly Icon _presentingIcon;
+    private readonly Icon _recordingIcon;
 
     public TrayIcon(ScpApp app)
     {
         _app = app;
         _idleIcon = DrawIcon(presenting: false);
         _presentingIcon = DrawIcon(presenting: true);
+        _recordingIcon = DrawIcon(presenting: false, recording: true);
 
         _menu = new ContextMenuStrip { Font = Theme.UiFont, ShowImageMargin = false, ShowCheckMargin = true };
         _menu.Opening += (_, _) => BuildMenu();
@@ -44,8 +47,10 @@ internal sealed class TrayIcon : IDisposable
     public void Refresh()
     {
         SessionController s = _app.Session;
+        RecordingController r = _app.Recording;
         bool presenting = s.State == SessionState.Presenting;
-        _notifyIcon.Icon = presenting ? _presentingIcon : _idleIcon;
+        Icon icon = r.IsActive ? _recordingIcon : presenting ? _presentingIcon : _idleIcon; // FR-54: recording shows in the tray
+        if (!ReferenceEquals(_notifyIcon.Icon, icon)) _notifyIcon.Icon = icon;
         string text = s.State switch
         {
             SessionState.Presenting when s.IsBlanked => "ScreenCast Presenter: TV is blank",
@@ -53,6 +58,7 @@ internal sealed class TrayIcon : IDisposable
             SessionState.IdleScreen => "ScreenCast Presenter: TV shows a blank screen",
             _ => "ScreenCast Presenter",
         };
+        if (RecordingLine(r) is { } recording) text = recording + "\n" + text;
         _notifyIcon.Text = text.Length > 127 ? text[..126] + "…" : text; // tooltip limit
     }
 
@@ -89,6 +95,7 @@ internal sealed class TrayIcon : IDisposable
         if (s.Source?.Crop is not null) _menu.Items.Add(Item("Remove the crop", "remove-crop", () => _ = _app.RunAsync("remove-crop")));
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(Item("Take a screenshot", "screenshot", () => _ = _app.RunAsync("screenshot")));
+        AddRecordingItems(p);
         _menu.Items.Add(new ToolStripSeparator());
 
         _menu.Items.Add(FavouritesMenu());
@@ -114,6 +121,69 @@ internal sealed class TrayIcon : IDisposable
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(Item("Quit", null, _app.RequestQuit));
     }
+
+    /// <summary>FR-52–FR-54: start, pause, stop, and the sound choices for the next recording.</summary>
+    private void AddRecordingItems(Palette p)
+    {
+        RecordingController r = _app.Recording;
+        if (r.IsActive)
+        {
+            _menu.Items.Add(new ToolStripLabel(RecordingLine(r)) { ForeColor = p.Recording, Padding = new Padding(4, 4, 4, 4) });
+            var pause = Item(r.Status == RecordingStatus.Paused ? "Resume recording" : "Pause recording", "pause-recording", r.TogglePause);
+            pause.Enabled = r.Status is RecordingStatus.Recording or RecordingStatus.Paused;
+            _menu.Items.Add(pause);
+            var stop = Item("Stop recording", "record", r.Stop);
+            stop.Enabled = r.Status != RecordingStatus.Stopping;
+            _menu.Items.Add(stop);
+            ToolStripMenuItem limit = Submenu("Stop automatically");
+            ToolStripMenuItem never = Item("Only when the window closes or I stop it", null, () => _app.SetRecordingStopAfter(null));
+            never.Checked = _app.RecordingStopAfter is null;
+            limit.DropDownItems.Add(never);
+            foreach (int minutes in new[] { 30, 60, 90, 120, 180, 240 })
+            {
+                var span = TimeSpan.FromMinutes(minutes);
+                ToolStripMenuItem item = Item($"After {ScpApp.DurationWords(span)}", null, () => _app.SetRecordingStopAfter(span));
+                item.Checked = _app.RecordingStopAfter == span;
+                item.Enabled = r.Elapsed < span;
+                limit.DropDownItems.Add(item);
+            }
+            _menu.Items.Add(limit);
+        }
+        else
+        {
+            var output = Item("Record what the TV shows", _app.Session.State == SessionState.Presenting ? "record" : null, _app.RecordOutput);
+            output.Enabled = _app.Session.State != SessionState.Off;
+            _menu.Items.Add(output);
+            _menu.Items.Add(Item("Record a window or screen…", _app.Session.State == SessionState.Presenting ? null : "record", _app.OpenRecordPicker));
+        }
+
+        ToolStripMenuItem sound = Submenu("Recording sound");
+        foreach ((MeetingSound choice, string label) in new[]
+        {
+            (MeetingSound.App, "Meeting sound: only the recorded app"),
+            (MeetingSound.All, "All computer sound"),
+            (MeetingSound.None, "No computer sound"),
+        })
+        {
+            MeetingSound c = choice;
+            ToolStripMenuItem item = Item(label, null, () => _app.SetRecordSound(c));
+            item.Checked = _app.Settings.MeetingSound == choice;
+            sound.DropDownItems.Add(item);
+        }
+        sound.DropDownItems.Add(new ToolStripSeparator());
+        sound.DropDownItems.Add(Check("Microphone (people in the room)", _app.Settings.RecordMicrophone, "", () => _app.SetRecordMicrophone(!_app.Settings.RecordMicrophone)));
+        _menu.Items.Add(sound);
+        _menu.Items.Add(Item("Open recordings folder", null, _app.OpenRecordingsFolder));
+    }
+
+    private static string? RecordingLine(RecordingController r) => r.Status switch
+    {
+        RecordingStatus.Starting => "● Starting to record…",
+        RecordingStatus.Recording => $"● Recording {ScpApp.RecordingClockText(r.Elapsed)}: {Shorten(r.Description)}",
+        RecordingStatus.Paused => $"❚❚ Recording paused at {ScpApp.RecordingClockText(r.Elapsed)}",
+        RecordingStatus.Stopping => "● Saving the recording…",
+        _ => null,
+    };
 
     private static string StatusText(SessionController s) => s.State switch
     {
@@ -215,7 +285,7 @@ internal sealed class TrayIcon : IDisposable
     }
 
     /// <summary>A small screen outline in grey; an accent dot is added while presenting (SRS 6.1).</summary>
-    private static Icon DrawIcon(bool presenting)
+    private static Icon DrawIcon(bool presenting, bool recording = false)
     {
         Size size = SystemInformation.SmallIconSize;
         using var bitmap = new Bitmap(size.Width, size.Height);
@@ -226,9 +296,9 @@ internal sealed class TrayIcon : IDisposable
             using var pen = new Pen(Color.FromArgb(0xB4, 0xB4, 0xBC), 1.5f * s);
             g.DrawRectangle(pen, 1.5f * s, 2.5f * s, 13f * s, 8.5f * s);
             g.DrawLine(pen, 5f * s, 14f * s, 11f * s, 14f * s);
-            if (presenting)
+            if (presenting || recording)
             {
-                using var dot = new SolidBrush(Theme.Dark.Accent);
+                using var dot = new SolidBrush(recording ? Theme.Dark.Recording : Theme.Dark.Accent);
                 g.FillEllipse(dot, 9f * s, 7.5f * s, 7f * s, 7f * s);
             }
         }
@@ -253,5 +323,6 @@ internal sealed class TrayIcon : IDisposable
         _menu.Dispose();
         _idleIcon.Dispose();
         _presentingIcon.Dispose();
+        _recordingIcon.Dispose();
     }
 }

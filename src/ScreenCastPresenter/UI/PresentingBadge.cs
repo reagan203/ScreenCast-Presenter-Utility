@@ -9,7 +9,8 @@ internal enum BadgeDot { Accent, Hollow, Warning, Recording }
 
 internal sealed record BadgeButton(string Label, bool Primary, Action OnClick);
 
-internal sealed record BadgeContent(BadgeDot Dot, string Title, string Detail, IReadOnlyList<BadgeButton> Buttons);
+/// <param name="Recording">Shown as a red "REC 12:34" segment while a recording runs (FR-54).</param>
+internal sealed record BadgeContent(BadgeDot Dot, string Title, string Detail, IReadOnlyList<BadgeButton> Buttons, string? Recording = null);
 
 /// <summary>
 /// The small pill at the top of the presenter's screen (FR-15, SRS 6.1): what's showing, with
@@ -69,7 +70,8 @@ internal sealed class PresentingBadge : LayeredWindow
             HideBadge();
             return;
         }
-        if (reveal || _visible) ShowBadge(AutoHide);
+        if (reveal) ShowBadge(AutoHide);
+        else if (_visible) Render(); // e.g. the recording timer ticking: redraw without restarting the hide timer
     }
 
     /// <summary>A short message for the presenter, e.g. "Notepad was closed."</summary>
@@ -166,10 +168,12 @@ internal sealed class PresentingBadge : LayeredWindow
 
         float titleWidth = Math.Min(maxText, measure.MeasureString(content.Title, bold, int.MaxValue, format).Width + 2);
         float detailWidth = content.Detail.Length == 0 ? 0 : Math.Min(maxText, measure.MeasureString(content.Detail, regular, int.MaxValue, format).Width + 2);
+        float recordingWidth = content.Recording is { Length: > 0 } rec ? measure.MeasureString(rec, bold, int.MaxValue, format).Width + 2 : 0;
         var buttonWidths = content.Buttons.Select(b => measure.MeasureString(b.Label, button, int.MaxValue, format).Width + 2 * buttonPad).ToList();
 
         float width = pad + dot + gap + titleWidth;
         if (detailWidth > 0) width += gap + detailWidth;
+        if (recordingWidth > 0) width += gap * 1.6f + dot * 0.8f + gap * 0.6f + recordingWidth;
         if (buttonWidths.Count > 0) width += gap + 1 + gap + buttonWidths.Sum() + gap * 0.6f * (buttonWidths.Count - 1) + 6 * s;
         else width += pad;
 
@@ -213,6 +217,15 @@ internal sealed class PresentingBadge : LayeredWindow
                 x += gap;
                 DrawText(g, content.Detail, regular, p.TextDim, new RectangleF(x, margin, detailWidth, height));
                 x += detailWidth;
+            }
+            if (recordingWidth > 0)
+            {
+                x += gap * 1.6f;
+                float d = dot * 0.8f;
+                using (var red = new SolidBrush(p.Recording)) g.FillEllipse(red, x, midY - d / 2, d, d);
+                x += d + gap * 0.6f;
+                DrawText(g, content.Recording!, bold, p.Recording, new RectangleF(x, margin, recordingWidth, height));
+                x += recordingWidth;
             }
 
             if (content.Buttons.Count > 0)

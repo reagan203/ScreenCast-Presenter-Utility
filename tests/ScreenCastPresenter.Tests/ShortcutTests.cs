@@ -67,7 +67,8 @@ public class ShortcutResolverTests
     {
         var list = ShortcutResolver.Resolve(ShortcutCatalog.All, NoOverrides, enabled: true, paused: false, NeverTypes);
         Assert.Equal(ShortcutStatus.Pending, Find(list, "picker").Status);
-        Assert.Equal(ShortcutStatus.Unavailable, Find(list, "record").Status);
+        Assert.Equal(ShortcutStatus.Pending, Find(list, "record").Status); // available since M4
+        Assert.Equal(ShortcutStatus.Unavailable, Find(list, "switch-output").Status); // M5
         Assert.Equal(ShortcutStatus.Pending, Find(list, "freeze").Status);
         Assert.Equal(ShortcutStatus.Off, Find(list, "toggle-theme").Status); // no default
     }

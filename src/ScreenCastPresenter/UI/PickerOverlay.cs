@@ -5,6 +5,9 @@ using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace ScreenCastPresenter.UI;
 
+/// <summary>What choosing a window does: show it on the TV, or record it (FR-52, FR-57).</summary>
+internal enum PickerMode { Show, Record }
+
 /// <summary>
 /// The picker (Ctrl+Alt+P, SRS 6.1): a centred panel over a dimmed screen with search, live
 /// window thumbnails and the output choice. Keyboard: type to search, arrows to move, Enter to
@@ -28,11 +31,13 @@ internal sealed class PickerOverlay : ThemedForm
     private readonly Label _count = new() { AutoSize = true };
     private readonly Label _banner = new() { AutoSize = false, Visible = false, TextAlign = ContentAlignment.MiddleLeft };
     private readonly Label _hints = new() { AutoSize = true };
+    private readonly Label _footerLabel = new() { Text = "Show on", AutoSize = true, Anchor = AnchorStyles.Left, Tag = "dim" };
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1000 };
     private readonly Font _titleFont = new(Theme.UiFont.FontFamily, 15f, FontStyle.Bold);
     private readonly Font _sectionFont = new(Theme.UiFont.FontFamily, 8.5f, FontStyle.Bold);
     private List<SourceWindow> _all = [];
     private bool _dismissing;
+    private PickerMode _mode;
 
     public PickerOverlay(ScpApp app, DisplayMonitor screen)
     {
@@ -56,18 +61,19 @@ internal sealed class PickerOverlay : ThemedForm
 
         BuildLayout();
         _search.Box.TextChanged += (_, _) => ApplyFilter();
-        _grid.CardActivated += async (_, window) => await PresentAsync(window);
+        _grid.CardActivated += async (_, window) => await ChooseAsync(window);
         _grid.SelectionChanged += (_, _) => UpdateShowButton();
         _show.Click += async (_, _) =>
         {
-            if (_grid.Selected is { } w) await PresentAsync(w);
+            if (_grid.Selected is { } w) await ChooseAsync(w);
         };
         _theme.Click += (_, _) => _app.SetTheme(Theme.Opposite);
         _crop.Click += async (_, _) =>
         {
             if (_grid.Selected is not { } w || !Visible || _dismissing) return;
             Dismiss();
-            await _app.CropAsync(w, present: true); // UC-04
+            if (_mode == PickerMode.Record) await _app.RecordPartAsync(w);
+            else await _app.CropAsync(w, present: true); // UC-04
         };
         _close.Click += (_, _) => Dismiss();
         _refresh.Tick += (_, _) => RefreshWindows();
@@ -142,7 +148,7 @@ internal sealed class PickerOverlay : ThemedForm
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var showOn = new Label { Text = "Show on", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, Px(10), 0), Tag = "dim" };
+        _footerLabel.Margin = new Padding(0, 0, Px(10), 0);
         _show.Anchor = AnchorStyles.Right;
         _crop.Anchor = AnchorStyles.Right;
         _crop.Radius = 10;
@@ -150,7 +156,7 @@ internal sealed class PickerOverlay : ThemedForm
         _crop.Size = _crop.Measure();
         _hints.Tag = "faint";
         _hints.Margin = new Padding(0, Px(10), 0, 0);
-        footer.Controls.Add(showOn, 0, 0);
+        footer.Controls.Add(_footerLabel, 0, 0);
         footer.Controls.Add(_outputs, 1, 0);
         footer.Controls.Add(_crop, 3, 0);
         footer.Controls.Add(_show, 4, 0);
@@ -173,16 +179,36 @@ internal sealed class PickerOverlay : ThemedForm
     {
         foreach (Control old in _screens.Controls.Cast<Control>().ToList()) old.Dispose(); // Clear() alone would leak their handles
         DisplayMonitor? output = _app.Session.OutputMonitor ?? _app.ChosenOutput;
+        bool record = _mode == PickerMode.Record;
+        if (record && _app.Session.State != SessionState.Off)
+        {
+            // FR-52 default: exactly what the audience sees, following switches, blank and freeze.
+            var tv = new PillButton("What the TV shows", PillKind.Primary)
+            {
+                Detail = "  · follows what you present",
+                Radius = 10,
+                AccessibleName = "Record what the output shows",
+                Margin = new Padding(0, 0, LogicalToDeviceUnits(8), 0),
+            };
+            tv.Size = tv.Measure();
+            tv.Click += (_, _) =>
+            {
+                if (!Visible || _dismissing) return;
+                Dismiss();
+                _app.RecordOutput();
+            };
+            _screens.Controls.Add(tv);
+        }
         foreach (DisplayMonitor m in _app.Monitors)
         {
             DisplayMonitor monitor = m;
-            bool isOutput = output is not null && m.IsSameScreen(output);
+            bool isOutput = !record && output is not null && m.IsSameScreen(output); // recording the TV screen is fine: no mirror loop
             var pill = new PillButton($"Display {m.Number}", PillKind.Secondary)
             {
                 Detail = isOutput ? "  · your output is here" : $"  · {m.ShortName} · {m.Bounds.Width} × {m.Bounds.Height}",
                 Enabled = !isOutput,
                 Radius = 10,
-                AccessibleName = isOutput ? $"Display {m.Number}: your output is on it, so it can't be shown" : $"Show the whole of {m.Label}",
+                AccessibleName = isOutput ? $"Display {m.Number}: your output is on it, so it can't be shown" : $"{(record ? "Record" : "Show")} the whole of {m.Label}",
                 Margin = new Padding(0, 0, LogicalToDeviceUnits(8), 0),
             };
             pill.Size = pill.Measure();
@@ -190,7 +216,8 @@ internal sealed class PickerOverlay : ThemedForm
             {
                 if (!Visible || _dismissing) return;
                 Dismiss();
-                await _app.PresentAsync(SourceWindow.ForScreen(monitor));
+                if (record) _app.RecordSource(SourceWindow.ForScreen(monitor));
+                else await _app.PresentAsync(SourceWindow.ForScreen(monitor));
             };
             _screens.Controls.Add(pill);
         }
@@ -243,7 +270,15 @@ internal sealed class PickerOverlay : ThemedForm
         var clock = System.Diagnostics.Stopwatch.StartNew();
         RefreshWindows();
         ScpApp.Diag($"picker: enumerated {_all.Count} windows in {clock.ElapsedMilliseconds} ms");
-        BuildOutputs();
+        bool record = _mode == PickerMode.Record;
+        _title.Text = record ? "Choose what to record" : "Choose what to show";
+        Text = record ? "ScreenCast Presenter: record" : "ScreenCast Presenter picker";
+        _footerLabel.Text = record ? "Sound" : "Show on";
+        _crop.Text = record ? "Part of it…" : "Crop…";
+        _crop.AccessibleName = record ? "Record part of the selected window" : "Crop the selected window, then show it";
+        _crop.Size = _crop.Measure();
+        if (record) BuildSoundOptions();
+        else BuildOutputs();
         BuildScreens();
         UpdateShowButton();
         UpdateHints();
@@ -251,10 +286,14 @@ internal sealed class PickerOverlay : ThemedForm
         _banner.Visible = _app.IsDisplayDuplicated;
     }
 
-    public void Open()
+    /// <summary>Show (present) or Record; set when the picker opens.</summary>
+    public PickerMode Mode => _mode;
+
+    public void Open(PickerMode mode = PickerMode.Show)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         _dismissing = false;
+        _mode = mode;
         PrepareContent();
 
         // Both are topmost; the panel is shown second so it sits above the scrim. (Not "owned" by
@@ -411,13 +450,65 @@ internal sealed class PickerOverlay : ThemedForm
         }
     }
 
+    /// <summary>
+    /// Record mode's footer: which sound goes in (FR-53, FR-58). The meeting-sound pill cycles
+    /// app only → all computer sound → none; the microphone pill toggles. Saved for next time.
+    /// </summary>
+    private void BuildSoundOptions()
+    {
+        foreach (Control old in _outputs.Controls.Cast<Control>().ToList()) old.Dispose();
+        Recording.MeetingSound sound = _app.Settings.MeetingSound;
+        var meeting = new PillButton(sound switch
+        {
+            Recording.MeetingSound.App => "Meeting sound: this app only",
+            Recording.MeetingSound.All => "Meeting sound: all computer sound",
+            _ => "No computer sound",
+        }, sound == Recording.MeetingSound.None ? PillKind.Secondary : PillKind.Selected)
+        {
+            AccessibleName = sound switch
+            {
+                Recording.MeetingSound.App => "Computer sound: only the recorded app. Click for all computer sound.",
+                Recording.MeetingSound.All => "Computer sound: everything. Click for none.",
+                _ => "Computer sound: none. Click for only the recorded app.",
+            },
+            Margin = new Padding(0, 0, LogicalToDeviceUnits(6), 0),
+        };
+        meeting.Size = meeting.Measure();
+        meeting.Click += (_, _) =>
+        {
+            _app.SetRecordSound(sound switch
+            {
+                Recording.MeetingSound.App => Recording.MeetingSound.All,
+                Recording.MeetingSound.All => Recording.MeetingSound.None,
+                _ => Recording.MeetingSound.App,
+            });
+            BuildSoundOptions();
+        };
+        bool mic = _app.Settings.RecordMicrophone;
+        var microphone = new PillButton(mic ? "Microphone on" : "Microphone off", mic ? PillKind.Selected : PillKind.Secondary)
+        {
+            AccessibleName = mic ? "Microphone is recorded. Click to turn it off." : "Microphone is not recorded. Click to turn it on.",
+            Margin = new Padding(0, 0, LogicalToDeviceUnits(6), 0),
+        };
+        microphone.Size = microphone.Measure();
+        microphone.Click += (_, _) =>
+        {
+            _app.SetRecordMicrophone(!_app.Settings.RecordMicrophone);
+            BuildSoundOptions();
+        };
+        _outputs.Controls.Add(meeting);
+        _outputs.Controls.Add(microphone);
+        ApplyPalette(Theme.Current);
+    }
+
     private static string OutputLabel(DisplayMonitor m) =>
         m.Connection is "HDMI" or "Wireless" ? "TV" : m.Connection == "Built-in" ? "This screen" : m.FriendlyName.Length > 0 ? m.FriendlyName : "Screen";
 
     private void UpdateShowButton()
     {
         DisplayMonitor? output = _app.ChosenOutput;
-        string target = output is null ? "Show" : output.Connection is "HDMI" or "Wireless" ? "Show on TV"
+        string target = _mode == PickerMode.Record ? "● Start recording"
+            : output is null ? "Show" : output.Connection is "HDMI" or "Wireless" ? "Show on TV"
             : _app.Monitors.Count < 2 ? "Show on this screen" : $"Show on Display {output.Number}";
         _show.Text = target;
         _show.Enabled = _grid.Selected is not null;
@@ -428,14 +519,17 @@ internal sealed class PickerOverlay : ThemedForm
     private void UpdateHints()
     {
         string save = "Ctrl+1–9 saves a favourite";
-        _hints.Text = $"Arrow keys to move   ·   Enter to show   ·   {save}   ·   {_app.ActiveShortcut("palette")?.ToString() ?? "The palette"} runs any action";
+        _hints.Text = _mode == PickerMode.Record
+            ? "Arrow keys to move   ·   Enter to start recording   ·   It keeps recording while you work, even when the window is covered"
+            : $"Arrow keys to move   ·   Enter to show   ·   {save}   ·   {_app.ActiveShortcut("palette")?.ToString() ?? "The palette"} runs any action";
     }
 
-    private async Task PresentAsync(SourceWindow window)
+    private async Task ChooseAsync(SourceWindow window)
     {
         if (!Visible || _dismissing) return;
         Dismiss(); // vanish first; it is excluded from capture anyway
-        await _app.PresentAsync(window);
+        if (_mode == PickerMode.Record) _app.RecordSource(window);
+        else await _app.PresentAsync(window);
     }
 
     protected override void Dispose(bool disposing)

@@ -13,7 +13,7 @@ internal static class Program
     {
         // The same exe doubles as the capture helper process (GPU work kept out of the app).
         // Dispatch before anything touches WinForms, so the helper never loads it.
-        if (args.Length > 0 && (args[0] == CaptureProtocol.HostSwitch || args[0] == CaptureProtocol.StillSwitch))
+        if (args.Length > 0 && (args[0] == CaptureProtocol.HostSwitch || args[0] == CaptureProtocol.StillSwitch || args[0] == Recording.RecordingProtocol.RecordSwitch))
             return CaptureHost.Run(args);
         RunApp();
         return 0;

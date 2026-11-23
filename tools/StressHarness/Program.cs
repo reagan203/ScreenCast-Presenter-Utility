@@ -65,11 +65,12 @@ internal static partial class Program
             case "pressure": Pressure(Or(count, 100)); break;
             case "flash": Flash(Or(count, 100)); break;
             case "soak": Soak(TimeSpan.FromMinutes(minutes)); break;
+            case "record": Record(); break;
             case "quick":
-                Smoke(); Picker(20); Ui(10); Switches(200); Storm(2000); Flood(300); Hostile(50); Pressure(60); Flash(100);
+                Smoke(); Picker(20); Ui(10); Switches(200); Storm(2000); Flood(300); Hostile(50); Pressure(60); Flash(100); Record();
                 break;
             case "full":
-                Smoke(); Picker(50); Ui(30); Switches(1000); Storm(10000); Flood(300); Hostile(1000); Pressure(300); Flash(100);
+                Smoke(); Picker(50); Ui(30); Switches(1000); Storm(10000); Flood(300); Hostile(1000); Pressure(300); Flash(100); Record();
                 break;
             default:
                 Console.WriteLine("Unknown scenario.");
@@ -114,6 +115,60 @@ internal static partial class Program
             Native.CtrlAlt('S'); Wait(500);
             Check(scp.OutputWindows().Count == 0, "smoke: output still visible after stop");
         });
+    }
+
+    /// <summary>
+    /// M4: record what the TV shows through switches, blank and pause (FR-55, FR-54), then a
+    /// background recording of a window that stops by itself when the window closes (FR-57, FR-59).
+    /// Checks both files exist and are playable-sized, and that no recorder is left running.
+    /// </summary>
+    private static void Record()
+    {
+        Scenario("record", (scp, host) =>
+        {
+            Native.CtrlAlt('1'); Wait(700);
+            Native.CtrlAlt('R'); Wait(4000);              // record what the TV shows (helper start ~2.5 s)
+            Check(scp.HelperCount >= 1, "record: no recorder running after Ctrl+Alt+R");
+            Probe(scp, "recording");
+            double recordingMb = scp.SettledMb();
+            Native.CtrlAlt('2'); Wait(800);               // switch: the recording follows the output
+            Native.CtrlAlt('B'); Wait(600); Native.CtrlAlt('B'); Wait(600);
+            Native.CtrlAltShift('R'); Wait(1500);         // pause
+            Native.CtrlAltShift('R'); Wait(1500);         // resume
+            Native.CtrlAlt('R');                          // stop
+            Check(WaitFor(() => Files(scp).Length == 1, 8000), $"record: expected 1 recording after stop, found {Files(scp).Length}");
+            Console.WriteLine($"    SCP while recording: {recordingMb:F1} MB; first file {Sizes(scp)}");
+
+            Native.CtrlAlt('1'); Wait(700);
+            Native.CtrlAlt('R'); Wait(4000);              // record the TV again...
+            Native.CtrlAlt('S');                          // ...and stop presenting: the recording ends with it
+            Check(WaitFor(() => Files(scp).Length == 2, 8000), "record: stopping the presentation didn't end its recording");
+
+            host.Send($"front {host["SCP test normal"]}"); Wait(400);
+            Native.CtrlAlt('R'); Wait(900);               // not presenting: opens the record picker
+            Native.Chord(0x0D); Wait(4000);               // Enter: record the first window (the one in front)
+            Check(scp.HelperCount >= 1, "record: background recording didn't start");
+            host.Send($"close {host["SCP test normal"]}"); // the webinar ends
+            Check(WaitFor(() => Files(scp).Length == 3, 8000), "record: recording didn't stop by itself when its window closed");
+            Check(WaitFor(() => scp.HelperCount == 0, 5000), "record: recorder still running after the window closed");
+            foreach (string f in Files(scp))
+                Check(new FileInfo(f).Length > 1000, $"record: {Path.GetFileName(f)} is only {new FileInfo(f).Length} bytes");
+            Console.WriteLine($"    files: {Sizes(scp)}");
+        });
+
+        static string[] Files(ScpProcess scp) => Directory.Exists(scp.RecordingDir) ? Directory.GetFiles(scp.RecordingDir, "*.mp4") : [];
+        static string Sizes(ScpProcess scp) => string.Join(", ", Files(scp).Select(f => $"{new FileInfo(f).Length / 1024} KB"));
+    }
+
+    private static bool WaitFor(Func<bool> condition, int timeoutMs)
+    {
+        var clock = Stopwatch.StartNew();
+        while (clock.ElapsedMilliseconds < timeoutMs)
+        {
+            if (condition()) return true;
+            Thread.Sleep(100);
+        }
+        return condition();
     }
 
     /// <summary>NFR-08: the picker is on screen within 200 ms of the shortcut; privacy audit while it's open.</summary>

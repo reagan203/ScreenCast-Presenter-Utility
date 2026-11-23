@@ -111,3 +111,61 @@ public class OutputChooserTests
         Assert.Null(OutputChooser.Cycle([], null, 1));
     }
 }
+
+public class OutputPlacementTests
+{
+    private static DisplayMonitor Virtual => new(@"\.\DISPLAY4", new Rectangle(3840, 0, 1920, 1080), new Rectangle(3840, 0, 1920, 1080), false, 1.0, "Virtual Display", "Virtual");
+
+    [Fact]
+    public void Virtual_displays_are_called_Zoom_screen()
+    {
+        Assert.True(Virtual.IsVirtual);
+        Assert.Equal("Zoom screen", Virtual.ShortName);
+        Assert.True(new DisplayMonitor(@"\.\DISPLAY5", default, default, false, 1, "IddSampleDriver Device", "").IsVirtual); // named, not flagged
+        Assert.False(TestData.Tv.IsVirtual);
+        Assert.False(TestData.Laptop.IsVirtual);
+    }
+
+    [Fact]
+    public void A_real_tv_is_chosen_before_a_virtual_display()
+    {
+        Assert.Equal(TestData.Tv, OutputChooser.Choose([TestData.Laptop, Virtual, TestData.Tv], null));
+        Assert.Equal(Virtual, OutputChooser.Choose([TestData.Laptop, Virtual], null)); // no TV: Zoom screen
+        Assert.Equal(Virtual, OutputChooser.Choose([TestData.Laptop, Virtual, TestData.Tv], Virtual.DeviceName)); // the user's choice wins
+    }
+
+    [Fact]
+    public void Output_choices_cycle_through_screens_then_the_window()
+    {
+        IReadOnlyList<DisplayMonitor> screens = [TestData.Laptop, TestData.Tv];
+        OutputOption tv = OutputOption.Next(screens, new OutputOption(TestData.Laptop));
+        Assert.Equal(TestData.Tv, tv.Screen);
+        OutputOption window = OutputOption.Next(screens, tv);
+        Assert.True(window.IsWindow);
+        Assert.Equal(TestData.Laptop, OutputOption.Next(screens, window).Screen); // wraps
+        Assert.Equal(TestData.Laptop, OutputOption.Next(screens, null).Screen);
+        Assert.True(OutputOption.Next([], null).IsWindow); // no screens known: the window still works
+    }
+
+    [Fact]
+    public void Default_window_is_a_16_by_9_window_in_the_corner_clear_of_the_taskbar()
+    {
+        Rectangle r = OutputPlacement.DefaultWindow(TestData.Laptop);
+        Assert.True(TestData.Laptop.WorkArea.Contains(r), r.ToString());
+        Assert.True(r.Width >= OutputPlacement.MinimumWindow.Width && r.Height >= OutputPlacement.MinimumWindow.Height);
+        Assert.True(r.Right > TestData.Laptop.WorkArea.Width * 3 / 4 && r.Bottom > TestData.Laptop.WorkArea.Height * 3 / 4); // bottom-right
+    }
+
+    [Fact]
+    public void Saved_window_positions_are_restored_only_when_still_reachable()
+    {
+        IReadOnlyList<DisplayMonitor> screens = [TestData.Laptop, TestData.Tv];
+        var onTv = new Rectangle(2000, 100, 800, 450);
+        Assert.Equal(onTv, OutputPlacement.Restore(onTv, screens));
+        Assert.Null(OutputPlacement.Restore(onTv, [TestData.Laptop]));                     // TV unplugged: title bar unreachable
+        Assert.Null(OutputPlacement.Restore(new Rectangle(100, -500, 800, 450), screens));  // title bar above the screen
+        Assert.Null(OutputPlacement.Restore(new Rectangle(100, 100, 100, 50), screens));    // too small
+        Assert.Null(OutputPlacement.Restore(new Rectangle(0, 0, 5000, 3000), screens));     // bigger than any screen
+        Assert.Null(OutputPlacement.Restore(null, screens));
+    }
+}

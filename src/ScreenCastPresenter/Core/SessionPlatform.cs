@@ -7,11 +7,28 @@ namespace ScreenCastPresenter.Core;
 /// <summary>The output window as the session controller sees it (lets tests use a fake).</summary>
 internal interface IOutputSurface : IDisposable
 {
+    /// <summary>The screen it is on (a floating window: the screen it's on now).</summary>
     DisplayMonitor Monitor { get; }
+
+    /// <summary>A floating window (FR-11) rather than fullscreen on a screen.</summary>
+    bool IsFloating { get; }
+
+    /// <summary>A floating window is minimised (Zoom then shares nothing).</summary>
+    bool IsMinimized { get; }
+
+    /// <summary>A floating window's normal position and size.</summary>
+    Rectangle WindowBounds { get; }
+
     nint Handle { get; }
     Size ClientSize { get; }
     bool IsAlive { get; }
     event EventHandler? Resized;
+
+    /// <summary>The user closed the floating window.</summary>
+    event EventHandler? CloseRequested;
+
+    /// <summary>The floating window was minimised or restored.</summary>
+    event EventHandler? MinimizedChanged;
 
     /// <summary>Shows the window while cloaked and paints it black.</summary>
     void ShowCloaked();
@@ -36,7 +53,7 @@ internal interface ISourceWatcher : IDisposable
 /// <summary>Everything the session controller needs from Windows; faked in unit tests.</summary>
 internal interface ISessionPlatform
 {
-    IOutputSurface CreateOutput(DisplayMonitor monitor, bool topMost);
+    IOutputSurface CreateOutput(OutputPlacement placement);
 
     /// <summary>The engine for a source (FR-32): screens and frozen starts need WGC; windows use DWM unless WGC is preferred.</summary>
     ICaptureEngine CreateEngine(SourceWindow source, bool startFrozen = false);
@@ -50,7 +67,7 @@ internal interface ISessionPlatform
 
 internal sealed class Win32SessionPlatform(Func<AppSettings> settings) : ISessionPlatform
 {
-    public IOutputSurface CreateOutput(DisplayMonitor monitor, bool topMost) => new OutputWindow(monitor, topMost);
+    public IOutputSurface CreateOutput(OutputPlacement placement) => new OutputWindow(placement);
 
     public ICaptureEngine CreateEngine(SourceWindow source, bool startFrozen = false)
     {

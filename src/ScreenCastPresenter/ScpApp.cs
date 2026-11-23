@@ -116,6 +116,32 @@ internal sealed class ScpApp : IDisposable
         ? _monitors.FirstOrDefault(m => m.IsSameScreen(current)) ?? current
         : OutputChooser.Choose(_monitors, Settings.OutputDevice);
 
+    /// <summary>
+    /// Where the output goes next (FR-10–FR-12): the floating window where it was last (or a
+    /// default corner of the presenter's screen), or fullscreen on the chosen screen.
+    /// </summary>
+    public OutputPlacement? ChosenPlacement
+    {
+        get
+        {
+            if (Settings.OutputInWindow)
+            {
+                Rectangle? saved = _session.FloatingBounds ?? Settings.FloatingWindow?.ToRectangle();
+                Rectangle? restored = OutputPlacement.Restore(saved, _monitors);
+                DisplayMonitor? host = restored is { } r
+                    ? _monitors.FirstOrDefault(m => m.WorkArea.Contains(new Point(r.Left + r.Width / 2, r.Top + 12)))
+                    : PresenterScreen();
+                if (host is null) return null;
+                return new OutputPlacement(host, false, restored ?? OutputPlacement.DefaultWindow(host));
+            }
+            return ChosenOutput is { } m ? new OutputPlacement(m, _monitors.Count > 1) : null;
+        }
+    }
+
+    /// <summary>The current choice in the output selector (a screen, or the window).</summary>
+    public OutputOption CurrentOutputOption =>
+        (_session.State != SessionState.Off ? _session.OutputIsFloating : Settings.OutputInWindow) ? OutputOption.Window : new OutputOption(ChosenOutput);
+
     public void Start()
     {
         _ = _session.SetDimAsync(Settings.Dim);
@@ -177,6 +203,7 @@ internal sealed class ScpApp : IDisposable
                 case "blank-message": await _session.ToggleBlankAsync(withMessage: true); break;
                 case "dim": CycleDim(); break;
                 case "move-output": await MoveOutputToNextScreenAsync(); break;
+                case "switch-output": await SwitchOutputAsync(); break;
                 case "toggle-outline": SetShowOutline(!Settings.ShowOutline); break;
                 case "toggle-badge": SetShowBadge(!Settings.ShowBadge); break;
                 case "cheat-sheet": OpenShortcuts(); break;
@@ -202,18 +229,21 @@ internal sealed class ScpApp : IDisposable
 
     public async Task PresentAsync(SourceWindow source)
     {
-        DisplayMonitor? output = ChosenOutput;
-        if (output is null)
+        OutputPlacement? placement = ChosenPlacement;
+        if (placement is null)
         {
             Message("SCP can't find a screen to show on.");
             return;
         }
+        DisplayMonitor output = _session.OutputIsFloating && _session.OutputMonitor is { } at ? at : placement.Monitor;
         if (source.Screen is { } screen)
         {
             // FR-14: a screen that holds the output would show itself, endlessly.
             if (screen.IsSameScreen(output))
             {
-                Message($"Display {screen.Number} is where the output is, so it can't be shown on itself. Pick another screen or move the output.");
+                Message(placement.IsFloating
+                    ? $"The output window is on Display {screen.Number}, so that screen can't be shown in it. Move the window to another screen, or pick another screen."
+                    : $"Display {screen.Number} is where the output is, so it can't be shown on itself. Pick another screen or move the output.");
                 return;
             }
             if (!_monitors.Any(m => m.IsSameScreen(screen)))
@@ -237,13 +267,15 @@ internal sealed class ScpApp : IDisposable
         }
 
         CheckDuplicateDisplay();
-        bool onlyScreen = _monitors.Count < 2;
-        await _session.PresentAsync(source, output, topMost: !onlyScreen);
+        bool onlyScreen = _monitors.Count < 2 && !placement.IsFloating;
+        bool wasOff = _session.State == SessionState.Off;
+        await _session.PresentAsync(source, placement);
         if (_session.State != SessionState.Presenting) return;
         if (savedCrop)
             Message($"Cropped like last time. {ActiveShortcut("remove-crop")?.ToString() ?? "Remove the crop"} shows all of it.");
         if (onlyScreen)
-            Message($"Only one screen is connected, so the output covers it. {StopHint()}");
+            Message($"Only one screen is connected, so the output covers it. {StopHint()} {ActiveShortcut("switch-output")?.ToString() ?? "The tray menu"} shows it in a window instead.");
+        if (wasOff) GuideZoomSharing();
     }
 
     // ───────────────────────────── M3: crop, screenshots ─────────────────────────────
@@ -306,7 +338,7 @@ internal sealed class ScpApp : IDisposable
         }
 
         // Only on the presenter's screens: never draw the selection on the TV (SRS 4.5).
-        DisplayMonitor? output = _session.OutputMonitor ?? ChosenOutput;
+        DisplayMonitor? output = _session.State != SessionState.Off ? _session.FullScreenOutput : ChosenPlacement is { IsFloating: false } p ? p.Monitor : null;
         DisplayMonitor? host = _monitors
             .Where(m => _monitors.Count < 2 || output is null || !m.IsSameScreen(output))
             .OrderByDescending(m => Area(Rectangle.Intersect(m.Bounds, client)))
@@ -456,6 +488,17 @@ internal sealed class ScpApp : IDisposable
             OpenRecordPicker();
             return;
         }
+        if (_session.OutputIsFloating)
+        {
+            // Recording the window's spot on screen would also record whatever covers it, so
+            // record the shown window itself (it won't follow switches).
+            if (_session.Source is { } shown)
+            {
+                RecordSource(shown);
+                Message("Recording what the output window shows. Switching what's shown won't change the recording.", BadgeDot.Recording);
+            }
+            return;
+        }
         Rectangle outputBounds = DwmHelpers.GetVisibleBounds((Windows.Win32.Foundation.HWND)_session.OutputHandle);
         CropRegion? crop = outputBounds.IsEmpty ? null : CropRegion.FromScreen(Rectangle.Intersect(outputBounds, monitor.Bounds), monitor.Bounds);
         var source = SourceWindow.ForScreen(monitor) with { Crop = crop is { IsFull: false } ? crop : null };
@@ -474,7 +517,7 @@ internal sealed class ScpApp : IDisposable
         if (_recording.Status == RecordingStatus.Stopping) return;
         if (_session.State == SessionState.Off)
             _recordingEndNote = "Presentation ended, recording saved";
-        else if (_session.OutputMonitor is { } now && !now.IsSameScreen(recorded))
+        else if (_session.OutputIsFloating || _session.FullScreenOutput is { } now && !now.IsSameScreen(recorded))
             _recordingEndNote = "The output moved screen, recording saved";
         else return;
         _recording.Stop();
@@ -705,7 +748,53 @@ internal sealed class ScpApp : IDisposable
             Message("Only one screen is connected.");
             return;
         }
-        if (OutputChooser.Next(_monitors, ChosenOutput) is { } next) await SetOutputMonitorAsync(next);
+        if (OutputChooser.Next(_monitors, _session.FullScreenOutput ?? ChosenOutput) is { } next) await SetOutputMonitorAsync(next);
+    }
+
+    /// <summary>FR-21 Ctrl+Alt+O: TV → other screens (a virtual one is the Zoom screen) → floating window → …</summary>
+    private async Task SwitchOutputAsync()
+    {
+        OutputOption next = OutputOption.Next(_monitors, CurrentOutputOption);
+        if (next.Screen is { } screen) await SetOutputMonitorAsync(screen);
+        else await SetOutputWindowAsync();
+    }
+
+    /// <summary>
+    /// FR-12: once per run, the first time something is shown on the Zoom screen or in the window,
+    /// say exactly what to pick in Zoom.
+    /// </summary>
+    private void GuideZoomSharing()
+    {
+        if (_session.OutputIsFloating && !_guidedWindow)
+        {
+            _guidedWindow = true;
+            Message("Showing in a window. In Zoom, click Share Screen and choose “ScreenCast Presenter output”. It can sit behind other windows, but don't minimise it.");
+        }
+        else if (_session.FullScreenOutput is { IsVirtual: true } zoom && !_guidedZoom)
+        {
+            _guidedZoom = true;
+            Message($"Showing on the Zoom screen. In Zoom, click Share Screen and choose Screen {zoom.Number}. Your own screen stays private.");
+        }
+    }
+
+    private bool _guidedWindow;
+    private bool _guidedZoom;
+
+    /// <summary>
+    /// "Show in Zoom" (FR-12): the Zoom screen if a virtual display exists, else the floating
+    /// window, with a pointer to the virtual display driver for a cleaner share.
+    /// </summary>
+    public async Task ShowInZoomAsync()
+    {
+        if (_monitors.FirstOrDefault(m => m.IsVirtual) is { } zoom)
+        {
+            await SetOutputMonitorAsync(zoom);
+            if (_session.State == SessionState.Off) Message($"The Zoom screen (Display {zoom.Number}) is the output now. Pick what to show, then share Screen {zoom.Number} in Zoom.");
+            return;
+        }
+        await SetOutputWindowAsync();
+        if (_session.State == SessionState.Off)
+            Message("Output: a window. Pick what to show, then in Zoom share the window “ScreenCast Presenter output”. For sharing a whole screen instead, install a virtual display driver; it then appears here as the Zoom screen.");
     }
 
     private async Task ShowFavouriteAsync(int slot)
@@ -761,10 +850,30 @@ internal sealed class ScpApp : IDisposable
     private async Task SetOutputMonitorAsync(DisplayMonitor monitor)
     {
         Settings.OutputDevice = monitor.DeviceName;
+        Settings.OutputMode = "Screen";
         Save();
-        if (_session.State != SessionState.Off && _session.OutputMonitor is { } current && !current.IsSameScreen(monitor))
-            await _session.MoveOutputAsync(monitor, topMost: _monitors.Count > 1);
+        bool move = _session.State != SessionState.Off && (_session.OutputIsFloating || _session.FullScreenOutput is { } current && !current.IsSameScreen(monitor));
+        if (move) await _session.MoveOutputAsync(monitor, topMost: _monitors.Count > 1);
         Message($"Output: {monitor.Label}.");
+        if (move) GuideZoomSharing();
+    }
+
+    /// <summary>FR-11: show in a floating window on the presenter's screen.</summary>
+    public void SetOutputWindow() => _ = SetOutputWindowAsync();
+
+    private async Task SetOutputWindowAsync()
+    {
+        Settings.OutputMode = "Window";
+        Save();
+        if (_session.State != SessionState.Off && !_session.OutputIsFloating && ChosenPlacement is { } placement)
+        {
+            await _session.MoveOutputAsync(placement);
+            GuideZoomSharing();
+        }
+        else if (_session.State == SessionState.Off)
+        {
+            Message("Output: a window you can move, resize and share in Zoom.");
+        }
     }
 
     public void SetDim(double dim)
@@ -1033,6 +1142,11 @@ internal sealed class ScpApp : IDisposable
     private void OnSessionChanged(bool reveal)
     {
         StopOutputRecordingIfOrphaned();
+        if (_session.FloatingBounds is { } floating && Settings.FloatingWindow?.ToRectangle() != floating)
+        {
+            Settings.FloatingWindow = WindowBounds.From(floating); // reopen it where the user left it
+            Save();
+        }
         UpdateBadge(reveal);
         UpdateOutline();
         _tray.Refresh();
@@ -1052,12 +1166,12 @@ internal sealed class ScpApp : IDisposable
 
         BadgeContent? content = s.State switch
         {
-            SessionState.Presenting when s.IsBlanked => new BadgeContent(BadgeDot.Hollow, $"{OutputName()} is blank", "Your audience sees black", [showAgain, stop]),
-            SessionState.Presenting when s.IsFrozen => new BadgeContent(BadgeDot.Warning, $"{OutputName()} is frozen", "You can scroll and click privately", [goLive, stop]),
-            SessionState.Presenting when s.IsSourceMinimized && keepsPicture => new BadgeContent(BadgeDot.Warning, "Window minimised", $"{OutputName()} keeps showing its last picture", [stop]),
-            SessionState.Presenting when s.IsSourceMinimized => new BadgeContent(BadgeDot.Warning, "Window minimised", $"{OutputName()} is black until you restore it", [stop]),
-            SessionState.Presenting => new BadgeContent(BadgeDot.Accent, $"Showing on {OutputName()}", $"{s.Source?.Title} · {s.Source?.AppName}", [blank, stop]),
-            SessionState.IdleScreen => new BadgeContent(BadgeDot.Hollow, $"{OutputName()} shows a blank screen", "Pick something to show", [pick, stop]),
+            SessionState.Presenting when s.IsBlanked => new BadgeContent(BadgeDot.Hollow, $"{OutputNameCapitalised()} is blank", "Your audience sees black", [showAgain, stop]),
+            SessionState.Presenting when s.IsFrozen => new BadgeContent(BadgeDot.Warning, $"{OutputNameCapitalised()} is frozen", "You can scroll and click privately", [goLive, stop]),
+            SessionState.Presenting when s.IsSourceMinimized && keepsPicture => new BadgeContent(BadgeDot.Warning, "Window minimised", $"{OutputNameCapitalised()} keeps showing its last picture", [stop]),
+            SessionState.Presenting when s.IsSourceMinimized => new BadgeContent(BadgeDot.Warning, "Window minimised", $"{OutputNameCapitalised()} is black until you restore it", [stop]),
+            SessionState.Presenting => new BadgeContent(BadgeDot.Accent, ShowingText(frozen: false), $"{s.Source?.Title} · {s.Source?.AppName}", [blank, stop]),
+            SessionState.IdleScreen => new BadgeContent(BadgeDot.Hollow, $"{OutputNameCapitalised()} shows a blank screen", "Pick something to show", [pick, stop]),
             _ => null,
         };
 
@@ -1085,19 +1199,30 @@ internal sealed class ScpApp : IDisposable
             else if (WindowEnumerator.IsAlive(source.Handle))
                 bounds = source.Crop is { } crop ? crop.ToScreen(WindowEnumerator.ClientBoundsOnScreen(source.Handle)) : DwmHelpers.GetVisibleBounds((Windows.Win32.Foundation.HWND)source.Handle);
         }
-        _outline.Update(bounds, s.IsFrozen ? $"Frozen on {OutputName()}" : $"Showing on {OutputName()}", _monitors, s.OutputMonitor);
+        _outline.Update(bounds, ShowingText(s.IsFrozen), _monitors, s.FullScreenOutput);
     }
 
     /// <summary>"TV" for a TV-like output, else "Display 2".</summary>
+    private string OutputNameCapitalised() => OutputName() is { Length: > 0 } name ? char.ToUpperInvariant(name[0]) + name[1..] : "";
+
+    /// <summary>"Showing on TV", "Showing on the Zoom screen", "Showing in the window", "Frozen on TV"…</summary>
+    private string ShowingText(bool frozen)
+    {
+        string verb = frozen ? "Frozen" : "Showing";
+        bool window = _session.State != SessionState.Off ? _session.OutputIsFloating : Settings.OutputInWindow;
+        return window ? $"{verb} in the window" : $"{verb} on {OutputName()}";
+    }
+
     private string OutputName()
     {
+        if (_session.State != SessionState.Off ? _session.OutputIsFloating : Settings.OutputInWindow) return "the window";
         DisplayMonitor? m = _session.OutputMonitor ?? ChosenOutput;
         if (m is null) return "the output";
-        return m.Connection is "HDMI" or "Wireless" ? "TV" : $"Display {m.Number}";
+        return m.IsVirtual ? "the Zoom screen" : m.IsTv ? "TV" : $"Display {m.Number}";
     }
 
     private DisplayMonitor? PresenterScreen() =>
-        OutputChooser.PresenterScreen(_monitors, _session.OutputMonitor, _monitors.FirstOrDefault(m => m.Bounds.Contains(Cursor.Position))); // cached list: no display-config queries on the picker path (NFR-08)
+        OutputChooser.PresenterScreen(_monitors, _session.FullScreenOutput, _monitors.FirstOrDefault(m => m.Bounds.Contains(Cursor.Position))); // cached list: no display-config queries on the picker path (NFR-08)
 
     private string StopHint() => ActiveShortcut("stop") is { } stop ? $"Press {stop} to stop." : "Use the tray icon to stop.";
 
@@ -1120,7 +1245,7 @@ internal sealed class ScpApp : IDisposable
         {
             _monitors = DisplayHelpers.GetMonitors();
             if (_picker is { Visible: false }) DiscardPicker(); // laid out for the old screens
-            if (_session.OutputMonitor is { } output)
+            if (_session.FullScreenOutput is { } output) // a floating window is kept on screen by Windows itself
             {
                 DisplayMonitor? now = _monitors.FirstOrDefault(m => m.IsSameScreen(output));
                 if (now is null)

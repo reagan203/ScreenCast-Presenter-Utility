@@ -26,6 +26,7 @@ Unit tests cover the logic only, with no windows or displays involved:
   - the helper protocol, including paths with accents, spaces and Japanese characters;
   - the recording controller (driven by a fake helper): progress, pause, stop, a crashed helper, a failed start, a disk too full to start, accidental one-second recordings;
   - one real encode on the GPU: three seconds of picture and tone, read back to check size, duration, frame count and both tracks.
+- **Outputs (M5):** virtual displays named "Zoom screen", a real TV chosen before a virtual display, Ctrl+Alt+O cycling, the default and restored floating-window positions, settings round trip and repair; real output windows created on the desktop to check the styles Zoom and privacy rely on (floating: sizable, in the taskbar, not a tool window, not topmost, not excluded from capture; fullscreen: out of Alt+Tab, topmost); the ✕ on the floating window stops showing.
 - **Session controller** (driven by fakes):
   - fades through black, blank and dim;
   - coalescing a thousand switches or blank presses;
@@ -65,6 +66,7 @@ The harness opens windows, presses keys and covers the screen. **Run it when you
 | `pressure` | Every CPU core at 100% while switching | UI round trip < 500 ms |
 | `flash` | Records the output screen at display rate during 100 switches between two dark windows | Zero frames with more than 10% of pixels brighter than #303030 (NFR-16) |
 | `record` | Records what the TV shows through a switch, blank and pause; stops presenting during a second TV recording; records a window in the background and closes it | Three playable files; the TV recording ends with the presentation; the window recording stops by itself; no recorder left running |
+| `window` | Ctrl+Alt+O until the output is a floating window, a source switch, then the window's ✕ | The window is reused across switches; closing it stops showing; back to fullscreen afterwards |
 | `soak --minutes N` | A switch every 2 s and a blank every 20 s, sampled every 10 s | Memory drift < 5 MB (NFR-09) |
 | `quick` / `full` | Every scenario above, at small or large counts | All pass |
 

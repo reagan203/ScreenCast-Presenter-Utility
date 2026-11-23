@@ -68,7 +68,12 @@ public class ShortcutResolverTests
         var list = ShortcutResolver.Resolve(ShortcutCatalog.All, NoOverrides, enabled: true, paused: false, NeverTypes);
         Assert.Equal(ShortcutStatus.Pending, Find(list, "picker").Status);
         Assert.Equal(ShortcutStatus.Pending, Find(list, "record").Status); // available since M4
-        Assert.Equal(ShortcutStatus.Unavailable, Find(list, "switch-output").Status); // M5
+        Assert.Equal(ShortcutStatus.Pending, Find(list, "switch-output").Status); // available since M5
+        Assert.DoesNotContain(ShortcutCatalog.All, a => !a.Available); // every feature has shipped
+
+        // A future feature in the catalogue is listed but never registered.
+        ShortcutAction later = new("later", "Coming later", ShortcutGroup.OnTheTv, Hotkey.CtrlAlt(Keys.F12), Available: false);
+        Assert.Equal(ShortcutStatus.Unavailable, ShortcutResolver.Resolve([later], NoOverrides, true, false, NeverTypes).Single().Status);
         Assert.Equal(ShortcutStatus.Pending, Find(list, "freeze").Status);
         Assert.Equal(ShortcutStatus.Off, Find(list, "toggle-theme").Status); // no default
     }

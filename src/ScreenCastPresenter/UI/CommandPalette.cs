@@ -203,6 +203,14 @@ internal sealed class CommandPalette : ThemedForm
             SourceWindow screen = SourceWindow.ForScreen(m);
             items.Add(new($"Show the whole of Display {m.Number} ({m.ShortName})", "Screen", null, "screen monitor desktop whole", PaletteKind.Action, () => app.PresentAsync(screen)));
         }
+        // Outputs (FR-11, FR-12).
+        items.Add(new("Show in a window", "Output", null, "floating zoom share window output", PaletteKind.Action, () =>
+        {
+            app.SetOutputWindow();
+            return Task.CompletedTask;
+        }));
+        items.Add(new("Show in Zoom", app.Monitors.Any(m => m.IsVirtual) ? "on the Zoom screen" : "in a window you share", null, "zoom teams meet share virtual display", PaletteKind.Action, app.ShowInZoomAsync));
+
         // Recording (FR-52/53): the record shortcut entry above toggles; these pick a source or the sound.
         items.Add(new("Record a window or screen…", "Recording", null, "record video webinar capture", PaletteKind.Action, () =>
         {

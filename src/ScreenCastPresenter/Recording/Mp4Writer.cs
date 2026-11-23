@@ -131,8 +131,9 @@ internal sealed unsafe class Mp4Writer : IDisposable
     }
 
     /// <summary>
-    /// Queues one video frame. The texture must not be drawn to again until the encoder is done
-    /// with it, which is why the recorder cycles through a ring of textures.
+    /// Queues one video frame. The texture (and the sample reused for it) must not be written
+    /// again while the encoder still has it: callers cycle through a ring of N textures and only
+    /// draw the next one while <see cref="VideoInFlight"/> &lt; N - 1. Otherwise frames are lost.
     /// </summary>
     public void WriteVideo(ID3D11Texture2D texture, long time, long duration)
     {

@@ -36,6 +36,61 @@ public class SessionControllerTests
         Assert.Equal(SessionController.FirstFadeIn, _platform.Fades.Last().Duration);
     }
 
+    private static OutputPlacement Floating => new(TestData.Laptop, false, new Rectangle(1000, 600, 800, 480));
+
+    [Fact]
+    public async Task A_floating_window_is_reused_across_switches_and_isnt_a_full_screen()
+    {
+        await _session.PresentAsync(Notepad, Floating);
+        await _session.PresentAsync(Deck, Floating with { Window = new Rectangle(0, 0, 640, 360) }); // where it was saved doesn't matter now
+        FakeOutput output = Assert.Single(_platform.Outputs);
+        Assert.True(output.IsFloating);
+        Assert.True(_session.OutputIsFloating);
+        Assert.Null(_session.FullScreenOutput); // the presenter's screen stays theirs: badge, picker and outline may use it
+        Assert.Equal(TestData.Laptop, _session.OutputMonitor);
+    }
+
+    [Fact]
+    public async Task Switching_between_fullscreen_and_a_window_replaces_the_output()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        await _session.MoveOutputAsync(Floating);
+        Assert.Equal(2, _platform.Outputs.Count);
+        Assert.True(_platform.Outputs[0].Disposed);
+        Assert.True(_platform.Outputs[1].IsFloating);
+        Assert.Equal(Notepad, _session.Source); // still showing the same thing
+
+        await _session.MoveOutputAsync(TestData.Tv, true);
+        Assert.Equal(3, _platform.Outputs.Count);
+        Assert.False(_platform.Outputs[2].IsFloating);
+        Assert.Equal(TestData.Tv, _session.FullScreenOutput);
+    }
+
+    [Fact]
+    public async Task Closing_the_floating_window_stops_showing_and_remembers_where_it_was()
+    {
+        await _session.PresentAsync(Notepad, Floating);
+        FakeOutput output = _platform.Outputs[0];
+        output.WindowBounds = new Rectangle(50, 60, 700, 400); // the user moved and resized it
+        output.UserCloses();
+        await Task.Yield();
+        for (int i = 0; i < 20 && _session.State != SessionState.Off; i++) await Task.Delay(10);
+        Assert.Equal(SessionState.Off, _session.State);
+        Assert.True(output.Disposed);
+        Assert.Equal(new Rectangle(50, 60, 700, 400), _session.FloatingBounds);
+    }
+
+    [Fact]
+    public async Task Minimising_the_floating_window_warns_that_Zoom_shows_nothing()
+    {
+        await _session.PresentAsync(Notepad, Floating);
+        _platform.Outputs[0].SetMinimized(true);
+        Assert.Contains(_messages, m => m.Contains("minimised", StringComparison.Ordinal) && m.Contains("Zoom", StringComparison.Ordinal));
+        int count = _messages.Count;
+        _platform.Outputs[0].SetMinimized(false); // restoring says nothing
+        Assert.Equal(count, _messages.Count);
+    }
+
     [Fact]
     public async Task Switching_on_the_same_screen_reuses_the_output_and_goes_through_black()
     {
@@ -466,9 +521,9 @@ internal sealed class FakePlatform : ISessionPlatform
     /// <summary>Whether a fallback engine is offered when one fails.</summary>
     public bool OfferFallback { get; set; } = true;
 
-    public IOutputSurface CreateOutput(DisplayMonitor monitor, bool topMost)
+    public IOutputSurface CreateOutput(OutputPlacement placement)
     {
-        var output = new FakeOutput(monitor);
+        var output = new FakeOutput(placement.Monitor) { IsFloating = placement.IsFloating, WindowBounds = placement.Window ?? placement.Monitor.Bounds };
         Outputs.Add(output);
         return output;
     }
@@ -535,10 +590,24 @@ internal sealed class FakeOutput(DisplayMonitor monitor) : IOutputSurface
     public double MessageBrightness { get; private set; }
     public bool Disposed { get; private set; }
     public DisplayMonitor Monitor { get; } = monitor;
+    public bool IsFloating { get; init; }
+    public bool IsMinimized { get; private set; }
+    public Rectangle WindowBounds { get; set; }
     public nint Handle => 999;
-    public Size ClientSize => Monitor.Bounds.Size;
+    public Size ClientSize => IsFloating ? WindowBounds.Size : Monitor.Bounds.Size;
     public bool IsAlive => !Disposed;
     public event EventHandler? Resized { add { } remove { } }
+    public event EventHandler? CloseRequested;
+    public event EventHandler? MinimizedChanged;
+
+    /// <summary>The user clicks ✕ on the floating window.</summary>
+    public void UserCloses() => CloseRequested?.Invoke(this, EventArgs.Empty);
+
+    public void SetMinimized(bool minimized)
+    {
+        IsMinimized = minimized;
+        MinimizedChanged?.Invoke(this, EventArgs.Empty);
+    }
     public void ShowCloaked() => Calls.Add("ShowCloaked");
     public void Reveal() => Calls.Add("Reveal");
     public void Conceal() => Calls.Add("Conceal");

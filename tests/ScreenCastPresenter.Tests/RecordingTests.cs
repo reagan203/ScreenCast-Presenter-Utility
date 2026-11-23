@@ -201,6 +201,7 @@ public class Mp4WriterTests
                 short[] pcm = new short[AudioMixer.SampleRate / Mp4Writer.FrameRate * AudioMixer.Channels];
                 for (int f = 0; f < seconds * Mp4Writer.FrameRate; f++)
                 {
+                    while (writer.VideoInFlight >= textures.Length - 1) Thread.Sleep(1); // the writer's contract: never reuse a texture still being encoded
                     int slot = f % textures.Length;
                     float t = f / (float)(seconds * Mp4Writer.FrameRate);
                     device.ImmediateContext.ClearRenderTargetView(views[slot], new Color4(t, 1 - t, 0.5f, 1));

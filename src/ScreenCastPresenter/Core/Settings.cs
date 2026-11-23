@@ -55,6 +55,15 @@ internal sealed class AppSettings
     /// <summary>Where recordings go; null = Videos\Screen Recordings, like the Snipping Tool (FR-52).</summary>
     public string? RecordingFolder { get; set; }
 
+    /// <summary>"Screen" (fullscreen on OutputDevice) or "Window" (a floating window, FR-11).</summary>
+    public string OutputMode { get; set; } = "Screen";
+
+    /// <summary>Where the floating output window was last (physical pixels); null = a default corner.</summary>
+    public WindowBounds? FloatingWindow { get; set; }
+
+    [JsonIgnore]
+    public bool OutputInWindow => string.Equals(OutputMode, "Window", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Computer sound in recordings (FR-53, FR-58): "App" (only the recorded app), "All" or "None".</summary>
     public string RecordSound { get; set; } = "App";
 
@@ -106,6 +115,8 @@ internal sealed class AppSettings
         if (string.IsNullOrWhiteSpace(ScreenshotFolder)) ScreenshotFolder = null;
         if (string.IsNullOrWhiteSpace(RecordingFolder)) RecordingFolder = null;
         RecordSound = MeetingSound.ToString();
+        OutputMode = OutputInWindow ? "Window" : "Screen";
+        if (FloatingWindow is { Width: <= 0 } or { Height: <= 0 } or { Width: > 20_000 } or { Height: > 20_000 }) FloatingWindow = null;
         BlankMessage = string.IsNullOrWhiteSpace(BlankMessage) ? "We'll be right back" : BlankMessage.Trim();
         if (BlankMessage.Length > MaxMessageLength) BlankMessage = BlankMessage[..MaxMessageLength];
         return this;
@@ -213,4 +224,12 @@ internal sealed class SettingsStore(string path)
         try { File.Delete(file); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
     }
+}
+
+/// <summary>A window position and size, as saved in settings.</summary>
+internal sealed record WindowBounds(int X, int Y, int Width, int Height)
+{
+    public Rectangle ToRectangle() => new(X, Y, Width, Height);
+
+    public static WindowBounds From(Rectangle r) => new(r.X, r.Y, r.Width, r.Height);
 }

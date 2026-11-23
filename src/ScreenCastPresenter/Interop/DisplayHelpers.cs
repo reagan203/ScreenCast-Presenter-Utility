@@ -28,10 +28,24 @@ internal sealed record DisplayMonitor(
         }
     }
 
-    /// <summary>"TV · HDMI" for external screens, "This screen" for the built-in one, else the monitor's own name.</summary>
+    /// <summary>
+    /// A software screen from a virtual display driver (FR-12): nobody looks at it; it exists so
+    /// Zoom can share it. Indirect-display drivers report themselves as virtual; some only say so
+    /// in their name.
+    /// </summary>
+    public bool IsVirtual =>
+        Connection == "Virtual"
+        || FriendlyName.Contains("virtual", StringComparison.OrdinalIgnoreCase)
+        || FriendlyName.StartsWith("IDD", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A TV-like screen: HDMI or wireless.</summary>
+    public bool IsTv => Connection is "HDMI" or "Wireless";
+
+    /// <summary>"TV · HDMI" for external screens, "Zoom screen" for a virtual one, "This screen" for the built-in one, else the monitor's own name.</summary>
     public string ShortName =>
-        Connection == "Built-in" ? "This screen"
-        : Connection is "HDMI" or "Wireless" ? $"TV · {Connection}"
+        IsVirtual ? "Zoom screen"
+        : Connection == "Built-in" ? "This screen"
+        : IsTv ? $"TV · {Connection}"
         : FriendlyName.Length > 0 ? FriendlyName
         : $"Display {Number}";
 

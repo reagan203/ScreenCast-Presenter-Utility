@@ -188,6 +188,7 @@ internal sealed class TrayIcon : IDisposable
     private static string StatusText(SessionController s) => s.State switch
     {
         SessionState.Presenting when s.IsBlanked => "● TV is blank",
+        SessionState.Presenting when s.OutputIsFloating => $"● Showing in a window: {Shorten(s.Source?.Title)}",
         SessionState.Presenting => $"● Showing on {s.OutputMonitor?.ShortName}: {Shorten(s.Source?.Title)}",
         SessionState.IdleScreen => "○ TV shows a blank screen",
         _ => "○ Not showing anything",
@@ -247,14 +248,19 @@ internal sealed class TrayIcon : IDisposable
     private ToolStripMenuItem OutputMenu()
     {
         ToolStripMenuItem menu = Submenu("Show on");
-        Interop.DisplayMonitor? chosen = _app.ChosenOutput;
+        OutputOption current = _app.CurrentOutputOption;
         foreach (Interop.DisplayMonitor m in _app.Monitors)
         {
             Interop.DisplayMonitor monitor = m;
             ToolStripMenuItem item = Item(m.Label, null, () => _app.SetOutputMonitor(monitor));
-            item.Checked = chosen is not null && m.IsSameScreen(chosen);
+            item.Checked = !current.IsWindow && current.Screen is not null && m.IsSameScreen(current.Screen);
             menu.DropDownItems.Add(item);
         }
+        ToolStripMenuItem window = Item("A window (to share in Zoom)", "switch-output", _app.SetOutputWindow);
+        window.Checked = current.IsWindow;
+        menu.DropDownItems.Add(window);
+        menu.DropDownItems.Add(new ToolStripSeparator());
+        menu.DropDownItems.Add(Item("Show in Zoom…", null, () => _ = _app.ShowInZoomAsync()));
         return menu;
     }
 

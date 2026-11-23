@@ -178,7 +178,8 @@ internal sealed class PickerOverlay : ThemedForm
     private void BuildScreens()
     {
         foreach (Control old in _screens.Controls.Cast<Control>().ToList()) old.Dispose(); // Clear() alone would leak their handles
-        DisplayMonitor? output = _app.Session.OutputMonitor ?? _app.ChosenOutput;
+        // The screen the output fills, or the one the floating window is on: neither can show itself (FR-14).
+        DisplayMonitor? output = _app.Session.State != SessionState.Off ? _app.Session.OutputMonitor : _app.ChosenPlacement?.Monitor;
         bool record = _mode == PickerMode.Record;
         if (record && _app.Session.State != SessionState.Off)
         {
@@ -428,11 +429,11 @@ internal sealed class PickerOverlay : ThemedForm
     {
         // Controls.Clear() only detaches controls; dispose the old buttons or their window handles leak.
         foreach (Control old in _outputs.Controls.Cast<Control>().ToList()) old.Dispose();
-        DisplayMonitor? chosen = _app.ChosenOutput;
+        OutputOption current = _app.CurrentOutputOption;
         foreach (DisplayMonitor m in _app.Monitors)
         {
             DisplayMonitor monitor = m;
-            bool selected = chosen is not null && m.IsSameScreen(chosen);
+            bool selected = !current.IsWindow && current.Screen is not null && m.IsSameScreen(current.Screen);
             var pill = new PillButton(OutputLabel(m), selected ? PillKind.Selected : PillKind.Secondary)
             {
                 Detail = $"  Display {m.Number}",
@@ -448,6 +449,23 @@ internal sealed class PickerOverlay : ThemedForm
             };
             _outputs.Controls.Add(pill);
         }
+
+        // FR-11: a floating window, e.g. to share in Zoom without a second screen.
+        var window = new PillButton("Window", current.IsWindow ? PillKind.Selected : PillKind.Secondary)
+        {
+            Detail = "  for Zoom",
+            AccessibleName = "Show in a floating window you can share in Zoom",
+            Margin = new Padding(0, 0, LogicalToDeviceUnits(6), 0),
+        };
+        window.Size = window.Measure();
+        window.Click += (_, _) =>
+        {
+            _app.SetOutputWindow();
+            BuildOutputs();
+            UpdateShowButton();
+        };
+        _outputs.Controls.Add(window);
+        ApplyPalette(Theme.Current);
     }
 
     /// <summary>
@@ -502,13 +520,15 @@ internal sealed class PickerOverlay : ThemedForm
     }
 
     private static string OutputLabel(DisplayMonitor m) =>
-        m.Connection is "HDMI" or "Wireless" ? "TV" : m.Connection == "Built-in" ? "This screen" : m.FriendlyName.Length > 0 ? m.FriendlyName : "Screen";
+        m.IsVirtual ? "Zoom screen" : m.IsTv ? "TV" : m.Connection == "Built-in" ? "This screen" : m.FriendlyName.Length > 0 ? m.FriendlyName : "Screen";
 
     private void UpdateShowButton()
     {
-        DisplayMonitor? output = _app.ChosenOutput;
+        OutputOption current = _app.CurrentOutputOption;
+        DisplayMonitor? output = current.Screen;
         string target = _mode == PickerMode.Record ? "● Start recording"
-            : output is null ? "Show" : output.Connection is "HDMI" or "Wireless" ? "Show on TV"
+            : current.IsWindow ? "Show in a window"
+            : output is null ? "Show" : output.IsVirtual ? "Show on the Zoom screen" : output.IsTv ? "Show on TV"
             : _app.Monitors.Count < 2 ? "Show on this screen" : $"Show on Display {output.Number}";
         _show.Text = target;
         _show.Enabled = _grid.Selected is not null;

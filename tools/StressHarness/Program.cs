@@ -66,11 +66,12 @@ internal static partial class Program
             case "flash": Flash(Or(count, 100)); break;
             case "soak": Soak(TimeSpan.FromMinutes(minutes)); break;
             case "record": Record(); break;
+            case "window": FloatingWindow(); break;
             case "quick":
-                Smoke(); Picker(20); Ui(10); Switches(200); Storm(2000); Flood(300); Hostile(50); Pressure(60); Flash(100); Record();
+                Smoke(); Picker(20); Ui(10); Switches(200); Storm(2000); Flood(300); Hostile(50); Pressure(60); Flash(100); Record(); FloatingWindow();
                 break;
             case "full":
-                Smoke(); Picker(50); Ui(30); Switches(1000); Storm(10000); Flood(300); Hostile(1000); Pressure(300); Flash(100); Record();
+                Smoke(); Picker(50); Ui(30); Switches(1000); Storm(10000); Flood(300); Hostile(1000); Pressure(300); Flash(100); Record(); FloatingWindow();
                 break;
             default:
                 Console.WriteLine("Unknown scenario.");
@@ -158,6 +159,42 @@ internal static partial class Program
 
         static string[] Files(ScpProcess scp) => Directory.Exists(scp.RecordingDir) ? Directory.GetFiles(scp.RecordingDir, "*.mp4") : [];
         static string Sizes(ScpProcess scp) => string.Join(", ", Files(scp).Select(f => $"{new FileInfo(f).Length / 1024} KB"));
+    }
+
+    /// <summary>
+    /// M5: Ctrl+Alt+O reaches the floating window (FR-11); it is a normal-sized window, not a
+    /// whole screen; switching sources keeps it; its ✕ stops showing; and the output goes back
+    /// to the screen afterwards.
+    /// </summary>
+    private static void FloatingWindow()
+    {
+        Scenario("floating window", (scp, _) =>
+        {
+            Native.CtrlAlt('1'); Wait(800);
+            bool floating = false;
+            for (int i = 0; i < 6 && !floating; i++)
+            {
+                Native.CtrlAlt('O'); Wait(1000);
+                floating = scp.OutputWindows() is [var h] && IsFloating(h);
+            }
+            Check(floating, "window: Ctrl+Alt+O never reached the floating window");
+            if (!floating) return;
+            Probe(scp, "floating");
+            nint window = scp.OutputWindows()[0];
+            Native.CtrlAlt('2'); Wait(700);
+            Check(scp.OutputWindows() is [var same] && same == window, "window: switching sources replaced the floating window");
+
+            Native.SendMessageTimeout(window, 0x0010 /* WM_CLOSE */, 0, 0, 0x0002, 2000, out nint _); // the ✕
+            Check(WaitFor(() => scp.OutputWindows().Count == 0, 3000), "window: closing the floating window didn't stop showing");
+
+            // Back to fullscreen for the next scenarios: cycle until the output fills a screen again.
+            Native.CtrlAlt('1'); Wait(800);
+            for (int i = 0; i < 6 && scp.OutputWindows() is [var h] && IsFloating(h); i++) { Native.CtrlAlt('O'); Wait(1000); }
+            Check(scp.OutputWindows() is [var full] && !IsFloating(full), "window: couldn't switch back to a full screen");
+        });
+
+        static bool IsFloating(nint hwnd) =>
+            Native.GetWindowRect(hwnd, out Native.RECT r) && (r.Right - r.Left < _outputScreen.Width || r.Bottom - r.Top < _outputScreen.Height);
     }
 
     private static bool WaitFor(Func<bool> condition, int timeoutMs)

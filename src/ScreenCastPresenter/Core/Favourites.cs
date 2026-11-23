@@ -73,14 +73,15 @@ internal static class OutputChooser
 {
     /// <summary>
     /// The saved output screen if it's connected; otherwise the first screen that isn't the main
-    /// one (normally the TV); otherwise the main screen.
+    /// one (normally the TV), real screens before virtual ones; otherwise the main screen.
     /// </summary>
     public static DisplayMonitor? Choose(IReadOnlyList<DisplayMonitor> monitors, string? preferredDevice)
     {
         if (monitors.Count == 0) return null;
         if (preferredDevice is not null && monitors.FirstOrDefault(m => m.DeviceName == preferredDevice) is { } preferred)
             return preferred;
-        return monitors.FirstOrDefault(m => !m.IsPrimary) ?? monitors[0];
+        // A real TV or monitor before a virtual display: a virtual one is only for Zoom (FR-12).
+        return monitors.Where(m => !m.IsPrimary).OrderBy(m => m.IsVirtual ? 1 : 0).FirstOrDefault() ?? monitors[0];
     }
 
     /// <summary>The next screen after <paramref name="current"/>, wrapping around.</summary>

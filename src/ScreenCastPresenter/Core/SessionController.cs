@@ -50,6 +50,15 @@ internal sealed class SessionController : IDisposable
     public SourceWindow? Source { get; private set; }
     public SourceWindow? PreviousSource { get; private set; }
     public DisplayMonitor? OutputMonitor => _output is { IsAlive: true } o ? o.Monitor : null;
+
+    /// <summary>The output is a floating window (FR-11), not a whole screen.</summary>
+    public bool OutputIsFloating => _output is { IsAlive: true, IsFloating: true };
+
+    /// <summary>The screen the output fills, or null for none or a floating window (which shares its screen with the presenter).</summary>
+    public DisplayMonitor? FullScreenOutput => _output is { IsAlive: true, IsFloating: false } o ? o.Monitor : null;
+
+    /// <summary>The floating output window's normal bounds, to reopen it there; null otherwise.</summary>
+    public Rectangle? FloatingBounds { get; private set; }
     public nint OutputHandle => _output is { IsAlive: true } o ? o.Handle : 0;
     public double Dim => _dim;
     public bool IsSourceMinimized => _watcher?.IsMinimized ?? false;
@@ -79,14 +88,17 @@ internal sealed class SessionController : IDisposable
     /// something is already showing. If several calls are queued, only the newest one runs.
     /// </summary>
     /// <param name="topMost">Keep the output above other windows (false when it covers the presenter's only screen).</param>
-    public async Task PresentAsync(SourceWindow source, DisplayMonitor monitor, bool topMost)
+    public Task PresentAsync(SourceWindow source, DisplayMonitor monitor, bool topMost) =>
+        PresentAsync(source, new OutputPlacement(monitor, topMost));
+
+    public async Task PresentAsync(SourceWindow source, OutputPlacement placement)
     {
         int version = Interlocked.Increment(ref _presentVersion);
         await _gate.WaitAsync();
         try
         {
             if (version != Volatile.Read(ref _presentVersion)) return; // superseded by a newer request (FR-28)
-            await PresentCoreAsync(source, monitor, topMost);
+            await PresentCoreAsync(source, placement);
         }
         finally
         {
@@ -94,9 +106,14 @@ internal sealed class SessionController : IDisposable
         }
     }
 
-    private async Task PresentCoreAsync(SourceWindow source, DisplayMonitor monitor, bool topMost)
+    /// <summary>The output already there can be reused: the same floating window, or fullscreen on the same screen at the same size.</summary>
+    private bool IsSameOutput(OutputPlacement placement) => _output is { IsAlive: true } current && (placement.IsFloating
+        ? current.IsFloating
+        : !current.IsFloating && current.Monitor.IsSameScreen(placement.Monitor) && current.Monitor.Bounds == placement.Monitor.Bounds);
+
+    private async Task PresentCoreAsync(SourceWindow source, OutputPlacement placement)
     {
-        bool sameOutput = _output is { IsAlive: true } current && current.Monitor.IsSameScreen(monitor) && current.Monitor.Bounds == monitor.Bounds;
+        bool sameOutput = IsSameOutput(placement);
 
         // Already showing this source here: just apply a new crop and make sure it's visible.
         if (sameOutput && _engine is not null && source.IsSameSource(Source))
@@ -115,9 +132,7 @@ internal sealed class SessionController : IDisposable
             if (!sameOutput)
             {
                 CloseOutput();
-                _output = _platform.CreateOutput(monitor, topMost);
-                _output.Resized += OnOutputResized;
-                _output.ShowCloaked();
+                OpenOutput(placement);
             }
             IOutputSurface output = _output!;
             await HideIdleMessageAsync();
@@ -398,11 +413,14 @@ internal sealed class SessionController : IDisposable
     }
 
     /// <summary>Moves the output (and whatever it shows) to another screen.</summary>
-    public async Task MoveOutputAsync(DisplayMonitor monitor, bool topMost)
+    public Task MoveOutputAsync(DisplayMonitor monitor, bool topMost) => MoveOutputAsync(new OutputPlacement(monitor, topMost));
+
+    /// <summary>Moves the output (and whatever it shows) to another screen, or into / out of a floating window.</summary>
+    public async Task MoveOutputAsync(OutputPlacement placement)
     {
         if (Source is { } source && State == SessionState.Presenting)
         {
-            await PresentAsync(source, monitor, topMost);
+            await PresentAsync(source, placement);
             return;
         }
 
@@ -412,10 +430,8 @@ internal sealed class SessionController : IDisposable
             if (_output is null) return;
             string? message = _idleMessage;
             CloseOutput();
-            _output = _platform.CreateOutput(monitor, topMost);
-            _output.Resized += OnOutputResized;
-            _output.ShowCloaked();
-            if (message is not null) _output.SetIdleMessage(message);
+            OpenOutput(placement);
+            if (message is not null) _output!.SetIdleMessage(message);
             _idleMessage = message;
             _output.Reveal();
             SetState(State);
@@ -646,10 +662,36 @@ internal sealed class SessionController : IDisposable
         IsFrozen = false;
     }
 
+    private void OpenOutput(OutputPlacement placement)
+    {
+        _output = _platform.CreateOutput(placement);
+        _output.Resized += OnOutputResized;
+        _output.CloseRequested += OnOutputCloseRequested;
+        _output.MinimizedChanged += OnOutputMinimizedChanged;
+        _output.ShowCloaked();
+    }
+
+    /// <summary>The ✕ on the floating window: stop showing, as if Stop was pressed.</summary>
+    private void OnOutputCloseRequested(object? sender, EventArgs e)
+    {
+        if (sender != _output) return;
+        _ = StopAsync();
+    }
+
+    /// <summary>Zoom can't share a minimised window: say so, once per minimise.</summary>
+    private void OnOutputMinimizedChanged(object? sender, EventArgs e)
+    {
+        if (sender != _output || _output is not { IsMinimized: true }) return;
+        Message?.Invoke(this, "The output window is minimised, so Zoom shows nothing. Restore it, and move it aside or behind other windows instead.");
+    }
+
     private void CloseOutput()
     {
         if (_output is null) return;
         _output.Resized -= OnOutputResized;
+        _output.CloseRequested -= OnOutputCloseRequested;
+        _output.MinimizedChanged -= OnOutputMinimizedChanged;
+        if (_output.IsFloating && _output.IsAlive) FloatingBounds = _output.WindowBounds; // reopen it where the user left it
         _output.Conceal(); // cloak first so closing can never show a last frame
         _output.Dispose();
         _output = null;

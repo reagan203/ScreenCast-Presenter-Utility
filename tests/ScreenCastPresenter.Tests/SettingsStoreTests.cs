@@ -46,6 +46,43 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.False(File.Exists(store.FilePath + ".tmp"));
     }
 
+    [Fact]
+    public void Output_window_choice_and_position_round_trip()
+    {
+        var store = new SettingsStore(FilePath);
+        store.Load();
+        store.Current.OutputMode = "Window";
+        store.Current.FloatingWindow = new WindowBounds(-1500, 200, 960, 580); // on a screen to the left
+        store.Current.MeetingSound = Recording.MeetingSound.All;
+        store.Current.RecordMicrophone = true;
+        Assert.True(store.Save());
+
+        AppSettings s = new SettingsStore(FilePath).Load();
+        Assert.True(s.OutputInWindow);
+        Assert.Equal(new Rectangle(-1500, 200, 960, 580), s.FloatingWindow!.ToRectangle());
+        Assert.Equal(Recording.MeetingSound.All, s.MeetingSound);
+        Assert.True(s.RecordMicrophone);
+    }
+
+    [Theory]
+    [InlineData("""{ "OutputMode": "Hologram" }""", "Screen")]
+    [InlineData("""{ "OutputMode": "window" }""", "Window")]
+    public void Unknown_output_modes_fall_back_to_the_screen(string json, string expected)
+    {
+        File.WriteAllText(FilePath, json);
+        Assert.Equal(expected, new SettingsStore(FilePath).Load().OutputMode);
+    }
+
+    [Theory]
+    [InlineData("""{ "FloatingWindow": { "X": 0, "Y": 0, "Width": -5, "Height": 300 } }""")]
+    [InlineData("""{ "FloatingWindow": { "X": 0, "Y": 0, "Width": 99999, "Height": 300 } }""")]
+    [InlineData("""{ "FloatingWindow": { "X": 0, "Y": 0, "Width": 800, "Height": 0 } }""")]
+    public void Impossible_window_sizes_are_dropped(string json)
+    {
+        File.WriteAllText(FilePath, json);
+        Assert.Null(new SettingsStore(FilePath).Load().FloatingWindow);
+    }
+
     [Theory]
     [InlineData("{ not json")]
     [InlineData("")]

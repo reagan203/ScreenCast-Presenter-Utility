@@ -45,7 +45,7 @@ internal static class ShortcutCatalog
             new("freeze", "Freeze the TV / go live", ShortcutGroup.OnTheTv, C(Keys.F), Keywords: "pause still"),
             new("dim", "Dim the TV (0–40%)", ShortcutGroup.OnTheTv, C(Keys.D), Keywords: "night darker brightness"),
             new("move-output", "Move output to the next screen", ShortcutGroup.OnTheTv, C(Keys.M), Keywords: "monitor display"),
-            new("switch-output", "Switch output: TV, Zoom screen, window", ShortcutGroup.OnTheTv, C(Keys.O), Available: false),
+            new("switch-output", "Switch output: TV, Zoom screen, window", ShortcutGroup.OnTheTv, C(Keys.O), Keywords: "zoom floating window virtual share"),
         };
 
         for (int slot = 1; slot <= AppSettings.SlotCount; slot++)

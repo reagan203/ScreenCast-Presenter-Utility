@@ -6,6 +6,7 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
     <RootNamespace>ScreenCastPresenter</RootNamespace>
     <Version>1.0.0</Version>
     <Product>ScreenCast Presenter</Product>
@@ -42,6 +43,11 @@
   <ItemGroup>
     <AdditionalFiles Include="Interop\NativeMethods.txt" />
     <AdditionalFiles Include="Interop\NativeMethods.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Drawn by tools/make-icon.ps1. Embedded too, for window and tray icons. -->
+    <EmbeddedResource Include="Assets\app.ico" LogicalName="ScreenCastPresenter.app.ico" />
   </ItemGroup>
 
   <ItemGroup>

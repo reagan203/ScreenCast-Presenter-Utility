@@ -1,8 +1,5 @@
-using System.Drawing.Drawing2D;
 using ScreenCastPresenter.Core;
 using ScreenCastPresenter.Recording;
-using Windows.Win32;
-using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace ScreenCastPresenter.UI;
 
@@ -22,9 +19,9 @@ internal sealed class TrayIcon : IDisposable
     public TrayIcon(ScpApp app)
     {
         _app = app;
-        _idleIcon = DrawIcon(presenting: false);
-        _presentingIcon = DrawIcon(presenting: true);
-        _recordingIcon = DrawIcon(presenting: false, recording: true);
+        _idleIcon = AppIcon.WithStatus(null);
+        _presentingIcon = AppIcon.WithStatus(Color.FromArgb(0x22, 0xC5, 0x5E)); // green: live
+        _recordingIcon = AppIcon.WithStatus(Theme.Light.Recording); // red: recording
 
         _menu = new ContextMenuStrip { Font = Theme.UiFont, ShowImageMargin = false, ShowCheckMargin = true };
         _menu.Opening += (_, _) => BuildMenu();
@@ -289,38 +286,6 @@ internal sealed class TrayIcon : IDisposable
             menu.DropDownItems.Add(item);
         }
         return menu;
-    }
-
-    /// <summary>A small screen outline in grey; an accent dot is added while presenting (SRS 6.1).</summary>
-    private static Icon DrawIcon(bool presenting, bool recording = false)
-    {
-        Size size = SystemInformation.SmallIconSize;
-        using var bitmap = new Bitmap(size.Width, size.Height);
-        using (Graphics g = Graphics.FromImage(bitmap))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            float s = size.Width / 16f;
-            using var pen = new Pen(Color.FromArgb(0xB4, 0xB4, 0xBC), 1.5f * s);
-            g.DrawRectangle(pen, 1.5f * s, 2.5f * s, 13f * s, 8.5f * s);
-            g.DrawLine(pen, 5f * s, 14f * s, 11f * s, 14f * s);
-            if (presenting || recording)
-            {
-                using var dot = new SolidBrush(recording ? Theme.Dark.Recording : Theme.Dark.Accent);
-                g.FillEllipse(dot, 9f * s, 7.5f * s, 7f * s, 7f * s);
-            }
-        }
-
-        // GetHicon creates an unmanaged icon we must destroy; clone it into a managed Icon first.
-        nint hicon = bitmap.GetHicon();
-        try
-        {
-            using Icon temporary = Icon.FromHandle(hicon);
-            return (Icon)temporary.Clone();
-        }
-        finally
-        {
-            PInvoke.DestroyIcon((HICON)hicon);
-        }
     }
 
     public void Dispose()

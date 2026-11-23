@@ -13,6 +13,7 @@ internal class ThemedForm : Form
     public ThemedForm()
     {
         Font = Theme.UiFont;
+        Icon = AppIcon.Shared; // taskbar button and Alt+Tab
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         ApplyPalette(Theme.Current);

@@ -17,6 +17,14 @@ Each exe is self-contained: no .NET install and no admin rights needed. Copy it 
 
 Measured on the development laptop (x64 single-file build): idle at 15.3 MB private memory (budget 25 MB). The recording and capture helpers are the same exe started with a switch, and work the same from the single file.
 
+## Icon
+
+`tools\make-icon.ps1` draws the icon (a blue tile with a white screen and SCP's yellow outline around a window) at every Windows size into `src\ScreenCastPresenter\Assetspp.ico`. The 16, 20 and 24 px sizes are laid out on whole pixels so the tray and taskbar icons are sharp. The tray adds a green dot while presenting and a red one while recording.
+
+## Install on this PC
+
+Copy the exe to `%LOCALAPPDATA%\Programs\ScreenCast Presenter\` (no admin rights needed) and put a shortcut to it on the desktop. To update, quit SCP from the tray and copy the new exe over the old one; the shortcut, settings and start-with-Windows entry all stay.
+
 ## Sign
 
 ```

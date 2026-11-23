@@ -40,7 +40,7 @@ internal sealed class OutputWindow : Form, IOutputSurface
             // A normal window: in the taskbar and Alt+Tab, so it can be found and so Zoom lists it.
             FormBorderStyle = FormBorderStyle.Sizable;
             ShowInTaskbar = true;
-            ShowIcon = false;
+            Icon = AppIcon.Shared; // its taskbar button, and Zoom's window list
             MinimumSize = OutputPlacement.MinimumWindow;
             Bounds = placement.Window!.Value;
         }

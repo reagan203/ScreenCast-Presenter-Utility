@@ -1,8 +1,8 @@
 # SRS – ScreenCast Presenter Utility
 
-Nov 23, 2026
+Nov 23, 2026 · Revision 2 (same day): adds light/dark appearance, the presented-source outline, the extended shortcut set and command palette, screenshots and recording with audio, and load/stress acceptance tests. Changed requirements are marked **(rev 2)**.
 
-ScreenCast Presenter is a lightweight Windows tray utility that mirrors one chosen window or screen region to a TV, a virtual display or a Zoom share, while the presenter keeps working privately on their main screen. It targets under 60 MB of RAM, under 3% CPU and no bright flashes at any point.
+ScreenCast Presenter is a lightweight Windows tray utility that mirrors one chosen window or screen region to a TV, a virtual display or a Zoom share, while the presenter keeps working privately on their main screen. It can also take screenshots and record what is presented. It targets under 60 MB of RAM while presenting, under 3% CPU and no bright flashes at any point.
 
 ## 1. Introduction
 
@@ -21,9 +21,11 @@ In scope for v1.0:
 - Pick any open window, a monitor, or a cropped region of either as the source.
 - Show it on a chosen output: a TV or second monitor (fullscreen), a virtual display for Zoom, or a floating window.
 - Swap the source live with a smooth fade, from the tray or a hotkey.
-- Dark-only interface with no white frames.
+- Light and dark interface that follows Windows, with no unpainted (white) frames; the output itself is always black when idle. **(rev 2)**
+- A yellow outline on the presenter's screen around whatever is being presented. **(rev 2)**
+- Screenshots and screen recordings (with optional meeting and microphone audio), saved on the device like the Snipping Tool. **(rev 2)**
 
-Out of scope for v1.0: recording, streaming over the network, annotation, audio capture, macOS and Linux builds.
+Out of scope for v1.0: streaming over the network, annotation, video editing, macOS and Linux builds. **(rev 2: recording and audio capture moved into scope)**
 
 ### 1.4 Definitions
 
@@ -99,16 +101,24 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | FR-14 | Prevent mirror loops: never list the output window as a source, and refuse a monitor source that hosts the active output. Do NOT apply `WDA_EXCLUDEFROMCAPTURE` to the output window, or Zoom and other capture tools will see black | Must |
 | FR-15 | Show an optional small "Presenting" badge on the presenter's screen only, never on the output | Should |
 | FR-16 | Idle screen when nothing is presented: solid #0B0B0C, optional logo or text, never white | Must |
+| FR-17 | While presenting, draw a yellow outline on the presenter's screen around the presented window or screen, with a small "Showing on TV" tab. It is click-through, excluded from capture, follows the source when it moves or resizes, hides while the source is minimised, is never drawn on the output monitor, and can be turned off **(rev 2)** | Must |
+| FR-18 | "Identify screens": show each monitor's number large on that monitor for about one second (first run and output selection) **(rev 2)** | Should |
 
 ### 3.3 Presentation control
 
 | ID | Requirement | Priority |
 | --- | --- | --- |
 | FR-20 | Start, pause (freeze last frame), blank (fade to black) and stop from the tray menu | Must |
-| FR-21 | Global hotkeys, user-configurable: Ctrl+Alt+P (picker), Ctrl+Alt+B (blank), Ctrl+Alt+F (freeze), Ctrl+Alt+1–9 (favourite sources) | Must |
+| FR-21 | Global hotkeys, each user-configurable or switchable off, with a master "pause all shortcuts". Defaults (all Ctrl+Alt+…): P picker, Enter command palette, W show the active window, Backspace previous source, PgDn/PgUp next/previous window, S stop, B blank, Shift+B blank with message, F freeze, D dim (cycles 0–40%), M move output to next screen, O switch output type, 1–9 show favourite, Shift+1–9 save favourite, C crop, Shift+C remove crop, R start/stop recording, Shift+R pause recording, Shift+S screenshot, Y outline on/off, I badge on/off, K list shortcuts, Shift+P pause all shortcuts. **(rev 2)** | Must |
+| FR-21a | A shortcut that another app already owns is reported (tray, badge, Settings) and the rest still work. A default shortcut whose keys type a character on the current keyboard layout (AltGr layouts, e.g. Ctrl+Alt+4 = € on UK) moves automatically to Ctrl+Alt+Shift+… and the user is told **(rev 2)** | Must |
 | FR-22 | Switching source cross-fades through black over 150–250 ms | Must |
 | FR-23 | Save up to 9 favourite sources (app + crop + output) for one-key recall | Should |
 | FR-24 | Optionally hide the mouse cursor on the output | Should |
+| FR-25 | Command palette: type any action or window name and press Enter; every action is reachable this way **(rev 2)** | Must |
+| FR-26 | Shortcut cheat sheet (Ctrl+Alt+K) and a Settings page to view, search, change, disable and reset shortcuts **(rev 2)** | Must |
+| FR-27 | Blank with message: the output fades to the idle screen showing a short text ("We'll be right back", editable) **(rev 2)** | Should |
+| FR-28 | Rapid commands are coalesced: only the latest pending source switch runs, so key-mashing never builds a backlog of fades **(rev 2)** | Must |
+| FR-29 | Only one SCP instance runs; launching it again opens the picker in the running instance **(rev 2)** | Must |
 
 ### 3.4 Capture engines
 
@@ -127,6 +137,25 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | FR-41 | Remember last source, output monitor, crop and hotkeys across restarts | Must |
 | FR-42 | Optional start with Windows | Should |
 | FR-43 | Command-line: `scp.exe --present "PowerPoint" --output 2` | Could |
+| FR-44 | Appearance: Match Windows (default), Dark or Light; follows live changes of the Windows setting and respects High Contrast **(rev 2)** | Must |
+| FR-45 | Settings are written atomically; a corrupt file is backed up and replaced by defaults; unknown fields from newer versions are ignored **(rev 2)** | Must |
+
+### 3.6 Screenshots and recording (rev 2)
+
+| ID | Requirement | Priority |
+| --- | --- | --- |
+| FR-50 | Take a screenshot of: what is being presented (default), a window, a whole screen, or a dragged region | Must |
+| FR-51 | Screenshots are saved automatically as PNG in Pictures\Screenshots (configurable) and copied to the clipboard, like the Snipping Tool; a small preview on the presenter's screen offers Open, Copy, Show in folder | Must |
+| FR-52 | Record video of: what is being presented (default), a window, a whole screen, or a region; MP4 (H.264), saved automatically in Videos\Screen Recordings (configurable) | Must |
+| FR-53 | Recording audio options, each on or off: meeting/computer audio (system playback loopback) and microphone (people in the room) | Must |
+| FR-54 | Pause and resume recording; a visible recording indicator with elapsed time in the badge and tray, never on the output | Must |
+| FR-55 | Recording survives source switches, blank and freeze (it records what the output shows), and stops cleanly with a playable file if the source closes, the disk fills or the app is quit | Must |
+| FR-56 | SCP's own UI, the outline and the badge never appear in screenshots or recordings | Must |
+| FR-57 | Background recording (e.g. a webinar the user's manager asked them to record): record a chosen window independently of presenting, while the user keeps working. Recording continues when the window is covered, unfocused or on another screen; SCP warns that a minimised window can't be recorded and suggests moving it aside (or onto a virtual "hidden" screen when one exists) | Must |
+| FR-58 | App-only audio: record only the recorded app's sound (per-process loopback, Windows 10 build 20348+ / Windows 11), so the user's own notifications and media aren't recorded; fall back to all computer sound on older Windows; microphone optional | Must |
+| FR-59 | Recording stops by itself when the recorded window closes (webinar ended), and optionally at a set time or after a set duration | Should |
+| FR-60 | Long recordings (several hours): written in a crash-safe way so a crash or power cut loses at most a few seconds; free disk space is checked before and during recording with a warning well before it runs out; the PC is kept awake while recording | Must |
+| FR-61 | Recording and presenting are independent: the user can present one thing while recording another, and switching, blanking or stopping the presentation doesn't affect a background recording | Must |
 
 ## 4. Non-functional requirements
 
@@ -143,6 +172,10 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | NFR-07 | Cold start to tray icon | ≤ 1 s |
 | NFR-08 | Picker opens after hotkey | ≤ 200 ms |
 | NFR-09 | No memory growth over an 8-hour session | < 5 MB drift |
+| NFR-09a | RAM while recording **(rev 2)** | No fixed cap; measured and reported; no growth over a 2-hour recording beyond 10 MB |
+| NFR-09b | Handle, GDI and USER object counts over an 8-hour session **(rev 2)** | No growth beyond 2% |
+| NFR-09c | Picker opens and source switches stay within NFR-08 / FR-22 with every CPU core at 100% load **(rev 2)** | Same limits |
+| NFR-09d | Screenshot frame copy **(rev 2)** | One frame in CPU memory, released right after saving (the only exception to "never copy frames to CPU") |
 
 How memory stays low:
 
@@ -155,7 +188,7 @@ How memory stays low:
 
 | ID | Requirement |
 | --- | --- |
-| NFR-10 | Every SCP window uses a black (#0B0B0C) background brush from creation; no default white class brush |
+| NFR-10 | Every SCP window is created cloaked and only shown after its first full paint in its theme colours, so no default (white) frame ever appears. Output windows always use #0B0B0C regardless of theme **(rev 2)** |
 | NFR-11 | Title bars use dark mode (`DWMWA_USE_IMMERSIVE_DARK_MODE`) |
 | NFR-12 | Output windows are created cloaked (`DWMWA_CLOAK`). The DWM engine registers the thumbnail at opacity 0, calls `DwmFlush`, uncloaks, then raises thumbnail opacity to 255 over 150 ms (DWM gives no first-frame signal). The WGC engine uncloaks after its first presented frame |
 | NFR-13 | Source switches, blank and stop always pass through black; no frame of the old or new source at full brightness during the fade |
@@ -182,6 +215,8 @@ How memory stays low:
 
 - Nothing except the chosen source ever appears on the output.
 - Toast notifications and SCP's own UI never appear on the output.
+- **(rev 2) The audience never sees SCP or what it is doing.** Every SCP top-level window except the output (picker, palette, badge, outline, menus, tooltips, drop-downs, settings, first run) is excluded from capture at creation; a capture guard applies this to any window the UI framework creates on its own, and an automated audit checks it. SCP UI never opens on the output monitor. SCP never uses Windows notifications (they can appear on any screen); messages go to the badge. Shortcuts never move focus or the mouse, so the presented app does not change state when the presenter uses SCP.
+- **(rev 2)** If the TV duplicates (mirrors) the presenter's screen, SCP warns the user to switch to Extend (Win+P), because in that mode the audience sees everything.
 - No network calls, no telemetry, no crash upload unless the user opts in.
 - Signed executable to avoid SmartScreen warnings.
 
@@ -211,7 +246,7 @@ The controller uses the DWM engine by default and switches to WGC only for minim
 
 ### 6.1 User interface
 
-One dark theme: background #0B0B0C, surfaces #17171A, text #E6E6E6, one accent colour (#4C8DFF). Rounded corners, Segoe UI Variable, no pure white anywhere.
+Two themes **(rev 2)**, chosen by Match Windows / Dark / Light. Dark: background #0B0B0C, surfaces #17171A, text #E6E6E6, accent #4C8DFF. Light: background #F3F3F5, surfaces #FAFAFB, text #1B1B1F, accent #2563D9. Rounded corners, Segoe UI Variable, no pure white anywhere. The output and idle screen are always #0B0B0C. Approved mockup: the "ScreenCast Presenter UI" canvas (picker, badge, tray menu, first run, outline, shortcuts, command palette).
 
 | Screen | Contents |
 | --- | --- |
@@ -220,8 +255,10 @@ One dark theme: background #0B0B0C, surfaces #17171A, text #E6E6E6, one accent c
 | Picker | Centred overlay on the presenter's screen: search box, grid of live window thumbnails, monitors row, output selector (TV / Zoom screen / Floating), "Crop…" button |
 | Crop overlay | Dimmed source with a draggable rectangle and a size readout; Enter confirms, Esc cancels |
 | Presenting badge | Small pill at the top of the presenter's screen: source name, Blank, Stop; auto-hides after 3 s |
-| Settings | Tabs: General (start with Windows, cursor), Hotkeys, Output (monitor, dimming, idle screen text), Advanced (capture engine, diagnostics) |
+| Settings | Tabs: General (start with Windows, cursor), Keyboard shortcuts, Output (monitor, dimming, idle screen text), Recording (folders, audio), Appearance, Advanced (capture engine, diagnostics) **(rev 2)** |
 | Output | Borderless, black, source scaled to fit; nothing else |
+| Outline **(rev 2)** | Yellow (#FFC83D dark / #F2B200 light) edge around the presented source with a "Showing on TV" tab |
+| Command palette **(rev 2)** | Centred search box listing matching actions (with their shortcuts) and windows |
 
 ### 6.2 Software interfaces (Windows APIs)
 
@@ -298,10 +335,11 @@ SCP does not integrate with Zoom's API. The user shares the virtual display (or 
 Estimated effort for one developer: about 6 weeks to v1.0.
 
 1. **M1 – Core mirror (week 1).** Window list, DWM thumbnail into a black borderless window on a chosen monitor, no-flash creation. Exit: UC-01 works; NFR-02 and NFR-10–12 pass.
-2. **M2 – Tray and picker (weeks 2–3).** Tray icon and menu, picker overlay with live thumbnails and search, hotkeys, fades, blank and freeze. Exit: UC-03 and UC-05 work; NFR-08 and NFR-16 pass.
-3. **M3 – Crop and WGC engine (week 4).** Crop overlay, WGC fallback for minimised windows and monitors, engine auto-select. Exit: UC-04 and UC-06 work; NFR-03 and NFR-05 pass.
+2. **M2 – Tray, picker and shortcuts (weeks 2–3).** Tray icon and menu, picker overlay with live thumbnails and search, full shortcut set with conflict/layout handling, command palette, shortcut settings, fades, blank (with message), dimming, favourites, badge, outline, light/dark, first run, single instance, stress harness and FlashCheck. Freeze moves to M3 **(rev 2)**. Exit: UC-03 and UC-05 work; NFR-08 and NFR-16 pass.
+3. **M3 – Crop, WGC engine, freeze and screenshots (week 4).** Crop overlay, WGC fallback for minimised windows and monitors, engine auto-select, freeze (GPU-held frame), screenshots (FR-50, FR-51). Exit: UC-04 and UC-06 work; NFR-03 and NFR-05 pass.
 4. **M4 – Zoom screen (week 5).** Virtual display detection, guided setup, floating-window mode. Exit: UC-02 works on Zoom and Teams.
-5. **M5 – Hardening and release (week 6).** Settings, persistence, DPI, hot-plug, sleep/resume, 8-hour soak test, signed build. Exit: all Must requirements pass.
+5. **M5 – Hardening and release (week 6).** Remaining settings, DPI, hot-plug, sleep/resume, 8-hour soak test, signed build. Exit: all Must requirements in 3.1–3.5 pass.
+6. **M6 – Recording (rev 2).** Recording of presented content, window, screen or region; meeting and microphone audio; pause/resume; indicator. Exit: FR-52–FR-56 and NFR-09a pass.
 
 ### 8.1 Acceptance tests
 
@@ -315,6 +353,11 @@ Estimated effort for one developer: about 6 weeks to v1.0.
 | Zoom capture | Share the virtual display in Zoom while presenting | Participants see the source, not black |
 | Usability | 5 first-time users, no instructions, asked to show a window on the TV | 4 of 5 succeed in ≤ 15 s |
 | Hot-plug | Unplug and replug the TV 10 times while presenting | No crash; output restores |
+| Load **(rev 2)** | Stress harness: 300 open windows; 1,000 rapid switches; 10,000 shortcut presses; 4K/8K sources; sources resizing 60×/s; source closing mid-fade ×1,000 | No crash; NFR-08 and FR-22 timings hold; memory returns to baseline |
+| Pressure **(rev 2)** | All CPU cores at 100%, heavy GPU load, low memory, SCP limited to 5% CPU | Still responsive; NFR-09c holds |
+| Environment **(rev 2)** | Resolution/DPI/theme/keyboard-layout changes, Explorer restart, lock/unlock, RDP, sleep/resume, GPU driver reset | No crash; UI and output recover |
+| Hostile apps **(rev 2)** | Hung, elevated, constantly resizing, rapidly retitling, UWP, fullscreen-exclusive and DRM windows | No hang in SCP; expected behaviour per case |
+| Settings fuzz **(rev 2)** | Random-byte, huge, read-only, disk-full settings files | Defaults load; corrupt file backed up; no crash |
 
 ## Appendix A. Open-source references
 

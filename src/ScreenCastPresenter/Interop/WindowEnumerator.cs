@@ -71,18 +71,51 @@ internal static class WindowEnumerator
 
             WindowCandidate c = Describe(hwnd, shell);
             if (!WindowFilter.IsPresentable(c, ownPid)) continue;
-
-            if (!appNames.TryGetValue(c.ProcessId, out string? app))
-            {
-                app = GetAppName(c.ProcessId);
-                appNames[c.ProcessId] = app;
-            }
-            result.Add(new SourceWindow(c.Handle, c.Title, app, c.IsMinimized));
+            result.Add(ToSource(c, appNames));
         }
         return result;
     }
 
+    /// <summary>
+    /// The top-level window the user is working in, if it can be presented (used by "Show the
+    /// window I am in"). Returns null for SCP's own windows, the desktop and the taskbar.
+    /// </summary>
+    public static SourceWindow? GetActiveWindow()
+    {
+        HWND foreground = PInvoke.GetForegroundWindow();
+        if (foreground.IsNull) return null;
+        HWND root = PInvoke.GetAncestor(foreground, GET_ANCESTOR_FLAGS.GA_ROOTOWNER);
+        if (root.IsNull) root = foreground;
+
+        WindowCandidate c = Describe(root, PInvoke.GetShellWindow());
+        if (!PInvoke.IsWindowVisible(root)) return null;
+        return WindowFilter.IsPresentable(c, (uint)Environment.ProcessId) ? ToSource(c, new()) : null;
+    }
+
+    /// <summary>Re-reads a window's title and state, or null if it no longer exists.</summary>
+    public static SourceWindow? Refresh(SourceWindow window)
+    {
+        var hwnd = (HWND)window.Handle;
+        if (!PInvoke.IsWindow(hwnd)) return null;
+        return window with { Title = GetTitle(hwnd) is { Length: > 0 } t ? t : window.Title, IsMinimized = PInvoke.IsIconic(hwnd) };
+    }
+
     public static bool IsAlive(nint hwnd) => PInvoke.IsWindow((HWND)hwnd);
+
+    /// <summary>Client-area size in physical pixels (what a client-only DWM thumbnail shows). No message is sent.</summary>
+    public static Size ClientSize(nint hwnd) =>
+        PInvoke.GetClientRect((HWND)hwnd, out RECT r) ? new Size(r.right - r.left, r.bottom - r.top) : Size.Empty;
+
+    private static SourceWindow ToSource(in WindowCandidate c, Dictionary<uint, string> appNames)
+    {
+        uint pid = AppProcessId((HWND)c.Handle, c.ProcessId);
+        if (!appNames.TryGetValue(pid, out string? app))
+        {
+            app = GetAppName(pid);
+            appNames[pid] = app;
+        }
+        return new SourceWindow(c.Handle, c.Title, app, c.IsMinimized);
+    }
 
     private static WindowCandidate Describe(HWND hwnd, HWND shell)
     {
@@ -102,13 +135,39 @@ internal static class WindowEnumerator
             Height: rect.bottom - rect.top);
     }
 
+    /// <summary>
+    /// InternalGetWindowText reads the stored caption without sending a message to the window,
+    /// so a hung app can never freeze the picker (GetWindowText/GetWindowTextLength can block).
+    /// </summary>
     private static string GetTitle(HWND hwnd)
     {
-        int length = PInvoke.GetWindowTextLength(hwnd);
-        if (length <= 0) return string.Empty;
-        Span<char> buffer = length < 512 ? stackalloc char[length + 1] : new char[length + 1];
-        int copied = PInvoke.GetWindowText(hwnd, buffer);
-        return new string(buffer[..copied]);
+        Span<char> buffer = stackalloc char[512];
+        int copied = PInvoke.InternalGetWindowText(hwnd, buffer);
+        return copied > 0 ? new string(buffer[..copied]) : string.Empty;
+    }
+
+    /// <summary>
+    /// Store (UWP) apps live inside an ApplicationFrameHost window owned by another process; the
+    /// real app is the process that owns the child CoreWindow. Use that for the app name.
+    /// </summary>
+    private static uint AppProcessId(HWND hwnd, uint framePid)
+    {
+        Span<char> cls = stackalloc char[64];
+        int length = PInvoke.GetClassName(hwnd, cls);
+        if (!cls[..Math.Max(length, 0)].SequenceEqual("ApplicationFrameWindow")) return framePid;
+
+        uint appPid = framePid;
+        PInvoke.EnumChildWindows(hwnd, (child, _) =>
+        {
+            PInvoke.GetWindowThreadProcessId(child, out uint pid);
+            if (pid != framePid)
+            {
+                appPid = pid;
+                return false; // stop
+            }
+            return true;
+        }, default);
+        return appPid;
     }
 
     /// <summary>Executable name without extension, e.g. "notepad". Avoids Process.GetProcessById, which snapshots every process.</summary>

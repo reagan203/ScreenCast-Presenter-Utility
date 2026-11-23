@@ -1,0 +1,170 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace ScreenCastPresenter.Core;
+
+internal enum ThemeMode { System, Dark, Light }
+
+/// <summary>A saved source for one-key recall (FR-23).</summary>
+internal sealed class Favourite
+{
+    public string AppName { get; set; } = "";
+    public string Title { get; set; } = "";
+}
+
+/// <summary>Everything SCP remembers (FR-40/41). Unknown JSON fields are ignored, missing ones get defaults.</summary>
+internal sealed class AppSettings
+{
+    public const int SlotCount = 9;
+    public const double MaxDim = 0.4;
+    public const int MaxMessageLength = 120;
+
+    public int Version { get; set; } = 1;
+    public string? OutputDevice { get; set; }
+
+    /// <summary>Stored as text so a value written by a newer version can't make the whole file unreadable.</summary>
+    public string Theme { get; set; } = nameof(ThemeMode.System);
+
+    public double Dim { get; set; }
+    public bool ShowOutline { get; set; } = true;
+    public bool ShowBadge { get; set; } = true;
+    public bool ShortcutsEnabled { get; set; } = true;
+
+    /// <summary>Only the user's changes: action id → "Ctrl+Alt+X", or "" for "switched off".</summary>
+    public Dictionary<string, string> Shortcuts { get; set; } = [];
+
+    public Favourite?[] Favourites { get; set; } = new Favourite?[SlotCount];
+    public bool FirstRunDone { get; set; }
+    public string BlankMessage { get; set; } = "We'll be right back";
+
+    [JsonIgnore]
+    public ThemeMode ThemeMode
+    {
+        get => Enum.TryParse(Theme, ignoreCase: true, out ThemeMode mode) ? mode : ThemeMode.System;
+        set => Theme = value.ToString();
+    }
+
+    /// <summary>Repairs anything out of range, e.g. from a hand-edited or older file.</summary>
+    public AppSettings Normalize()
+    {
+        Dim = double.IsFinite(Dim) ? Math.Clamp(Dim, 0, MaxDim) : 0;
+        Theme = ThemeMode.ToString();
+        Shortcuts ??= [];
+        if (Favourites is null || Favourites.Length != SlotCount)
+        {
+            var fixedSlots = new Favourite?[SlotCount];
+            if (Favourites is not null) Array.Copy(Favourites, fixedSlots, Math.Min(Favourites.Length, SlotCount));
+            Favourites = fixedSlots;
+        }
+        for (int i = 0; i < Favourites.Length; i++)
+        {
+            if (Favourites[i] is { } f && (string.IsNullOrWhiteSpace(f.AppName) || f.Title is null)) Favourites[i] = null;
+        }
+        BlankMessage = string.IsNullOrWhiteSpace(BlankMessage) ? "We'll be right back" : BlankMessage.Trim();
+        if (BlankMessage.Length > MaxMessageLength) BlankMessage = BlankMessage[..MaxMessageLength];
+        return this;
+    }
+}
+
+[JsonSourceGenerationOptions(WriteIndented = true, ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true)]
+[JsonSerializable(typeof(AppSettings))]
+internal sealed partial class SettingsJsonContext : JsonSerializerContext;
+
+/// <summary>
+/// Loads and saves settings.json (FR-40, FR-45): atomic writes, corrupt files backed up and
+/// replaced by defaults, and no exception ever escapes to the caller.
+/// </summary>
+internal sealed class SettingsStore(string path)
+{
+    public const long MaxFileBytes = 1024 * 1024;
+
+    public static string DefaultPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ScreenCastPresenter", "settings.json");
+
+    public string FilePath { get; } = path;
+    public AppSettings Current { get; private set; } = new();
+
+    /// <summary>Plain-language description of the last load problem, if any.</summary>
+    public string? LoadProblem { get; private set; }
+
+    /// <summary>Plain-language description of the last save problem, if any.</summary>
+    public string? SaveProblem { get; private set; }
+
+    public AppSettings Load()
+    {
+        LoadProblem = null;
+        try
+        {
+            var info = new FileInfo(FilePath);
+            if (!info.Exists) return Current = new AppSettings();
+            if (info.Length > MaxFileBytes) throw new InvalidDataException("The settings file is too large.");
+
+            byte[] bytes = File.ReadAllBytes(FilePath);
+            AppSettings? loaded = JsonSerializer.Deserialize(bytes, SettingsJsonContext.Default.AppSettings);
+            return Current = (loaded ?? throw new InvalidDataException("The settings file is empty.")).Normalize();
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException or NotSupportedException)
+        {
+            string? backup = BackUpCorruptFile();
+            LoadProblem = backup is null
+                ? "Your settings file was damaged, so SCP started with default settings."
+                : $"Your settings file was damaged, so SCP started with default settings. The old file was kept as {Path.GetFileName(backup)}.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LoadProblem = "SCP couldn't read its settings file, so it started with default settings.";
+        }
+        return Current = new AppSettings();
+    }
+
+    /// <summary>
+    /// Writes to a temporary file, flushes it to disk, then renames it over the real file, so a
+    /// crash or power cut mid-save leaves either the old or the new settings, never half a file.
+    /// </summary>
+    public bool Save()
+    {
+        SaveProblem = null;
+        string temp = FilePath + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(Current.Normalize(), SettingsJsonContext.Default.AppSettings);
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temp, FilePath, overwrite: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SaveProblem = ex is UnauthorizedAccessException
+                ? "SCP couldn't save your settings: the settings file or folder is read-only."
+                : "SCP couldn't save your settings. The disk may be full.";
+            TryDelete(temp);
+            return false;
+        }
+    }
+
+    private string? BackUpCorruptFile()
+    {
+        try
+        {
+            string backup = Path.Combine(Path.GetDirectoryName(FilePath)!,
+                $"settings.corrupt-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+            File.Move(FilePath, backup, overwrite: true);
+            return backup;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static void TryDelete(string file)
+    {
+        try { File.Delete(file); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* best effort */ }
+    }
+}

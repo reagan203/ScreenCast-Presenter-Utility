@@ -1,0 +1,455 @@
+using ScreenCastPresenter.Core;
+using ScreenCastPresenter.Interop;
+using Windows.Win32.Foundation;
+using Windows.Win32.UI.WindowsAndMessaging;
+
+namespace ScreenCastPresenter.UI;
+
+/// <summary>
+/// The picker (Ctrl+Alt+P, SRS 6.1): a centred panel over a dimmed screen with search, live
+/// window thumbnails and the output choice. Keyboard: type to search, arrows to move, Enter to
+/// show, Ctrl+1–9 to save a favourite, Esc to clear/close. Opens on the presenter's screen
+/// (never the output), is excluded from capture, and closes when you click elsewhere.
+/// </summary>
+internal sealed class PickerOverlay : ThemedForm
+{
+    private readonly ScpApp _app;
+    private readonly DisplayMonitor _screen;
+    private readonly ScrimWindow _scrim;
+    private readonly SearchBox _search = new("Search windows and apps") { Hint = "Just start typing" };
+    private readonly CardGrid _grid = new();
+    private readonly FlowLayoutPanel _outputs = new() { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+    private readonly PillButton _show = new("Show", PillKind.Primary);
+    private readonly PillButton _theme = new("Light mode", PillKind.Secondary);
+    private readonly PillButton _close = new("✕", PillKind.Ghost) { AccessibleName = "Close" };
+    private readonly Label _title = new() { Text = "Choose what to show", AutoSize = true };
+    private readonly Label _count = new() { AutoSize = true };
+    private readonly Label _banner = new() { AutoSize = false, Visible = false, TextAlign = ContentAlignment.MiddleLeft };
+    private readonly Label _hints = new() { AutoSize = true };
+    private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1000 };
+    private readonly Font _titleFont = new(Theme.UiFont.FontFamily, 15f, FontStyle.Bold);
+    private readonly Font _sectionFont = new(Theme.UiFont.FontFamily, 8.5f, FontStyle.Bold);
+    private List<SourceWindow> _all = [];
+    private bool _dismissing;
+
+    public PickerOverlay(ScpApp app, DisplayMonitor screen)
+    {
+        _app = app;
+        _screen = screen;
+        Text = "ScreenCast Presenter picker";
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.Manual;
+        KeyPreview = true;
+        Padding = new Padding(1); // room for the border
+
+        // Size in physical pixels for the target screen; positioned before the handle exists so it opens there at its DPI.
+        double s = screen.Scale;
+        int width = Math.Min((int)(1080 * s), screen.WorkArea.Width - (int)(48 * s));
+        int height = Math.Min((int)(760 * s), screen.WorkArea.Height - (int)(48 * s));
+        Bounds = new Rectangle(screen.WorkArea.Left + (screen.WorkArea.Width - width) / 2, screen.WorkArea.Top + (screen.WorkArea.Height - height) / 2, width, height);
+
+        _scrim = new ScrimWindow(screen.Bounds);
+        _scrim.Clicked += (_, _) => Dismiss();
+
+        BuildLayout();
+        _search.Box.TextChanged += (_, _) => ApplyFilter();
+        _grid.CardActivated += async (_, window) => await PresentAsync(window);
+        _grid.SelectionChanged += (_, _) => UpdateShowButton();
+        _show.Click += async (_, _) =>
+        {
+            if (_grid.Selected is { } w) await PresentAsync(w);
+        };
+        _theme.Click += (_, _) => _app.SetTheme(Theme.Opposite);
+        _close.Click += (_, _) => Dismiss();
+        _refresh.Tick += (_, _) => RefreshWindows();
+        ApplyPalette(Theme.Current);
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            CreateParams cp = base.CreateParams;
+            // Topmost so it appears above the output when the output covers the only screen.
+            cp.ExStyle = (int)((WINDOW_EX_STYLE)cp.ExStyle | WINDOW_EX_STYLE.WS_EX_TOPMOST | WINDOW_EX_STYLE.WS_EX_TOOLWINDOW);
+            return cp;
+        }
+    }
+
+    private void BuildLayout()
+    {
+        int Px(int logical) => (int)(logical * _screen.Scale);
+
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(Px(24), Px(18), Px(24), Px(12)) };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // header
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(48))); // search
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // banner
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // "Windows" + count
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // grid
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // footer
+
+        var header = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 4, Margin = new Padding(0, 0, 0, Px(14)) };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int i = 0; i < 3; i++) header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _title.Font = _titleFont;
+        _title.Anchor = AnchorStyles.Left;
+        var escHint = new Label { Text = "Esc to close", AutoSize = true, Anchor = AnchorStyles.Right, Margin = new Padding(Px(12), 0, Px(4), 0), Tag = "dim" };
+        _theme.Size = _theme.Measure();
+        _close.Size = new Size(Px(40), Px(40));
+        header.Controls.Add(_title, 0, 0);
+        header.Controls.Add(_theme, 1, 0);
+        header.Controls.Add(escHint, 2, 0);
+        header.Controls.Add(_close, 3, 0);
+
+        _search.Dock = DockStyle.Fill;
+        _search.Margin = new Padding(0);
+
+        _banner.Dock = DockStyle.Fill;
+        _banner.Height = Px(40);
+        _banner.Margin = new Padding(0, Px(10), 0, 0);
+        _banner.Padding = new Padding(Px(12), 0, Px(12), 0);
+
+        var sectionRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(0, Px(16), 0, Px(10)), WrapContents = false };
+        var section = new Label { Text = "WINDOWS", AutoSize = true, Font = _sectionFont, Tag = "dim" };
+        _count.Margin = new Padding(Px(8), Px(1), 0, 0);
+        _count.Tag = "faint";
+        sectionRow.Controls.Add(section);
+        sectionRow.Controls.Add(_count);
+
+        _grid.Dock = DockStyle.Fill;
+        _grid.Margin = new Padding(0);
+
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 4, Margin = new Padding(0, Px(14), 0, 0) };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var showOn = new Label { Text = "Show on", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, Px(10), 0), Tag = "dim" };
+        _show.Anchor = AnchorStyles.Right;
+        _hints.Tag = "faint";
+        _hints.Margin = new Padding(0, Px(10), 0, 0);
+        footer.Controls.Add(showOn, 0, 0);
+        footer.Controls.Add(_outputs, 1, 0);
+        footer.Controls.Add(_show, 3, 0);
+        footer.Controls.Add(_hints, 0, 1);
+        footer.SetColumnSpan(_hints, 4);
+
+        root.Controls.Add(header, 0, 0);
+        root.Controls.Add(_search, 0, 1);
+        root.Controls.Add(_banner, 0, 2);
+        root.Controls.Add(sectionRow, 0, 3);
+        root.Controls.Add(_grid, 0, 4);
+        root.Controls.Add(footer, 0, 5);
+        Controls.Add(root);
+    }
+
+    protected override void ApplyPalette(Palette palette)
+    {
+        base.ApplyPalette(palette);
+        BackColor = palette.Background;
+        foreach (Control c in AllControls(this))
+        {
+            c.BackColor = c is SearchBox or PillButton or CardGrid ? c.BackColor : palette.Background;
+            c.ForeColor = c.Tag switch { "dim" => palette.TextDim, "faint" => palette.TextFaint, _ => palette.Text };
+        }
+        _banner.BackColor = palette.IsDark ? Color.FromArgb(0x21, 0x1D, 0x12) : Color.FromArgb(0xFB, 0xF3, 0xDE);
+        _banner.ForeColor = palette.Text;
+        _theme.Text = palette.IsDark ? "Light mode" : "Dark mode";
+        _theme.AccessibleName = palette.IsDark ? "Switch to light mode" : "Switch to dark mode";
+        if (IsHandleCreated) _theme.Size = _theme.Measure();
+        _scrim?.Invalidate();
+        Invalidate(true);
+    }
+
+    private static IEnumerable<Control> AllControls(Control parent)
+    {
+        foreach (Control c in parent.Controls)
+        {
+            yield return c;
+            foreach (Control child in AllControls(c)) yield return child;
+        }
+    }
+
+    /// <summary>The screen this picker was laid out for; a different screen means a new picker.</summary>
+    public DisplayMonitor Screen => _screen;
+
+    /// <summary>Raised when the picker hides (Esc, click elsewhere, a window was chosen).</summary>
+    public event EventHandler? Dismissed;
+
+    /// <summary>
+    /// Creates every window handle in advance (hidden), so the first open is as fast as later ones.
+    /// The picker is created once and reused: building ~20 controls costs ~65 ms, more than the
+    /// whole open budget (NFR-08).
+    /// </summary>
+    public void Prepare() => CreateControl();
+
+    /// <summary>Fresh list and state for this opening.</summary>
+    private void PrepareContent()
+    {
+        _search.Box.Clear();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        RefreshWindows();
+        ScpApp.Diag($"picker: enumerated {_all.Count} windows in {clock.ElapsedMilliseconds} ms");
+        BuildOutputs();
+        UpdateShowButton();
+        UpdateHints();
+        _banner.Text = "⚠  Your TV is copying this screen, so the audience sees everything. Press Win+P and choose Extend.";
+        _banner.Visible = _app.IsDisplayDuplicated;
+    }
+
+    public void Open()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        _dismissing = false;
+        PrepareContent();
+
+        // Both are topmost; the panel is shown second so it sits above the scrim. (Not "owned" by
+        // the scrim: closing an owner closes its owned forms, which would recurse on Close.)
+        _scrim.Show();
+        if (IsHandleCreated)
+        {
+            // Reopening: repaint while cloaked so the previous opening's content never shows for a frame.
+            var hwnd = (HWND)Handle;
+            DwmHelpers.SetCloaked(hwnd, true);
+            Show();
+            DwmHelpers.PaintNow(hwnd);
+            _grid.UpdateThumbnails();
+            DwmHelpers.Flush();
+            DwmHelpers.SetCloaked(hwnd, false);
+        }
+        else
+        {
+            Show(); // first time: ThemedForm uncloaks after the first full paint
+        }
+        Activate();
+        _search.Box.Focus();
+        _refresh.Start();
+        ScpApp.Diag($"picker: open {clock.ElapsedMilliseconds} ms");
+    }
+
+    /// <summary>Hides the picker and releases every live thumbnail (SRS 4.1). The window is kept for next time.</summary>
+    public void Dismiss()
+    {
+        if (!Visible || _dismissing) return;
+        _dismissing = true;
+        _refresh.Stop();
+        _grid.ReleaseThumbnails();
+        Hide();
+        _scrim.Hide();
+        Dismissed?.Invoke(this, EventArgs.Empty);
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        _grid.UpdateThumbnails();
+        _search.Box.Focus();
+    }
+
+    protected override void OnMove(EventArgs e)
+    {
+        base.OnMove(e);
+        _grid.UpdateThumbnails();
+    }
+
+    protected override void OnDeactivate(EventArgs e)
+    {
+        base.OnDeactivate(e);
+        // Clicking another app hides the picker, like a launcher.
+        if (Visible && !_dismissing) BeginInvoke(Dismiss);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        // Alt+F4 and similar just hide it; only app shutdown really closes it.
+        if (e.CloseReason == CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            Dismiss();
+        }
+        base.OnFormClosing(e);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        using var pen = new Pen(Theme.Current.Border);
+        e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        Keys key = keyData & Keys.KeyCode;
+        Keys mods = keyData & Keys.Modifiers;
+
+        if (keyData == Keys.Escape)
+        {
+            if (_search.Box.TextLength > 0) _search.Box.Clear();
+            else Dismiss();
+            return true;
+        }
+        if (keyData == Keys.Enter && _search.Box.Focused)
+        {
+            _grid.ActivateSelected();
+            return true;
+        }
+        // Arrows move through the cards while typing; Left/Right only when the search box is empty.
+        bool arrows = key is Keys.Up or Keys.Down or Keys.PageUp or Keys.PageDown ||
+                      (key is Keys.Left or Keys.Right && _search.Box.TextLength == 0) ||
+                      (key is Keys.Home or Keys.End && mods == Keys.Control);
+        if (arrows && mods is Keys.None or Keys.Control && (_search.Box.Focused || _grid.Focused))
+        {
+            _grid.MoveSelection(key);
+            return true;
+        }
+        if (mods == Keys.Control && key is >= Keys.D1 and <= Keys.D9 && _grid.Selected is { } selected)
+        {
+            int slot = key - Keys.D0;
+            _app.SaveFavourite(selected, slot);
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    private void RefreshWindows()
+    {
+        List<SourceWindow> windows = WindowEnumerator.GetPresentableWindows();
+        if (windows.Count == _all.Count && windows.Zip(_all).All(p => p.First == p.Second)) return; // nothing changed
+        _all = windows;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        string query = _search.Box.Text;
+        List<SourceWindow> shown = PickerLayout.Filter(_all, query, w => w.Title, w => w.AppName);
+        _grid.EmptyText = _all.Count == 0
+            ? "No windows to show. Open the app you want to present."
+            : $"No windows match “{query}”. Try the app name, like “PowerPoint”.";
+        _grid.Items = shown;
+        _count.Text = query.Trim().Length > 0 ? $"{shown.Count} of {_all.Count} open" : $"{_all.Count} open";
+        UpdateShowButton();
+    }
+
+    private void BuildOutputs()
+    {
+        // Controls.Clear() only detaches controls; dispose the old buttons or their window handles leak.
+        foreach (Control old in _outputs.Controls.Cast<Control>().ToList()) old.Dispose();
+        DisplayMonitor? chosen = _app.ChosenOutput;
+        foreach (DisplayMonitor m in _app.Monitors)
+        {
+            DisplayMonitor monitor = m;
+            bool selected = chosen is not null && m.IsSameScreen(chosen);
+            var pill = new PillButton(OutputLabel(m), selected ? PillKind.Selected : PillKind.Secondary)
+            {
+                Detail = $"  Display {m.Number}",
+                AccessibleName = $"Show on {m.Label}",
+                Margin = new Padding(0, 0, LogicalToDeviceUnits(6), 0),
+            };
+            pill.Size = pill.Measure();
+            pill.Click += (_, _) =>
+            {
+                _app.SetOutputMonitor(monitor);
+                BuildOutputs();
+                UpdateShowButton();
+            };
+            _outputs.Controls.Add(pill);
+        }
+    }
+
+    private static string OutputLabel(DisplayMonitor m) =>
+        m.Connection is "HDMI" or "Wireless" ? "TV" : m.Connection == "Built-in" ? "This screen" : m.FriendlyName.Length > 0 ? m.FriendlyName : "Screen";
+
+    private void UpdateShowButton()
+    {
+        DisplayMonitor? output = _app.ChosenOutput;
+        string target = output is null ? "Show" : output.Connection is "HDMI" or "Wireless" ? "Show on TV"
+            : _app.Monitors.Count < 2 ? "Show on this screen" : $"Show on Display {output.Number}";
+        _show.Text = target;
+        _show.Enabled = _grid.Selected is not null;
+        _show.Size = _show.Measure();
+    }
+
+    private void UpdateHints()
+    {
+        string save = "Ctrl+1–9 saves a favourite";
+        _hints.Text = $"Arrow keys to move   ·   Enter to show   ·   {save}   ·   {_app.ActiveShortcut("palette")?.ToString() ?? "The palette"} runs any action";
+    }
+
+    private async Task PresentAsync(SourceWindow window)
+    {
+        if (!Visible || _dismissing) return;
+        Dismiss(); // vanish first; it is excluded from capture anyway
+        await _app.PresentAsync(window);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _refresh.Dispose();
+            _scrim.Dispose();
+            // Controls don't dispose fonts assigned to them; these are ours.
+            _titleFont.Dispose();
+            _sectionFont.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+
+    /// <summary>Dims the presenter's screen behind the picker. Click it to close the picker.</summary>
+    private sealed class ScrimWindow : Form
+    {
+        private const int WM_MOUSEACTIVATE = 0x0021, MA_NOACTIVATE = 3;
+
+        public ScrimWindow(Rectangle bounds)
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            AutoScaleMode = AutoScaleMode.None;
+            Bounds = bounds;
+            BackColor = Color.Black;
+            Opacity = Theme.Current.IsDark ? 0.6 : 0.35;
+        }
+
+        public event EventHandler? Clicked;
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle = (int)((WINDOW_EX_STYLE)cp.ExStyle | WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_NOACTIVATE | WINDOW_EX_STYLE.WS_EX_TOPMOST);
+                return cp;
+            }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            DwmHelpers.ExcludeFromCapture((HWND)Handle);
+            DwmHelpers.MakeBareSurface((HWND)Handle);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e) => e.Graphics.Clear(Color.Black);
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            Clicked?.Invoke(this, EventArgs.Empty);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_MOUSEACTIVATE)
+            {
+                m.Result = MA_NOACTIVATE;
+                return;
+            }
+            base.WndProc(ref m);
+        }
+    }
+}

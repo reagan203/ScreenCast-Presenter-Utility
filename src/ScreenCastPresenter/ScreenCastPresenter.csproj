@@ -11,6 +11,10 @@
     <!-- Memory budget (NFR-01..03): workstation, non-concurrent GC keeps the heap and thread count small. -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <!-- Tiered JIT later recompiles hot code a second time (plus profiling data): measured +7 MB of
+         permanent native memory after a busy minute. Compiling once, fully optimised, keeps
+         presenting at ~13 MB; startup stays ~420 ms (NFR-07 allows 1 s). See docs/TESTING.md. -->
+    <TieredCompilation>false</TieredCompilation>
   </PropertyGroup>
 
   <ItemGroup>

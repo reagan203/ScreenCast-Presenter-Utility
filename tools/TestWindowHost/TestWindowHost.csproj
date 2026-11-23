@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Test helper: opens windows of every awkward kind in a separate process, so SCP (which hides
+       its own process's windows) treats them like any other app. Not shipped. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

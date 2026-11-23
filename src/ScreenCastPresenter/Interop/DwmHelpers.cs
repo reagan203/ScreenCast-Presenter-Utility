@@ -1,3 +1,4 @@
+using System.Drawing;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Dwm;
@@ -31,11 +32,11 @@ internal static class DwmHelpers
         return hr.Succeeded && value != 0;
     }
 
-    /// <summary>Dark title bar (NFR-11) and corner style. Failures are ignored: older builds lack some attributes.</summary>
-    public static unsafe void ApplyDarkFrame(HWND hwnd, bool roundCorners)
+    /// <summary>Title bar colour (NFR-11) and corner style. Failures are ignored: older builds lack some attributes.</summary>
+    public static unsafe void ApplyFrame(HWND hwnd, bool dark, bool roundCorners)
     {
-        BOOL dark = true;
-        _ = PInvoke.DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, (uint)sizeof(BOOL));
+        BOOL darkValue = dark;
+        _ = PInvoke.DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_USE_IMMERSIVE_DARK_MODE, &darkValue, (uint)sizeof(BOOL));
 
         // Windows 11 only; on Windows 10 this call fails harmlessly.
         DWM_WINDOW_CORNER_PREFERENCE corner = roundCorners
@@ -44,7 +45,14 @@ internal static class DwmHelpers
         _ = PInvoke.DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_WINDOW_CORNER_PREFERENCE, &corner, (uint)sizeof(DWM_WINDOW_CORNER_PREFERENCE));
     }
 
-    /// <summary>For the output window: no border, no open/close animation (NFR-14).</summary>
+    /// <summary>Small rounded corners for popup menus (Windows 11).</summary>
+    public static unsafe void RoundSmall(HWND hwnd)
+    {
+        DWM_WINDOW_CORNER_PREFERENCE corner = DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUNDSMALL;
+        _ = PInvoke.DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_WINDOW_CORNER_PREFERENCE, &corner, (uint)sizeof(DWM_WINDOW_CORNER_PREFERENCE));
+    }
+
+    /// <summary>For the output window and overlays: no border, no open/close animation (NFR-14).</summary>
     public static unsafe void MakeBareSurface(HWND hwnd)
     {
         uint border = ColorNone;
@@ -55,11 +63,32 @@ internal static class DwmHelpers
     }
 
     /// <summary>
-    /// Keeps SCP's own UI out of every screen capture, Zoom included (FR-14, SRS 6.2).
+    /// The window's visible bounds in physical pixels. Unlike GetWindowRect this excludes the
+    /// invisible resize borders Windows 10/11 add around windows, so the outline hugs the window.
+    /// </summary>
+    public static unsafe Rectangle GetVisibleBounds(HWND hwnd)
+    {
+        RECT r;
+        if (PInvoke.DwmGetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE.DWMWA_EXTENDED_FRAME_BOUNDS, &r, (uint)sizeof(RECT)).Succeeded)
+            return Rectangle.FromLTRB(r.left, r.top, r.right, r.bottom);
+        return PInvoke.GetWindowRect(hwnd, out r) ? Rectangle.FromLTRB(r.left, r.top, r.right, r.bottom) : Rectangle.Empty;
+    }
+
+    /// <summary>
+    /// Keeps SCP's own UI out of every screen capture, Zoom and recordings included (FR-14, FR-56).
     /// Never call this on the output window, or Zoom would see black.
     /// </summary>
-    public static void ExcludeFromCapture(HWND hwnd) =>
-        PInvoke.SetWindowDisplayAffinity(hwnd, WINDOW_DISPLAY_AFFINITY.WDA_EXCLUDEFROMCAPTURE);
+    public static bool ExcludeFromCapture(HWND hwnd)
+    {
+#if DEBUG
+        // Development only, never compiled into Release builds: lets the UI be screenshotted for review.
+        if (Environment.GetEnvironmentVariable("SCP_DEV_ALLOW_CAPTURE") == "1") return true;
+#endif
+        return PInvoke.SetWindowDisplayAffinity(hwnd, WINDOW_DISPLAY_AFFINITY.WDA_EXCLUDEFROMCAPTURE);
+    }
+
+    public static bool IsExcludedFromCapture(HWND hwnd) =>
+        PInvoke.GetWindowDisplayAffinity(hwnd, out uint affinity) && affinity == (uint)WINDOW_DISPLAY_AFFINITY.WDA_EXCLUDEFROMCAPTURE;
 
     /// <summary>Paints the window and all its children synchronously, right now.</summary>
     public static unsafe void PaintNow(HWND hwnd) =>

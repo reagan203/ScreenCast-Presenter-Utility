@@ -30,6 +30,7 @@ DwmGetWindowAttribute
 DwmSetWindowAttribute
 DWM_THUMBNAIL_PROPERTIES
 DWM_TNP_RECTDESTINATION
+DWM_TNP_RECTSOURCE
 DWM_TNP_OPACITY
 DWM_TNP_VISIBLE
 DWM_TNP_SOURCECLIENTAREAONLY
@@ -51,3 +52,44 @@ WINEVENT_OUTOFCONTEXT
 WINEVENT_SKIPOWNPROCESS
 OBJECT_IDENTIFIER
 CHILDID_SELF
+
+// M2: hotkeys and keyboard layouts
+RegisterHotKey
+UnregisterHotKey
+HOT_KEY_MODIFIERS
+ToUnicodeEx
+GetKeyboardLayoutList
+MapVirtualKeyEx
+WM_HOTKEY
+
+// M2: active window, cursor, DPI
+GetForegroundWindow
+GetAncestor
+GetClassName
+EnumChildWindows
+InternalGetWindowText
+GetDpiForMonitor
+MonitorFromPoint
+
+// M2: layered windows (badge, outline)
+UpdateLayeredWindow
+SetLayeredWindowAttributes
+GetDC
+ReleaseDC
+CreateCompatibleDC
+SelectObject
+DeleteObject
+DeleteDC
+BLENDFUNCTION
+AC_SRC_OVER
+AC_SRC_ALPHA
+
+// M2: privacy guard and display topology
+GetWindowDisplayAffinity
+EVENT_OBJECT_CREATE
+EVENT_OBJECT_SHOW
+QueryDisplayConfig
+GetDisplayConfigBufferSizes
+DisplayConfigGetDeviceInfo
+DISPLAYCONFIG_TARGET_DEVICE_NAME
+DISPLAYCONFIG_SOURCE_DEVICE_NAME

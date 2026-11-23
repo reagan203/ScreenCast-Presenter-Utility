@@ -5,4 +5,8 @@
   <Folder Name="/tests/">
     <Project Path="tests/ScreenCastPresenter.Tests/ScreenCastPresenter.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/StressHarness/StressHarness.csproj" />
+    <Project Path="tools/TestWindowHost/TestWindowHost.csproj" />
+  </Folder>
 </Solution>

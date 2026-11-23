@@ -19,7 +19,7 @@ Measured on the development laptop (x64 single-file build): idle at 15.3 MB priv
 
 ## Icon
 
-`tools\make-icon.ps1` draws the icon (a blue tile with a white screen and SCP's yellow outline around a window) at every Windows size into `src\ScreenCastPresenter\Assetspp.ico`. The 16, 20 and 24 px sizes are laid out on whole pixels so the tray and taskbar icons are sharp. The tray adds a green dot while presenting and a red one while recording.
+`tools\make-icon.ps1` draws the icon (a blue tile with a white screen and SCP's yellow outline around a window) at every Windows size into `src\ScreenCastPresenter\Assets\app.ico`. The 16, 20 and 24 px sizes are laid out on whole pixels so the tray and taskbar icons are sharp. The tray adds a green dot while presenting and a red one while recording.
 
 ## Install on this PC
 

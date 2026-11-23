@@ -104,7 +104,8 @@ internal sealed class SettingsForm : ThemedForm
         AddToggle("Keyboard shortcuts", "Ctrl+Alt shortcuts work from any app.", s.ShortcutsEnabled, on => _app.SetShortcutsEnabled(on),
             ("Edit shortcuts…", _app.OpenShortcuts));
         AddToggle("Yellow outline", "Shows on your screen what the audience sees. Never on the TV.", s.ShowOutline, on => _app.SetShowOutline(on));
-        AddToggle("Presenting badge", "The small status pill at the top of your screen.", s.ShowBadge, on => _app.SetShowBadge(on));
+        AddToggle("Now-showing bar", "A small bar on top of everything while you present or record, like Teams' sharing bar. Click it to go to what's shown.", s.ShowWidget, on => _app.SetShowWidget(on));
+        AddToggle("Presenting badge", "Status messages at the top of your screen.", s.ShowBadge, on => _app.SetShowBadge(on));
         AddToggle("Mouse pointer on the TV", "Show your pointer in what you present.", s.ShowCursor, on => _app.SetShowCursor(on));
     }
 

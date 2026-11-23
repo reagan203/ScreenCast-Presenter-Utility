@@ -67,11 +67,12 @@ internal static partial class Program
             case "soak": Soak(TimeSpan.FromMinutes(minutes)); break;
             case "record": Record(); break;
             case "window": FloatingWindow(); break;
+            case "widget": Widget(); break;
             case "quick":
-                Smoke(); Picker(20); Ui(10); Switches(200); Storm(2000); Flood(300); Hostile(50); Pressure(60); Flash(100); Record(); FloatingWindow();
+                Smoke(); Picker(20); Ui(10); Switches(200); Storm(2000); Flood(300); Hostile(50); Pressure(60); Flash(100); Record(); FloatingWindow(); Widget();
                 break;
             case "full":
-                Smoke(); Picker(50); Ui(30); Switches(1000); Storm(10000); Flood(300); Hostile(1000); Pressure(300); Flash(100); Record(); FloatingWindow();
+                Smoke(); Picker(50); Ui(30); Switches(1000); Storm(10000); Flood(300); Hostile(1000); Pressure(300); Flash(100); Record(); FloatingWindow(); Widget();
                 break;
             default:
                 Console.WriteLine("Unknown scenario.");
@@ -195,6 +196,39 @@ internal static partial class Program
 
         static bool IsFloating(nint hwnd) =>
             Native.GetWindowRect(hwnd, out Native.RECT r) && (r.Right - r.Left < _outputScreen.Width || r.Bottom - r.Top < _outputScreen.Height);
+    }
+
+    /// <summary>
+    /// The now-showing bar: appears while presenting, never on the TV, hidden from capture (the
+    /// probe's privacy audit), a click brings the presented window to the front, Ctrl+Alt+N hides it.
+    /// </summary>
+    private static void Widget()
+    {
+        Scenario("now-showing bar", (scp, host) =>
+        {
+            Native.CtrlAlt('1'); Wait(900);
+            nint bar = Bar(scp);
+            Check(bar != 0, "widget: no now-showing bar while presenting");
+            if (bar == 0) return;
+            Probe(scp, "bar shown");
+            Native.GetWindowRect(bar, out Native.RECT r);
+            var centre = new Point((r.Left + r.Right) / 2, (r.Top + r.Bottom) / 2);
+            Check(!_outputScreen.Contains(centre) || FlashMonitor.ListScreens().Count < 2, "widget: the bar is on the TV");
+
+            host.Send($"front {host["SCP test normal"]}"); Wait(400); // something else in front
+            Native.Click(r.Left + 120, centre.Y); Wait(600);          // click the title area
+            Check(Native.GetForegroundWindow() == host["SCP dark A"], "widget: clicking the bar didn't bring the presented window to the front");
+
+            Native.CtrlAlt('N'); Wait(500);
+            Check(Bar(scp) == 0, "widget: Ctrl+Alt+N didn't hide the bar");
+            Native.CtrlAlt('N'); Wait(500);
+            Check(Bar(scp) != 0, "widget: Ctrl+Alt+N didn't bring the bar back");
+            Native.CtrlAlt('S'); Wait(800);
+            Check(Bar(scp) == 0, "widget: the bar stayed after Stop");
+        });
+
+        static nint Bar(ScpProcess scp) =>
+            Native.TopLevelWindows(scp.Id, visibleOnly: true).FirstOrDefault(h => Native.Title(h) == "ScreenCast Presenter now showing");
     }
 
     private static bool WaitFor(Func<bool> condition, int timeoutMs)

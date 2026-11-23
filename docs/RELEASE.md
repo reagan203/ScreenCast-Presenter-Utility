@@ -23,7 +23,7 @@ Measured on the development laptop (x64 single-file build): idle at 15.3 MB priv
 
 ## Install on this PC
 
-Copy the exe to `%LOCALAPPDATA%\Programs\ScreenCast Presenter\` (no admin rights needed) and put a shortcut to it on the desktop. To update, quit SCP from the tray and copy the new exe over the old one; the shortcut, settings and start-with-Windows entry all stay.
+`.\tools\install.ps1` copies the exe to `%LOCALAPPDATA%\Programs\ScreenCast Presenter\` (no admin rights needed) and puts a "ScreenCast Presenter" shortcut on the desktop. Run it again to update: it waits until you quit SCP from the tray (it never closes it for you), and the shortcut, settings and start-with-Windows entry all stay. `-Start` starts it afterwards.
 
 ## Sign
 

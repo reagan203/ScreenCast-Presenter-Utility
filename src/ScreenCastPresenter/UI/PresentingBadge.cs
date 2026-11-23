@@ -38,6 +38,10 @@ internal sealed class PresentingBadge : LayeredWindow
     private bool _visible;
     private bool _mouseInside;
     private DisplayMonitor? _screen;
+
+    /// <summary>Pixels to stay below the top of the screen (the now-showing bar may sit there).</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public int TopClearance { get; set; }
     private int _fadeVersion;
 
     public PresentingBadge(Func<DisplayMonitor?> presenterScreen)
@@ -253,7 +257,7 @@ internal sealed class PresentingBadge : LayeredWindow
         }
 
         Rectangle area = _screen.WorkArea;
-        _location = new Point(area.Left + (area.Width - bitmapWidth) / 2, area.Top + (int)(8 * s - margin));
+        _location = new Point(area.Left + (area.Width - bitmapWidth) / 2, area.Top + TopClearance + (int)(8 * s - margin));
         SetSurface(surface); // one GDI bitmap per redraw; fades only change alpha
         if (_visible) Present(_location, 255);
     }

@@ -31,6 +31,7 @@ internal sealed class ScpApp : IDisposable
     private CommandPalette? _palette;
     private ShortcutsForm? _shortcutsForm;
     private SettingsForm? _settingsForm;
+    private NowShowingWidget? _widget;
     private FirstRunForm? _firstRun;
     private bool _shortcutsSuspended;
     private bool _duplicateWarned;
@@ -283,6 +284,7 @@ internal sealed class ScpApp : IDisposable
                 case "switch-output": await SwitchOutputAsync(); break;
                 case "toggle-outline": SetShowOutline(!Settings.ShowOutline); break;
                 case "toggle-badge": SetShowBadge(!Settings.ShowBadge); break;
+                case "toggle-widget": SetShowWidget(!Settings.ShowWidget); break;
                 case "cheat-sheet": OpenShortcuts(); break;
                 case ShortcutCatalog.PauseShortcutsId: TogglePauseShortcuts(); break;
                 case "toggle-theme": SetTheme(Theme.Opposite); break;
@@ -686,6 +688,7 @@ internal sealed class ScpApp : IDisposable
     private void OnRecordingChanged()
     {
         StopRecordingIfDue();
+        UpdateWidget();
         UpdateBadge(reveal: false);
         _tray.Refresh();
     }
@@ -735,6 +738,175 @@ internal sealed class ScpApp : IDisposable
         string number = hours % 1 == 0.5 ? $"{(int)hours}½" : ((int)Math.Round(hours)).ToString(System.Globalization.CultureInfo.InvariantCulture);
         return number == "1" ? "1 hour" : $"{number} hours";
     }
+
+    // ───────────────────────────── now-showing bar ─────────────────────────────
+
+    public void SetShowWidget(bool show)
+    {
+        Settings.ShowWidget = show;
+        Save();
+        UpdateWidget();
+        if (!show) Message($"Now-showing bar hidden. {ActiveShortcut("toggle-widget")?.ToString() ?? "Settings"} brings it back.");
+    }
+
+    /// <summary>
+    /// The small always-on-top bar (like Teams' sharing bar): visible while presenting or
+    /// recording, on the presenter's screen, never on the TV.
+    /// </summary>
+    private void UpdateWidget()
+    {
+        bool want = Settings.ShowWidget && (_session.State != SessionState.Off || _recording.IsActive) && !_quitting;
+        if (!want)
+        {
+            _widget?.Hide();
+            return;
+        }
+        if (_widget is not { IsDisposed: false })
+        {
+            _widget = new NowShowingWidget();
+            _widget.Clicked += (_, _) => Guard(GoToShown);
+            _widget.Moved += (_, at) => Guard(() => SettleWidget(at, save: true));
+        }
+        bool wasVisible = _widget.Visible;
+        _widget.SetState(WidgetContent());
+        if (!wasVisible)
+        {
+            PlaceWidget();
+            _widget.Show();
+        }
+        else if (_session.FullScreenOutput is { } tv && _monitors.Count > 1 && tv.Bounds.Contains(Centre(_widget.Bounds)))
+        {
+            PlaceWidget(); // the output moved onto the bar's screen: never cover the TV
+        }
+        UpdateBadgeClearance();
+    }
+
+    private WidgetState WidgetContent()
+    {
+        SessionController s = _session;
+        string? recording = RecordingBadgeText();
+        var menu = new List<(string, Action)>();
+        nint thumb = 0;
+        Rectangle? crop = null;
+        string title, detail;
+        BadgeDot dot;
+
+        if (s.State == SessionState.Presenting && s.Source is { } source)
+        {
+            title = source.IsScreen && source.Screen is { } screen ? $"Display {screen.Number} (whole screen)" : source.Title.Length > 0 ? source.Title : source.AppName;
+            if (!source.IsScreen)
+            {
+                thumb = source.Handle;
+                if (source.Crop is { } c) crop = c.ToPixels(WindowEnumerator.ClientSize(source.Handle));
+            }
+            (dot, detail) = s switch
+            {
+                { IsBlanked: true } => (BadgeDot.Hollow, $"{OutputNameCapitalised()} is blank · audience sees black"),
+                { IsFrozen: true } => (BadgeDot.Warning, ShowingText(frozen: true) + " · click to go to it"),
+                { IsSourceMinimized: true } => (BadgeDot.Warning, "Minimised · click to restore it"),
+                _ => (BadgeDot.Accent, ShowingText(frozen: false) + (source.Crop is null ? "" : " · part of it")),
+            };
+            if (!source.IsScreen) menu.Add(("Go to this window", GoToShown));
+            menu.Add((s.IsBlanked ? "Show again" : "Blank the TV", () => _ = RunAsync("blank")));
+            menu.Add((s.IsFrozen ? "Go live" : "Freeze the TV", () => _ = RunAsync("freeze")));
+            menu.Add(("Show something else…", OpenPicker));
+            menu.Add(("Stop showing", () => _ = RunAsync("stop")));
+        }
+        else if (s.State == SessionState.IdleScreen)
+        {
+            (dot, title, detail) = (BadgeDot.Hollow, "Nothing chosen", $"{OutputNameCapitalised()} shows a blank screen · click to pick");
+            menu.Add(("Pick what to show…", OpenPicker));
+            menu.Add(("Stop showing", () => _ = RunAsync("stop")));
+        }
+        else
+        {
+            // Only recording (e.g. a webinar in the background).
+            dot = BadgeDot.Recording;
+            title = _recording.Description.Length > 0 ? _recording.Description : "Recording";
+            detail = "Recording · click to go to it";
+            if (_recording.SourceHandle != 0) thumb = _recording.SourceHandle;
+        }
+
+        if (_recording.IsActive)
+        {
+            if (menu.Count > 0) menu.Add(("-", () => { }));
+            if (_recording.Status is RecordingStatus.Recording or RecordingStatus.Paused)
+                menu.Add((_recording.Status == RecordingStatus.Paused ? "Resume recording" : "Pause recording", _recording.TogglePause));
+            menu.Add(("Stop recording", _recording.Stop));
+        }
+        menu.Add(("-", () => { }));
+        menu.Add(("Hide this bar", () => SetShowWidget(false)));
+        return new WidgetState(dot, title, detail, recording, thumb, crop, menu);
+    }
+
+    /// <summary>Clicking the bar: bring the presented (or recorded) window to the front.</summary>
+    private void GoToShown()
+    {
+        nint target = _session.State == SessionState.Presenting && _session.Source is { IsScreen: false } source ? source.Handle
+            : _session.State == SessionState.Off && _recording.SourceHandle != 0 ? _recording.SourceHandle : 0;
+        if (target != 0)
+        {
+            if (!WindowEnumerator.BringToFront(target)) Message("That window couldn't be brought to the front.");
+            return;
+        }
+        if (_session.State == SessionState.IdleScreen) OpenPicker();
+        else if (_session.Source?.Screen is { } screen) Message($"The whole of Display {screen.Number} is being shown.");
+    }
+
+    /// <summary>The saved spot if it's still on a connected screen other than the TV, else top centre of the presenter's screen.</summary>
+    private void PlaceWidget()
+    {
+        if (_widget is null) return;
+        Point at = Settings.WidgetPosition is { } saved ? new Point(saved.X, saved.Y) : DefaultWidgetSpot();
+        SettleWidget(at, save: false);
+    }
+
+    private Point DefaultWidgetSpot()
+    {
+        Rectangle area = PresenterScreen()?.WorkArea ?? Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
+        return new Point(area.Left + (area.Width - _widget!.Width) / 2, area.Top + _widget.LogicalToDeviceUnits(6));
+    }
+
+    /// <summary>Keeps the bar fully on one screen's work area and off the full-screen output.</summary>
+    private void SettleWidget(Point at, bool save)
+    {
+        if (_widget is null) return;
+        var bounds = new Rectangle(at, _widget.Size);
+        DisplayMonitor? host = _monitors.FirstOrDefault(m => m.Bounds.Contains(Centre(bounds)));
+        bool onTv = host is not null && _monitors.Count > 1 && _session.FullScreenOutput is { } tv && host.IsSameScreen(tv);
+        if (host is null || onTv)
+        {
+            if (onTv && save) Message("The bar stays on your screen, so the audience never sees it.");
+            bounds.Location = DefaultWidgetSpot();
+            host = PresenterScreen();
+            save = save && !onTv;
+        }
+        if (host is not null)
+        {
+            Rectangle area = host.WorkArea;
+            bounds.X = Math.Clamp(bounds.X, area.Left, Math.Max(area.Left, area.Right - bounds.Width));
+            bounds.Y = Math.Clamp(bounds.Y, area.Top, Math.Max(area.Top, area.Bottom - bounds.Height));
+        }
+        _widget.Location = bounds.Location;
+        if (save)
+        {
+            Settings.WidgetPosition = WindowBounds.From(bounds);
+            Save();
+        }
+        UpdateBadgeClearance();
+    }
+
+    /// <summary>The badge drops below the bar when the bar sits at the top of the same screen.</summary>
+    private void UpdateBadgeClearance()
+    {
+        int clearance = 0;
+        if (_widget is { Visible: true } w && PresenterScreen() is { } screen && screen.Bounds.Contains(Centre(w.Bounds))
+            && w.Top - screen.WorkArea.Top < w.Height * 2)
+            clearance = w.Bottom - screen.WorkArea.Top + w.LogicalToDeviceUnits(4);
+        _badge.TopClearance = clearance;
+    }
+
+    private static Point Centre(Rectangle r) => new(r.Left + r.Width / 2, r.Top + r.Height / 2);
 
     /// <summary>"4:05" or "1:02:03".</summary>
     public static string RecordingClockText(TimeSpan t) =>
@@ -1328,6 +1500,7 @@ internal sealed class ScpApp : IDisposable
     {
         StopOutputRecordingIfOrphaned();
         RememberLastSource();
+        UpdateWidget();
         if (_session.FloatingBounds is { } floating && Settings.FloatingWindow?.ToRectangle() != floating)
         {
             Settings.FloatingWindow = WindowBounds.From(floating); // reopen it where the user left it
@@ -1420,6 +1593,7 @@ internal sealed class ScpApp : IDisposable
 
     private void OnThemeChanged(object? sender, EventArgs e)
     {
+        _widget?.Invalidate();
         UpdateOutline();
         UpdateBadge(reveal: false);
     }
@@ -1517,6 +1691,7 @@ internal sealed class ScpApp : IDisposable
         _session.Dispose();
         _recording.Dispose();
         _outline.Dispose();
+        _widget?.Dispose();
         _badge.Dispose();
         _tray.Dispose();
         _guard.Dispose();

@@ -19,6 +19,25 @@ internal static partial class Native
     public delegate bool EnumWindowsProc(nint hwnd, nint lParam);
 
     [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetCursorPos(int x, int y);
+
+    [LibraryImport("user32.dll")]
+    public static partial void mouse_event(uint flags, int dx, int dy, uint data, nuint extraInfo);
+
+    [LibraryImport("user32.dll")]
+    public static partial nint GetForegroundWindow();
+
+    /// <summary>A real left click at a screen point (moves the pointer there).</summary>
+    public static void Click(int x, int y)
+    {
+        SetCursorPos(x, y);
+        Thread.Sleep(50);
+        mouse_event(0x0002, 0, 0, 0, 0); // left down
+        mouse_event(0x0004, 0, 0, 0, 0); // left up
+    }
+
+    [LibraryImport("user32.dll")]
     public static partial void keybd_event(byte vk, byte scan, uint flags, nuint extraInfo);
 
     [LibraryImport("user32.dll")]

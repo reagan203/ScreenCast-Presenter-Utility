@@ -69,6 +69,7 @@ The harness opens windows, presses keys and covers the screen. **Run it when you
 | `flash` | Records the output screen at display rate during 100 switches between two dark windows | Zero frames with more than 10% of pixels brighter than #303030 (NFR-16) |
 | `record` | Records what the TV shows through a switch, blank and pause; stops presenting during a second TV recording; records a window in the background and closes it | Three playable files; the TV recording ends with the presentation; the window recording stops by itself; no recorder left running |
 | `window` | Ctrl+Alt+O until the output is a floating window, a source switch, then the window's ✕ | The window is reused across switches; closing it stops showing; back to fullscreen afterwards |
+| `widget` | Presents a window, clicks the now-showing bar with another window in front, toggles it with Ctrl+Alt+N, stops | The bar is off the TV and hidden from capture; the click brings the presented window to the front; it hides, returns, and goes away on Stop |
 | `soak --minutes N` | A switch every 2 s and a blank every 20 s, sampled every 10 s | Memory drift < 5 MB (NFR-09) |
 | `quick` / `full` | Every scenario above, at small or large counts | All pass |
 

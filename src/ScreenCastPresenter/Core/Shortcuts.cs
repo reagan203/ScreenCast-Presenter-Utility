@@ -64,6 +64,7 @@ internal static class ShortcutCatalog
 
             new("toggle-outline", "Yellow outline on / off", ShortcutGroup.OnMyScreen, C(Keys.Y), Keywords: "border frame"),
             new("toggle-badge", "Presenting badge on / off", ShortcutGroup.OnMyScreen, C(Keys.I), Keywords: "pill status"),
+            new("toggle-widget", "Now-showing bar on / off", ShortcutGroup.OnMyScreen, C(Keys.N), Keywords: "widget bar teams sharing toolbar go to"),
             new("cheat-sheet", "Show all shortcuts", ShortcutGroup.OnMyScreen, C(Keys.K), Keywords: "help keys list"),
             new(PauseShortcutsId, "Pause all shortcuts", ShortcutGroup.OnMyScreen, CS(Keys.P), Keywords: "disable game"),
             new("toggle-theme", "Switch light / dark", ShortcutGroup.OnMyScreen, null, Keywords: "appearance theme mode"),

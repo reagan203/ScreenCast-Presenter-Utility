@@ -103,6 +103,7 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | FR-16 | Idle screen when nothing is presented: solid #0B0B0C, optional logo or text, never white | Must |
 | FR-17 | While presenting, draw a yellow outline on the presenter's screen around the presented window or screen, with a small "Showing on TV" tab. It is click-through, excluded from capture, follows the source when it moves or resizes, hides while the source is minimised, is never drawn on the output monitor, and can be turned off **(rev 2)** | Must |
 | FR-18 | "Identify screens": show each monitor's number large on that monitor for about one second (first run and output selection) **(rev 2)** | Should |
+| FR-19a | Now-showing bar **(rev 2, user request)**: a small always-on-top bar on the presenter's screen while presenting or recording, like Teams' sharing bar: a live mini preview, what is shown and where, recording time. Click it to bring the presented window to the front; ⋯ / right-click for Blank, Freeze, Stop, recording controls and Hide; drag to move (remembered). Never on the TV, excluded from capture, never takes focus. Ctrl+Alt+N shows/hides it | Must |
 
 ### 3.3 Presentation control
 

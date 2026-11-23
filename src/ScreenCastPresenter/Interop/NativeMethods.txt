@@ -199,3 +199,5 @@ IMFAttributes
 MF_SOURCE_READER_FLAG
 MFTranscodeContainerType_MPEG4
 SetWindowTheme
+SetForegroundWindow
+ShowWindow

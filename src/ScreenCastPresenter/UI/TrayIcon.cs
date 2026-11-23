@@ -105,6 +105,7 @@ internal sealed class TrayIcon : IDisposable
         _menu.Items.Add(Item("Keyboard shortcuts…", "cheat-sheet", _app.OpenShortcuts));
         _menu.Items.Add(Check("Pause all shortcuts", _app.ShortcutsPaused, "pause-shortcuts", _app.TogglePauseShortcuts));
         _menu.Items.Add(Check("Show yellow outline", _app.Settings.ShowOutline, "toggle-outline", () => _app.SetShowOutline(!_app.Settings.ShowOutline)));
+        _menu.Items.Add(Check("Show now-showing bar", _app.Settings.ShowWidget, "toggle-widget", () => _app.SetShowWidget(!_app.Settings.ShowWidget)));
         _menu.Items.Add(Check("Show presenting badge", _app.Settings.ShowBadge, "toggle-badge", () => _app.SetShowBadge(!_app.Settings.ShowBadge)));
         _menu.Items.Add(Check("Show mouse pointer on the TV", _app.Settings.ShowCursor, "", () => _app.SetShowCursor(!_app.Settings.ShowCursor)));
         ToolStripMenuItem engine = Submenu("Capture engine");

@@ -123,6 +123,18 @@ internal static class WindowEnumerator
 
     public static bool IsMinimized(nint hwnd) => PInvoke.IsIconic((HWND)hwnd);
 
+    /// <summary>
+    /// Brings a window to the front, restoring it if minimised. Works because it runs in response
+    /// to the user clicking SCP (Windows only lets the app that got the last input do this).
+    /// </summary>
+    public static bool BringToFront(nint hwnd)
+    {
+        var h = (HWND)hwnd;
+        if (!PInvoke.IsWindow(h)) return false;
+        if (PInvoke.IsIconic(h)) PInvoke.ShowWindow(h, SHOW_WINDOW_CMD.SW_RESTORE);
+        return PInvoke.SetForegroundWindow(h);
+    }
+
     /// <summary>The process behind a window, looking through the UWP frame host to the real app; 0 if gone.</summary>
     public static uint ProcessOf(nint hwnd)
     {

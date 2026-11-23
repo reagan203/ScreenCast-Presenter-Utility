@@ -64,6 +64,12 @@ internal sealed class AppSettings
     /// <summary>Where recordings go; null = Videos\Screen Recordings, like the Snipping Tool (FR-52).</summary>
     public string? RecordingFolder { get; set; }
 
+    /// <summary>The small "now showing" bar (like Teams' sharing bar) while presenting or recording.</summary>
+    public bool ShowWidget { get; set; } = true;
+
+    /// <summary>Where the bar was dragged to (physical pixels); null = top centre of the presenter's screen.</summary>
+    public WindowBounds? WidgetPosition { get; set; }
+
     /// <summary>The last thing shown (FR-41), so "previous source" works after a restart.</summary>
     public Favourite? LastSource { get; set; }
 

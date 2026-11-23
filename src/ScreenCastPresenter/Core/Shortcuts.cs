@@ -42,7 +42,7 @@ internal static class ShortcutCatalog
 
             new("blank", "Blank the TV / show again", ShortcutGroup.OnTheTv, C(Keys.B), Keywords: "black hide"),
             new("blank-message", "Blank with a message", ShortcutGroup.OnTheTv, CS(Keys.B), Keywords: "right back break"),
-            new("freeze", "Freeze the TV / go live", ShortcutGroup.OnTheTv, C(Keys.F), Available: false, Keywords: "pause still"),
+            new("freeze", "Freeze the TV / go live", ShortcutGroup.OnTheTv, C(Keys.F), Keywords: "pause still"),
             new("dim", "Dim the TV (0–40%)", ShortcutGroup.OnTheTv, C(Keys.D), Keywords: "night darker brightness"),
             new("move-output", "Move output to the next screen", ShortcutGroup.OnTheTv, C(Keys.M), Keywords: "monitor display"),
             new("switch-output", "Switch output: TV, Zoom screen, window", ShortcutGroup.OnTheTv, C(Keys.O), Available: false),
@@ -55,12 +55,12 @@ internal static class ShortcutCatalog
 
         list.AddRange(
         [
-            new("crop", "Crop the current source", ShortcutGroup.Crop, C(Keys.C), Available: false),
-            new("remove-crop", "Remove the crop", ShortcutGroup.Crop, CS(Keys.C), Available: false),
+            new("crop", "Crop the current source", ShortcutGroup.Crop, C(Keys.C), Keywords: "part area region zoom"),
+            new("remove-crop", "Remove the crop", ShortcutGroup.Crop, CS(Keys.C), Keywords: "uncrop whole all"),
 
             new("record", "Start / stop recording", ShortcutGroup.Recording, C(Keys.R), Available: false, Keywords: "video capture"),
             new("pause-recording", "Pause / resume recording", ShortcutGroup.Recording, CS(Keys.R), Available: false),
-            new("screenshot", "Take a screenshot", ShortcutGroup.Recording, CS(Keys.S), Available: false, Keywords: "snip capture image"),
+            new("screenshot", "Take a screenshot", ShortcutGroup.Recording, CS(Keys.S), Keywords: "snip capture image"),
 
             new("toggle-outline", "Yellow outline on / off", ShortcutGroup.OnMyScreen, C(Keys.Y), Keywords: "border frame"),
             new("toggle-badge", "Presenting badge on / off", ShortcutGroup.OnMyScreen, C(Keys.I), Keywords: "pill status"),

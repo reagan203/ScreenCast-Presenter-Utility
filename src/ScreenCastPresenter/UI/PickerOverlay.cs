@@ -20,6 +20,8 @@ internal sealed class PickerOverlay : ThemedForm
     private readonly CardGrid _grid = new();
     private readonly FlowLayoutPanel _outputs = new() { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
     private readonly PillButton _show = new("Show", PillKind.Primary);
+    private readonly PillButton _crop = new("Crop…") { AccessibleName = "Crop the selected window, then show it" };
+    private readonly FlowLayoutPanel _screens = new();
     private readonly PillButton _theme = new("Light mode", PillKind.Secondary);
     private readonly PillButton _close = new("✕", PillKind.Ghost) { AccessibleName = "Close" };
     private readonly Label _title = new() { Text = "Choose what to show", AutoSize = true };
@@ -61,6 +63,12 @@ internal sealed class PickerOverlay : ThemedForm
             if (_grid.Selected is { } w) await PresentAsync(w);
         };
         _theme.Click += (_, _) => _app.SetTheme(Theme.Opposite);
+        _crop.Click += async (_, _) =>
+        {
+            if (_grid.Selected is not { } w || !Visible || _dismissing) return;
+            Dismiss();
+            await _app.CropAsync(w, present: true); // UC-04
+        };
         _close.Click += (_, _) => Dismiss();
         _refresh.Tick += (_, _) => RefreshWindows();
         ApplyPalette(Theme.Current);
@@ -81,12 +89,14 @@ internal sealed class PickerOverlay : ThemedForm
     {
         int Px(int logical) => (int)(logical * _screen.Scale);
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(Px(24), Px(18), Px(24), Px(12)) };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 8, Padding = new Padding(Px(24), Px(18), Px(24), Px(12)) };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // header
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, Px(48))); // search
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // banner
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // "Windows" + count
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // grid
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // "Whole screens"
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // screen buttons
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // footer
 
         var header = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 4, Margin = new Padding(0, 0, 0, Px(14)) };
@@ -120,28 +130,70 @@ internal sealed class PickerOverlay : ThemedForm
         _grid.Dock = DockStyle.Fill;
         _grid.Margin = new Padding(0);
 
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 4, Margin = new Padding(0, Px(14), 0, 0) };
+        var screensLabel = new Label { Text = "WHOLE SCREENS", AutoSize = true, Font = _sectionFont, Tag = "dim", Margin = new Padding(0, Px(14), 0, Px(8)) };
+        _screens.AutoSize = true;
+        _screens.WrapContents = true;
+        _screens.Dock = DockStyle.Fill;
+        _screens.Margin = new Padding(0);
+
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 5, Margin = new Padding(0, Px(14), 0, 0) };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         var showOn = new Label { Text = "Show on", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, Px(10), 0), Tag = "dim" };
         _show.Anchor = AnchorStyles.Right;
+        _crop.Anchor = AnchorStyles.Right;
+        _crop.Radius = 10;
+        _crop.Margin = new Padding(0, 0, Px(10), 0);
+        _crop.Size = _crop.Measure();
         _hints.Tag = "faint";
         _hints.Margin = new Padding(0, Px(10), 0, 0);
         footer.Controls.Add(showOn, 0, 0);
         footer.Controls.Add(_outputs, 1, 0);
-        footer.Controls.Add(_show, 3, 0);
+        footer.Controls.Add(_crop, 3, 0);
+        footer.Controls.Add(_show, 4, 0);
         footer.Controls.Add(_hints, 0, 1);
-        footer.SetColumnSpan(_hints, 4);
+        footer.SetColumnSpan(_hints, 5);
 
         root.Controls.Add(header, 0, 0);
         root.Controls.Add(_search, 0, 1);
         root.Controls.Add(_banner, 0, 2);
         root.Controls.Add(sectionRow, 0, 3);
         root.Controls.Add(_grid, 0, 4);
-        root.Controls.Add(footer, 0, 5);
+        root.Controls.Add(screensLabel, 0, 5);
+        root.Controls.Add(_screens, 0, 6);
+        root.Controls.Add(footer, 0, 7);
         Controls.Add(root);
+    }
+
+    /// <summary>FR-02: whole screens as sources. The screen holding the output can't show itself (FR-14).</summary>
+    private void BuildScreens()
+    {
+        foreach (Control old in _screens.Controls.Cast<Control>().ToList()) old.Dispose(); // Clear() alone would leak their handles
+        DisplayMonitor? output = _app.Session.OutputMonitor ?? _app.ChosenOutput;
+        foreach (DisplayMonitor m in _app.Monitors)
+        {
+            DisplayMonitor monitor = m;
+            bool isOutput = output is not null && m.IsSameScreen(output);
+            var pill = new PillButton($"Display {m.Number}", PillKind.Secondary)
+            {
+                Detail = isOutput ? "  · your output is here" : $"  · {m.ShortName} · {m.Bounds.Width} × {m.Bounds.Height}",
+                Enabled = !isOutput,
+                Radius = 10,
+                AccessibleName = isOutput ? $"Display {m.Number}: your output is on it, so it can't be shown" : $"Show the whole of {m.Label}",
+                Margin = new Padding(0, 0, LogicalToDeviceUnits(8), 0),
+            };
+            pill.Size = pill.Measure();
+            pill.Click += async (_, _) =>
+            {
+                if (!Visible || _dismissing) return;
+                Dismiss();
+                await _app.PresentAsync(SourceWindow.ForScreen(monitor));
+            };
+            _screens.Controls.Add(pill);
+        }
     }
 
     protected override void ApplyPalette(Palette palette)
@@ -192,6 +244,7 @@ internal sealed class PickerOverlay : ThemedForm
         RefreshWindows();
         ScpApp.Diag($"picker: enumerated {_all.Count} windows in {clock.ElapsedMilliseconds} ms");
         BuildOutputs();
+        BuildScreens();
         UpdateShowButton();
         UpdateHints();
         _banner.Text = "⚠  Your TV is copying this screen, so the audience sees everything. Press Win+P and choose Extend.";
@@ -368,6 +421,7 @@ internal sealed class PickerOverlay : ThemedForm
             : _app.Monitors.Count < 2 ? "Show on this screen" : $"Show on Display {output.Number}";
         _show.Text = target;
         _show.Enabled = _grid.Selected is not null;
+        _crop.Enabled = _grid.Selected is { IsMinimized: false };
         _show.Size = _show.Measure();
     }
 

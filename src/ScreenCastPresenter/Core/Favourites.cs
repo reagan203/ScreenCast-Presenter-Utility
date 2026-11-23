@@ -7,7 +7,8 @@ internal static class FavouriteMatcher
 {
     private static readonly string[] TitleSeparators = [" - ", " — ", " – ", " | "];
 
-    public static Favourite FromSource(SourceWindow source) => new() { AppName = source.AppName, Title = source.Title };
+    public static Favourite FromSource(SourceWindow source) =>
+        new() { AppName = source.AppName, Title = source.Title, ScreenDevice = source.Screen?.DeviceName };
 
     /// <summary>
     /// Best match among <paramref name="windows"/> (z-order, most recent first):

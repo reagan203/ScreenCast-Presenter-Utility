@@ -39,6 +39,11 @@ internal static partial class Program
         int count = IntArg(args, "--count", 0);
         double minutes = IntArg(args, "--minutes", 10);
 
+        if (Process.GetProcessesByName("LogonUI").Length > 0)
+        {
+            Console.WriteLine("The PC is locked. Windows blocks simulated key presses on a locked desktop, so the results would be meaningless. Unlock it and run again.");
+            return 3;
+        }
         (_scpExe, _hostExe) = FindExecutables();
         var screens = FlashMonitor.ListScreens();
         var output = screens.FirstOrDefault(s => !s.Primary);
@@ -99,6 +104,13 @@ internal static partial class Program
             for (int i = 0; i < 5; i++) { Native.CtrlAlt('D'); Wait(150); }
             Native.CtrlAlt('2'); Wait(500);
             Native.CtrlAlt((char)0x08); Wait(500); // back to previous source
+            Native.CtrlAlt('F'); Wait(1800);           // freeze: hands DWM over to the WGC helper
+            Check(scp.OutputWindows().Count == 1, "smoke: output gone after freeze");
+            Console.WriteLine($"    frozen: helper running = {scp.HelperCount}, helper memory {scp.HelperMb:F1} MB");
+            Native.CtrlAlt('F'); Wait(500);            // go live
+            Native.CtrlAltShift('S'); Wait(3000);      // screenshot of what is shown
+            int shots = Directory.Exists(scp.ScreenshotDir) ? Directory.GetFiles(scp.ScreenshotDir, "*.png").Length : 0;
+            Check(shots == 1, $"smoke: expected 1 screenshot, found {shots}");
             Native.CtrlAlt('S'); Wait(500);
             Check(scp.OutputWindows().Count == 0, "smoke: output still visible after stop");
         });
@@ -377,6 +389,7 @@ internal static partial class Program
         Check(end.Gdi <= baseline.Gdi * 1.02 + 10, $"{name}: GDI objects grew {baseline.Gdi} → {end.Gdi}");
         Check(end.User <= baseline.User * 1.02 + 10, $"{name}: USER objects grew {baseline.User} → {end.User}");
         Check(scp.OutputWindows().Count == 0, $"{name}: output still showing after stop");
+        Check(scp.HelperCount == 0, $"{name}: {scp.HelperCount} capture helper(s) still running after stop");
         Probe(scp, "end");
         Console.WriteLine(Failures.Count == failuresBefore ? "    ok" : $"    {Failures.Count - failuresBefore} problem(s)");
     }

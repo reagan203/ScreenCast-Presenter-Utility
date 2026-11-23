@@ -186,6 +186,7 @@ public class SessionControllerTests
     [Fact]
     public async Task Engine_failure_leaves_a_black_idle_screen_not_a_crash()
     {
+        _platform.OfferFallback = false;
         _platform.FailNextEngine = true;
         await _session.PresentAsync(Notepad, TestData.Tv, true);
         Assert.Equal(SessionState.IdleScreen, _session.State);
@@ -284,6 +285,148 @@ public class SessionControllerTests
         Assert.False(_session.IsBlanked);
     }
 
+    // ───────────── M3: engines, freeze, crop ─────────────
+
+    [Fact]
+    public async Task Failing_engine_at_start_falls_back_to_the_other_engine()
+    {
+        _platform.FailNextEngine = true;
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        Assert.Equal(SessionState.Presenting, _session.State);
+        Assert.True(_platform.Engines[0].Disposed);
+        Assert.True(_platform.Engines[1].IsFallback);
+        Assert.Equal(1, _session.CurrentOpacity, 3);
+    }
+
+    [Fact]
+    public async Task Engine_failing_mid_session_falls_back_and_fades_back_in()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        _platform.Engines[0].RaiseFailed();
+        Assert.True(_platform.Engines[0].Disposed);
+        FakeEngine fallback = _platform.Engines[^1];
+        Assert.True(fallback.IsFallback);
+        Assert.False(fallback.Disposed);
+        Assert.Equal(1, _session.CurrentOpacity, 3);
+        Assert.Equal(SessionState.Presenting, _session.State);
+    }
+
+    [Fact]
+    public async Task Engine_failing_with_no_fallback_goes_idle()
+    {
+        _platform.OfferFallback = false;
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        _platform.Engines[0].RaiseFailed();
+        Assert.Equal(SessionState.IdleScreen, _session.State);
+        Assert.Contains(_messages, m => m.Contains("stopped working"));
+    }
+
+    [Fact]
+    public async Task Freeze_on_a_freezable_engine_toggles_without_a_new_engine()
+    {
+        _platform.EnginesSupportFreeze = true;
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        await _session.ToggleFreezeAsync();
+        Assert.True(_session.IsFrozen);
+        Assert.True(_platform.Engines[0].Frozen);
+        await _session.ToggleFreezeAsync();
+        Assert.False(_session.IsFrozen);
+        Assert.False(_platform.Engines[0].Frozen);
+        Assert.Single(_platform.Engines);
+    }
+
+    [Fact]
+    public async Task Freeze_on_dwm_hands_over_to_a_frozen_engine_at_the_same_brightness()
+    {
+        await _session.SetDimAsync(0.2);
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        await _session.ToggleFreezeAsync();
+
+        Assert.Equal(2, _platform.Engines.Count);
+        Assert.True(_platform.Engines[0].Disposed);       // the live DWM thumbnail is gone...
+        FakeEngine frozen = _platform.Engines[1];
+        Assert.True(frozen.StartFrozen);                  // ...the frozen copy was already underneath
+        Assert.Equal(0.8, frozen.Opacities[^1], 3);       // at the same brightness: no visible jump
+        Assert.True(_session.IsFrozen);
+    }
+
+    [Fact]
+    public async Task Freeze_with_nothing_showing_explains()
+    {
+        await _session.ToggleFreezeAsync();
+        Assert.Contains(_messages, m => m.Contains("Nothing is being shown"));
+    }
+
+    [Fact]
+    public async Task Switching_source_ends_freeze()
+    {
+        _platform.EnginesSupportFreeze = true;
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        await _session.ToggleFreezeAsync();
+        await _session.PresentAsync(Deck, TestData.Tv, true);
+        Assert.False(_session.IsFrozen);
+    }
+
+    [Fact]
+    public async Task Minimised_source_keeps_its_last_picture_on_a_freezable_engine()
+    {
+        _platform.EnginesSupportFreeze = true;
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        _platform.Watchers[0].Minimize();
+        Assert.Equal(1, _session.CurrentOpacity, 3);      // UC-06: not cut to black
+        Assert.Contains(_messages, m => m.Contains("last picture"));
+    }
+
+    [Fact]
+    public async Task Crop_change_fades_through_black_and_updates_the_source()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        var crop = new CropRegion(0.1, 0.1, 0.5, 0.5);
+        await _session.SetCropAsync(crop);
+        Assert.Equal(crop, _platform.Engines[0].Crop);
+        Assert.Equal(crop, _session.Source!.Crop);
+        Assert.Contains(0.0, _platform.Engines[0].Opacities.Skip(3)); // went through black
+        Assert.Equal(1, _session.CurrentOpacity, 3);
+    }
+
+    [Fact]
+    public async Task Presenting_the_same_window_with_a_crop_applies_the_crop_only()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        var crop = new CropRegion(0, 0, 0.5, 1);
+        await _session.PresentAsync(Notepad with { Crop = crop }, TestData.Tv, true);
+        Assert.Single(_platform.Engines);
+        Assert.Equal(crop, _platform.Engines[0].Crop);
+    }
+
+    [Fact]
+    public async Task Full_crop_is_the_same_as_no_crop()
+    {
+        await _session.PresentAsync(Notepad with { Crop = new CropRegion(0.2, 0.2, 0.5, 0.5) }, TestData.Tv, true);
+        await _session.SetCropAsync(CropRegion.Full);
+        Assert.Null(_session.Source!.Crop);
+    }
+
+    [Fact]
+    public async Task Blank_message_is_drawn_by_the_engine_too()
+    {
+        _platform.EnginesSupportFreeze = true; // WGC covers the window, so it must draw the message itself
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        await _session.ToggleBlankAsync(withMessage: true);
+        Assert.Equal(_session.BlankMessage, _platform.Engines[0].IdleMessage);
+        await _session.ToggleBlankAsync(withMessage: true);
+        Assert.Null(_platform.Engines[0].IdleMessage);
+    }
+
+    [Fact]
+    public async Task Screen_sources_can_be_presented()
+    {
+        await _session.PresentAsync(SourceWindow.ForScreen(TestData.Laptop), TestData.Tv, true);
+        Assert.Equal(SessionState.Presenting, _session.State);
+        Assert.True(_session.Source!.IsScreen);
+        Assert.True(_platform.Engines[0].SupportsFreeze);
+    }
+
     [Fact]
     public async Task Stop_when_nothing_is_showing_is_harmless()
     {
@@ -317,6 +460,12 @@ internal sealed class FakePlatform : ISessionPlatform
     public bool NextWatcherMinimized { get; set; }
     public bool HoldFades { get; set; }
 
+    /// <summary>Engines created for windows can freeze (like WGC) when true; otherwise they behave like DWM.</summary>
+    public bool EnginesSupportFreeze { get; set; }
+
+    /// <summary>Whether a fallback engine is offered when one fails.</summary>
+    public bool OfferFallback { get; set; } = true;
+
     public IOutputSurface CreateOutput(DisplayMonitor monitor, bool topMost)
     {
         var output = new FakeOutput(monitor);
@@ -324,15 +473,23 @@ internal sealed class FakePlatform : ISessionPlatform
         return output;
     }
 
-    public ICaptureEngine CreateEngine(SourceWindow source)
+    public ICaptureEngine CreateEngine(SourceWindow source, bool startFrozen = false)
     {
-        var engine = new FakeEngine(FailNextEngine);
+        var engine = new FakeEngine(FailNextEngine, supportsFreeze: EnginesSupportFreeze || startFrozen || source.IsScreen) { StartFrozen = startFrozen };
         FailNextEngine = false;
         Engines.Add(engine);
         return engine;
     }
 
-    public ISourceWatcher Watch(nint hwnd)
+    public ICaptureEngine? CreateFallbackEngine(SourceWindow source, ICaptureEngine failed)
+    {
+        if (!OfferFallback) return null;
+        var engine = new FakeEngine(false, supportsFreeze: !((FakeEngine)failed).SupportsFreeze) { IsFallback = true };
+        Engines.Add(engine);
+        return engine;
+    }
+
+    public ISourceWatcher Watch(SourceWindow source)
     {
         if (FailNextWatcher)
         {
@@ -395,17 +552,26 @@ internal sealed class FakeOutput(DisplayMonitor monitor) : IOutputSurface
     public void Dispose() => Disposed = true;
 }
 
-internal sealed class FakeEngine(bool fail) : ICaptureEngine
+internal sealed class FakeEngine(bool fail, bool supportsFreeze) : ICaptureEngine
 {
     public List<double> Opacities { get; } = [];
     public bool Disposed { get; private set; }
     public nint Source { get; private set; }
-    public string Name => "Fake";
+    public CropRegion? Crop { get; private set; }
+    public bool Frozen { get; private set; }
+    public bool StartFrozen { get; init; }
+    public bool IsFallback { get; init; }
+    public string? IdleMessage { get; private set; }
+    public string Name => supportsFreeze ? "Fake WGC" : "Fake DWM";
+    public bool SupportsFreeze => supportsFreeze;
+    public event EventHandler<string>? Failed;
 
-    public Task StartAsync(nint source, nint output, Size outputClientSize)
+    public Task StartAsync(SourceWindow source, nint output, Size outputClientSize)
     {
-        Source = source;
-        if (fail) throw new InvalidOperationException("DWM refused the thumbnail.");
+        Source = source.Handle;
+        Crop = source.Crop;
+        Frozen = StartFrozen;
+        if (fail) throw new InvalidOperationException("Capture refused.");
         Opacities.Add(0);
         return Task.CompletedTask;
     }
@@ -413,6 +579,10 @@ internal sealed class FakeEngine(bool fail) : ICaptureEngine
     public void SetOpacity(double opacity) => Opacities.Add(opacity);
     public void OnSourceChanged() { }
     public void OnOutputResized(Size outputClientSize) { }
+    public void SetCrop(CropRegion? crop) => Crop = crop;
+    public void SetFrozen(bool frozen) => Frozen = supportsFreeze && frozen;
+    public void SetIdleMessage(string? message, double brightness) => IdleMessage = brightness > 0 ? message : null;
+    public void RaiseFailed() => Failed?.Invoke(this, "GPU reset");
     public void Dispose() => Disposed = true;
 }
 

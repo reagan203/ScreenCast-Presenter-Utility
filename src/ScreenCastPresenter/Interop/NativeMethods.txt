@@ -93,3 +93,30 @@ GetDisplayConfigBufferSizes
 DisplayConfigGetDeviceInfo
 DISPLAYCONFIG_TARGET_DEVICE_NAME
 DISPLAYCONFIG_SOURCE_DEVICE_NAME
+
+// M3: Windows.Graphics.Capture interop
+IGraphicsCaptureItemInterop
+IDirect3DDxgiInterfaceAccess
+CreateDirect3D11DeviceFromDXGIDevice
+ClientToScreen
+
+// M3: capture helper process (child window + message loop, no WinForms)
+RegisterClassEx
+CreateWindowEx
+DestroyWindow
+GetMessage
+TranslateMessage
+DispatchMessage
+DefWindowProc
+PostQuitMessage
+PostThreadMessage
+PostMessage
+GetCurrentThreadId
+CreateSolidBrush
+SetWindowPos
+GetModuleHandle
+WM_DESTROY
+WM_CLOSE
+WM_QUIT
+WM_APP
+SetProcessDpiAwarenessContext

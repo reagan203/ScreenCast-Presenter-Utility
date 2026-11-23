@@ -79,6 +79,16 @@ internal sealed class TrayIcon : IDisposable
         var stop = Item("Stop showing", "stop", () => _ = _app.RunAsync("stop"));
         stop.Enabled = s.State != SessionState.Off;
         _menu.Items.Add(stop);
+        bool presenting = s.State == SessionState.Presenting;
+        var freeze = Item(s.IsFrozen ? "Go live" : "Freeze the TV", "freeze", () => _ = _app.RunAsync("freeze"));
+        freeze.Enabled = presenting;
+        _menu.Items.Add(freeze);
+        var crop = Item("Crop…", "crop", () => _ = _app.RunAsync("crop"));
+        crop.Enabled = presenting;
+        _menu.Items.Add(crop);
+        if (s.Source?.Crop is not null) _menu.Items.Add(Item("Remove the crop", "remove-crop", () => _ = _app.RunAsync("remove-crop")));
+        _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(Item("Take a screenshot", "screenshot", () => _ = _app.RunAsync("screenshot")));
         _menu.Items.Add(new ToolStripSeparator());
 
         _menu.Items.Add(FavouritesMenu());
@@ -91,6 +101,16 @@ internal sealed class TrayIcon : IDisposable
         _menu.Items.Add(Check("Pause all shortcuts", _app.ShortcutsPaused, "pause-shortcuts", _app.TogglePauseShortcuts));
         _menu.Items.Add(Check("Show yellow outline", _app.Settings.ShowOutline, "toggle-outline", () => _app.SetShowOutline(!_app.Settings.ShowOutline)));
         _menu.Items.Add(Check("Show presenting badge", _app.Settings.ShowBadge, "toggle-badge", () => _app.SetShowBadge(!_app.Settings.ShowBadge)));
+        _menu.Items.Add(Check("Show mouse pointer on the TV", _app.Settings.ShowCursor, "", () => _app.SetShowCursor(!_app.Settings.ShowCursor)));
+        ToolStripMenuItem engine = Submenu("Capture engine");
+        ToolStripMenuItem automatic = Item("Automatic (lowest memory)", null, () => _app.SetCaptureEngine(false));
+        automatic.Checked = !_app.Settings.PreferWgc;
+        ToolStripMenuItem wgc = Item("Always Windows Graphics Capture (pointer, last picture when minimised)", null, () => _app.SetCaptureEngine(true));
+        wgc.Checked = _app.Settings.PreferWgc;
+        engine.DropDownItems.Add(automatic);
+        engine.DropDownItems.Add(wgc);
+        if (s.EngineName is { } active) engine.DropDownItems.Add(new ToolStripMenuItem($"In use now: {active}") { Enabled = false });
+        _menu.Items.Add(engine);
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(Item("Quit", null, _app.RequestQuit));
     }
@@ -108,7 +128,7 @@ internal sealed class TrayIcon : IDisposable
     private ToolStripMenuItem Item(string text, string? actionId, Action onClick)
     {
         var item = new ToolStripMenuItem(text, null, (_, _) => _app.Guard(onClick));
-        if (actionId is not null && _app.ActiveShortcut(actionId) is { } hotkey) item.ShortcutKeyDisplayString = hotkey.ToString();
+        if (!string.IsNullOrEmpty(actionId) && _app.ActiveShortcut(actionId) is { } hotkey) item.ShortcutKeyDisplayString = hotkey.ToString();
         return item;
     }
 

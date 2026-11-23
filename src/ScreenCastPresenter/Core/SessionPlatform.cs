@@ -23,7 +23,7 @@ internal interface IOutputSurface : IDisposable
     void SetIdleMessage(string? message, double brightness = 1);
 }
 
-/// <summary>Source window notifications as the session controller sees them.</summary>
+/// <summary>Source notifications as the session controller sees them.</summary>
 internal interface ISourceWatcher : IDisposable
 {
     bool IsMinimized { get; }
@@ -37,19 +37,46 @@ internal interface ISourceWatcher : IDisposable
 internal interface ISessionPlatform
 {
     IOutputSurface CreateOutput(DisplayMonitor monitor, bool topMost);
-    ICaptureEngine CreateEngine(SourceWindow source);
-    ISourceWatcher Watch(nint hwnd);
+
+    /// <summary>The engine for a source (FR-32): screens and frozen starts need WGC; windows use DWM unless WGC is preferred.</summary>
+    ICaptureEngine CreateEngine(SourceWindow source, bool startFrozen = false);
+
+    /// <summary>The other engine, if it can show this source (a failing engine falls back, SRS 4.4).</summary>
+    ICaptureEngine? CreateFallbackEngine(SourceWindow source, ICaptureEngine failed);
+
+    ISourceWatcher Watch(SourceWindow source);
     Task Fade(double from, double to, TimeSpan duration, Action<double> apply);
 }
 
-internal sealed class Win32SessionPlatform : ISessionPlatform
+internal sealed class Win32SessionPlatform(Func<AppSettings> settings) : ISessionPlatform
 {
     public IOutputSurface CreateOutput(DisplayMonitor monitor, bool topMost) => new OutputWindow(monitor, topMost);
 
-    // M3 adds the WGC engine and picks between the two here.
-    public ICaptureEngine CreateEngine(SourceWindow source) => new DwmThumbnailEngine();
+    public ICaptureEngine CreateEngine(SourceWindow source, bool startFrozen = false)
+    {
+        bool wgc = source.IsScreen || startFrozen || settings().PreferWgc;
+        return wgc ? new RemoteWgcEngine(settings().ShowCursor, startFrozen) : new DwmThumbnailEngine();
+    }
 
-    public ISourceWatcher Watch(nint hwnd) => new WindowWatcher(hwnd);
+    public ICaptureEngine? CreateFallbackEngine(SourceWindow source, ICaptureEngine failed) => failed switch
+    {
+        RemoteWgcEngine when !source.IsScreen => new DwmThumbnailEngine(),
+        DwmThumbnailEngine when Direct3D.IsCaptureSupported => new RemoteWgcEngine(settings().ShowCursor, false),
+        _ => null,
+    };
+
+    public ISourceWatcher Watch(SourceWindow source) => source.IsScreen ? new ScreenWatcher() : new WindowWatcher(source.Handle);
 
     public Task Fade(double from, double to, TimeSpan duration, Action<double> apply) => Fader.RunAsync(from, to, duration, apply);
+
+    /// <summary>A screen can't be minimised or closed; unplugging is handled by the app's display-change logic.</summary>
+    private sealed class ScreenWatcher : ISourceWatcher
+    {
+        public bool IsMinimized => false;
+        public event EventHandler? Closed { add { } remove { } }
+        public event EventHandler? Changed { add { } remove { } }
+        public event EventHandler? Minimized { add { } remove { } }
+        public event EventHandler? Restored { add { } remove { } }
+        public void Dispose() { }
+    }
 }

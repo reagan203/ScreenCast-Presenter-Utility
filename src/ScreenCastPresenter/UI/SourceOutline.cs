@@ -15,19 +15,18 @@ internal sealed class SourceOutline : IDisposable
     private readonly List<OutlineStrip> _strips = [];
     private OutlineTab? _tab;
 
-    /// <summary>Redraws the outline around <paramref name="source"/>, or hides it.</summary>
+    /// <summary>Redraws the outline around <paramref name="target"/> (screen pixels), or hides it when null.</summary>
+    /// <param name="target">What the audience sees: a window, the cropped part of it, or a screen.</param>
     /// <param name="monitors">All screens (cached by the caller; refreshed on display changes).</param>
     /// <param name="output">The output screen: nothing is ever drawn there.</param>
-    public void Update(nint source, bool show, string tabText, IReadOnlyList<DisplayMonitor> monitors, DisplayMonitor? output)
+    public void Update(Rectangle? target, string tabText, IReadOnlyList<DisplayMonitor> monitors, DisplayMonitor? output)
     {
-        var hwnd = (HWND)source;
-        if (!show || source == 0 || !PInvoke.IsWindow(hwnd) || PInvoke.IsIconic(hwnd))
+        if (target is not { Width: > 0, Height: > 0 } bounds)
         {
             Hide();
             return;
         }
 
-        Rectangle bounds = DwmHelpers.GetVisibleBounds(hwnd);
         var allowed = monitors.Where(m => output is null || !m.IsSameScreen(output)).Select(m => m.Bounds).ToList();
         double scale = monitors.FirstOrDefault(m => m.Bounds.IntersectsWith(bounds))?.Scale ?? 1;
         int thickness = Math.Max(2, (int)Math.Round(3 * scale));

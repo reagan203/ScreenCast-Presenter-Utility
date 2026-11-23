@@ -17,7 +17,7 @@ internal enum SessionState
 /// <summary>
 /// Owns the current source, output window and capture engine, and makes every visible change go
 /// through black (NFR-13). Public methods run on the UI thread; a gate serialises them so a
-/// command during a fade waits for it, and superseded source switches are dropped (FR-28).
+/// command during a fade waits for it, and superseded requests are dropped (FR-28).
 /// </summary>
 internal sealed class SessionController : IDisposable
 {
@@ -46,12 +46,16 @@ internal sealed class SessionController : IDisposable
 
     public SessionState State { get; private set; }
     public bool IsBlanked { get; private set; }
+    public bool IsFrozen { get; private set; }
     public SourceWindow? Source { get; private set; }
     public SourceWindow? PreviousSource { get; private set; }
     public DisplayMonitor? OutputMonitor => _output is { IsAlive: true } o ? o.Monitor : null;
     public nint OutputHandle => _output is { IsAlive: true } o ? o.Handle : 0;
     public double Dim => _dim;
     public bool IsSourceMinimized => _watcher?.IsMinimized ?? false;
+
+    /// <summary>The active engine's name, for Settings › Advanced and the palette (FR-32).</summary>
+    public string? EngineName => _engine?.Name;
 
     /// <summary>Text for "blank with a message" (FR-27).</summary>
     public string BlankMessage { get; set; } = "We'll be right back";
@@ -94,9 +98,10 @@ internal sealed class SessionController : IDisposable
     {
         bool sameOutput = _output is { IsAlive: true } current && current.Monitor.IsSameScreen(monitor) && current.Monitor.Bounds == monitor.Bounds;
 
-        // Already showing this window here: just make sure it's visible.
-        if (sameOutput && _engine is not null && Source?.Handle == source.Handle)
+        // Already showing this source here: just apply a new crop and make sure it's visible.
+        if (sameOutput && _engine is not null && source.IsSameSource(Source))
         {
+            if (source.Crop != Source!.Crop) await ChangeCropCoreAsync(source.Crop);
             if (IsBlanked) await UnblankCoreAsync();
             return;
         }
@@ -118,28 +123,10 @@ internal sealed class SessionController : IDisposable
             await HideIdleMessageAsync();
             IsBlanked = false;
 
-            ICaptureEngine engine = _platform.CreateEngine(source);
-            ISourceWatcher watcher;
-            try
-            {
-                await engine.StartAsync(source.Handle, output.Handle, output.ClientSize);
-                watcher = _platform.Watch(source.Handle);
-            }
-            catch
-            {
-                engine.Dispose();
-                throw;
-            }
+            (ICaptureEngine engine, ISourceWatcher watcher) = await StartEngineAsync(source, output);
+            Attach(engine, watcher);
 
-            _engine = engine;
-            _watcher = watcher;
-            _opacity = 0;
-            watcher.Closed += OnSourceClosed;
-            watcher.Changed += OnSourceChanged;
-            watcher.Minimized += OnSourceMinimized;
-            watcher.Restored += OnSourceRestored;
-
-            if (previous is not null && previous.Handle != source.Handle) PreviousSource = previous;
+            if (previous is not null && !previous.IsSameSource(source)) PreviousSource = previous;
             Source = source;
             output.Reveal();
             SetState(SessionState.Presenting);
@@ -153,8 +140,62 @@ internal sealed class SessionController : IDisposable
         catch (Exception ex)
         {
             Debug.WriteLine(ex);
+            ScpApp.Diag("present failed: " + ex);
             RecoverToIdle($"Couldn't show “{source.Title}”. It may have closed.");
         }
+    }
+
+    /// <summary>Starts the right engine, falling back to the other one if it fails (SRS 4.4).</summary>
+    private async Task<(ICaptureEngine, ISourceWatcher)> StartEngineAsync(SourceWindow source, IOutputSurface output, bool startFrozen = false)
+    {
+        ICaptureEngine engine = _platform.CreateEngine(source, startFrozen);
+        try
+        {
+            await engine.StartAsync(source, output.Handle, output.ClientSize);
+        }
+        catch (Exception first) when (_platform.CreateFallbackEngine(source, engine) is { } fallback)
+        {
+            Debug.WriteLine(first);
+            engine.Dispose();
+            engine = fallback;
+            try
+            {
+                await engine.StartAsync(source, output.Handle, output.ClientSize);
+            }
+            catch
+            {
+                engine.Dispose();
+                throw;
+            }
+        }
+        catch
+        {
+            engine.Dispose();
+            throw;
+        }
+
+        try
+        {
+            return (engine, _platform.Watch(source));
+        }
+        catch
+        {
+            engine.Dispose();
+            throw;
+        }
+    }
+
+    private void Attach(ICaptureEngine engine, ISourceWatcher watcher)
+    {
+        _engine = engine;
+        _watcher = watcher;
+        _opacity = 0;
+        IsFrozen = engine is RemoteWgcEngine { IsFrozen: true } or WgcEngine { IsFrozen: true };
+        engine.Failed += OnEngineFailed;
+        watcher.Closed += OnSourceClosed;
+        watcher.Changed += OnSourceChanged;
+        watcher.Minimized += OnSourceMinimized;
+        watcher.Restored += OnSourceRestored;
     }
 
     /// <summary>Fades out and closes the output.</summary>
@@ -233,7 +274,107 @@ internal sealed class SessionController : IDisposable
     {
         await HideIdleMessageAsync();
         IsBlanked = false;
-        if (_engine is not null && !(_watcher?.IsMinimized ?? false)) await FadeAsync(TargetOpacity, BlankFade);
+        if (_engine is not null && !HidesWhenMinimized) await FadeAsync(TargetOpacity, BlankFade);
+        SetState(State);
+    }
+
+    /// <summary>
+    /// Freeze / go live (FR-20). The WGC engine just stops taking frames. A DWM-shown window is
+    /// handed over to a WGC engine that freezes on its first frame, drawn underneath the DWM
+    /// thumbnail; removing the thumbnail then reveals the identical, frozen picture — no flicker.
+    /// </summary>
+    public async Task ToggleFreezeAsync()
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (State != SessionState.Presenting || _engine is null || Source is not { } source || _output is not { IsAlive: true } output)
+            {
+                Message?.Invoke(this, "Nothing is being shown right now.");
+                return;
+            }
+
+            if (_engine.SupportsFreeze)
+            {
+                IsFrozen = !IsFrozen;
+                _engine.SetFrozen(IsFrozen);
+                SetState(State);
+                return;
+            }
+            if (IsSourceMinimized)
+            {
+                Message?.Invoke(this, "Restore the window first: there's no picture to freeze while it's minimised.");
+                return;
+            }
+
+            // Hand over from DWM to a frozen WGC engine.
+            ICaptureEngine frozen = _platform.CreateEngine(source, startFrozen: true);
+            try
+            {
+                await frozen.StartAsync(source, output.Handle, output.ClientSize);
+            }
+            catch (Exception ex)
+            {
+                frozen.Dispose();
+                Debug.WriteLine(ex);
+                Message?.Invoke(this, "Couldn't freeze this window.");
+                return;
+            }
+            frozen.SetIdleMessage(_idleMessage, _idleMessage is null ? 0 : 1);
+            frozen.SetOpacity(_opacity);
+            DwmHelpersFlush();
+            ICaptureEngine old = _engine;
+            old.Failed -= OnEngineFailed;
+            old.Dispose(); // DWM thumbnail gone: the frozen picture underneath shows
+            _engine = frozen;
+            frozen.Failed += OnEngineFailed;
+            IsFrozen = true;
+            SetState(State);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    // Wait one compositor frame so the WGC picture is on screen before the thumbnail is removed.
+    private static void DwmHelpersFlush()
+    {
+        try
+        {
+            DwmHelpers.Flush();
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            // Unit tests run without DWM; nothing to wait for.
+        }
+    }
+
+    /// <summary>Shows only part of the source (FR-04), fading through black.</summary>
+    public async Task SetCropAsync(CropRegion? crop)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (Source is null || _engine is null) return;
+            await ChangeCropCoreAsync(crop);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task ChangeCropCoreAsync(CropRegion? crop)
+    {
+        if (crop is { IsFull: true }) crop = null;
+        if (Source is not { } source || _engine is not { } engine || source.Crop == crop) return;
+        double target = TargetOpacity;
+        await FadeAsync(0, SwitchFadeOut);
+        engine.SetCrop(crop);
+        Source = source with { Crop = crop };
+        SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
+        if (!HidesWhenMinimized) await FadeAsync(target, SwitchFadeIn);
         SetState(State);
     }
 
@@ -247,7 +388,7 @@ internal sealed class SessionController : IDisposable
         {
             if (version != Volatile.Read(ref _dimVersion)) return; // a newer dim level is queued
             _dim = target;
-            if (_engine is not null && !IsBlanked && !(_watcher?.IsMinimized ?? false))
+            if (_engine is not null && !IsBlanked && !HidesWhenMinimized)
                 await FadeAsync(TargetOpacity, DimFade);
         }
         finally
@@ -306,6 +447,12 @@ internal sealed class SessionController : IDisposable
         Message?.Invoke(this, message);
     }
 
+    /// <summary>
+    /// True when a minimised source must show black: the DWM engine can't draw it. The WGC engine
+    /// keeps the last picture instead (UC-06).
+    /// </summary>
+    private bool HidesWhenMinimized => IsSourceMinimized && _engine is not { SupportsFreeze: true };
+
     private Task FadeAsync(double to, TimeSpan duration)
     {
         ICaptureEngine? engine = _engine;
@@ -321,7 +468,12 @@ internal sealed class SessionController : IDisposable
     {
         if (_output is not { IsAlive: true } output) return;
         _idleMessage = message;
-        await _platform.Fade(0, 1, MessageFade, b => output.SetIdleMessage(message, b));
+        ICaptureEngine? engine = _engine;
+        await _platform.Fade(0, 1, MessageFade, b =>
+        {
+            output.SetIdleMessage(message, b);
+            engine?.SetIdleMessage(message, b);
+        });
     }
 
     private async Task HideIdleMessageAsync()
@@ -331,8 +483,14 @@ internal sealed class SessionController : IDisposable
             _idleMessage = null;
             return;
         }
-        await _platform.Fade(1, 0, MessageFade, b => output.SetIdleMessage(message, b));
+        ICaptureEngine? engine = _engine;
+        await _platform.Fade(1, 0, MessageFade, b =>
+        {
+            output.SetIdleMessage(message, b);
+            engine?.SetIdleMessage(message, b);
+        });
         output.SetIdleMessage(null);
+        engine?.SetIdleMessage(null, 0);
         _idleMessage = null;
     }
 
@@ -348,14 +506,59 @@ internal sealed class SessionController : IDisposable
         SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>The engine broke mid-session (GPU reset, capture refused): try the other engine, else go idle.</summary>
+    private async void OnEngineFailed(object? sender, string reason)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (sender != _engine || _engine is null || Source is not { } source || _output is not { IsAlive: true } output) return;
+            Debug.WriteLine($"Engine failed: {reason}");
+            ICaptureEngine failed = _engine;
+            failed.Failed -= OnEngineFailed;
+            failed.Dispose();
+            _engine = null;
+
+            if (_platform.CreateFallbackEngine(source, failed) is { } fallback)
+            {
+                try
+                {
+                    await fallback.StartAsync(source, output.Handle, output.ClientSize);
+                    _engine = fallback;
+                    fallback.Failed += OnEngineFailed;
+                    _opacity = 0;
+                    IsFrozen = false;
+                    if (!IsBlanked && !HidesWhenMinimized) await FadeAsync(TargetOpacity, SwitchFadeIn);
+                    SetState(State);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine(ex);
+                    fallback.Dispose();
+                }
+            }
+            RecoverToIdle($"Capturing “{source.Title}” stopped working, so the TV is showing a blank screen.");
+        }
+        catch (Exception ex)
+        {
+            RecoverFromError(ex);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     private async void OnSourceClosed(object? sender, EventArgs e)
     {
         await _gate.WaitAsync();
         try
         {
             if (sender != _watcher) return; // stale event from a previous source
-            // The source is gone, so DWM already draws nothing: the output is black. Keep it as the idle screen (FR-06, FR-16).
+            // The source is gone, so the engines have nothing new to draw. Go to the idle screen (FR-06, FR-16).
             string title = Source?.Title ?? "The window";
+            await FadeAsync(0, StopFadeOut); // WGC still holds the last picture: fade it out properly
             StopEngine();
             Source = null;
             IsBlanked = false;
@@ -379,11 +582,17 @@ internal sealed class SessionController : IDisposable
         try
         {
             if (sender != _watcher || _engine is null) return;
+            SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
+            if (_engine.SupportsFreeze)
+            {
+                // UC-06: keep showing the last picture.
+                Message?.Invoke(this, $"“{Source?.Title}” is minimised. The TV keeps showing its last picture.");
+                return;
+            }
             // Cut to black at once: DWM would otherwise show the tiny minimised caption bar.
             _opacity = 0;
             _engine.SetOpacity(0);
             _engine.OnSourceChanged();
-            SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
             Message?.Invoke(this, $"“{Source?.Title}” is minimised, so the TV is black. Restore it to show it again.");
         }
         catch (Exception ex)
@@ -427,9 +636,14 @@ internal sealed class SessionController : IDisposable
             watcher.Dispose();
         }
         _watcher = null;
-        _engine?.Dispose();
+        if (_engine is { } engine)
+        {
+            engine.Failed -= OnEngineFailed;
+            engine.Dispose();
+        }
         _engine = null;
         _opacity = 0;
+        IsFrozen = false;
     }
 
     private void CloseOutput()

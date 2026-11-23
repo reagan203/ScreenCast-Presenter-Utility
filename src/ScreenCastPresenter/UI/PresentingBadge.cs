@@ -87,6 +87,14 @@ internal sealed class PresentingBadge : LayeredWindow
         ShowBadge(MessageTime);
     }
 
+    /// <summary>A message with buttons (e.g. "Screenshot saved · Open · Show in folder"); stays a little longer.</summary>
+    public void ShowActions(string title, string detail, IReadOnlyList<BadgeButton> buttons)
+    {
+        _pendingMessages.Clear();
+        _message = new BadgeContent(BadgeDot.Accent, title, detail, buttons);
+        ShowBadge(TimeSpan.FromSeconds(8));
+    }
+
     private BadgeContent? Content => _message ?? _status;
 
     private void ShowBadge(TimeSpan hideAfter)

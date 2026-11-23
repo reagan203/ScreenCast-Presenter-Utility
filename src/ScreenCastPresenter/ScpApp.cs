@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Win32;
+using ScreenCastPresenter.Capture;
 using ScreenCastPresenter.Core;
 using ScreenCastPresenter.Interop;
 using ScreenCastPresenter.UI;
@@ -37,7 +38,7 @@ internal sealed class ScpApp : IDisposable
         _store = store;
         _guard = new CaptureGuard();
         _monitors = DisplayHelpers.GetMonitors();
-        _session = new SessionController(new Win32SessionPlatform()) { BlankMessage = store.Current.BlankMessage };
+        _session = new SessionController(new Win32SessionPlatform(() => store.Current)) { BlankMessage = store.Current.BlankMessage };
         _hotkeys = new HotkeyManager();
         _badge = new PresentingBadge(PresenterScreen);
         _outline = new SourceOutline();
@@ -45,8 +46,16 @@ internal sealed class ScpApp : IDisposable
 
         _session.StateChanged += (_, _) => OnSessionChanged(reveal: true);
         _session.SourceGeometryChanged += (_, _) => OnSessionChanged(reveal: false);
-        _session.Message += (_, message) => _badge.ShowMessage(message);
-        _hotkeys.Pressed += (_, id) => _ = RunAsync(id);
+        _session.Message += (_, message) =>
+        {
+            Diag("session: " + message);
+            _badge.ShowMessage(message);
+        };
+        _hotkeys.Pressed += (_, id) =>
+        {
+            Diag("shortcut: " + id);
+            _ = RunAsync(id);
+        };
         Theme.Changed += OnThemeChanged;
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         _trimTimer.Tick += (_, _) =>
@@ -166,6 +175,10 @@ internal sealed class ScpApp : IDisposable
                 case "cheat-sheet": OpenShortcuts(); break;
                 case ShortcutCatalog.PauseShortcutsId: TogglePauseShortcuts(); break;
                 case "toggle-theme": SetTheme(Theme.Opposite); break;
+                case "freeze": await _session.ToggleFreezeAsync(); break;
+                case "crop": await CropCurrentAsync(); break;
+                case "remove-crop": await RemoveCropAsync(); break;
+                case "screenshot": await TakeScreenshotAsync(); break;
                 default:
                     if (TrySlot(id, "save-favourite-", out int save)) SaveFavourite(save);
                     else if (TrySlot(id, "favourite-", out int show)) await ShowFavouriteAsync(show);
@@ -186,16 +199,248 @@ internal sealed class ScpApp : IDisposable
             Message("SCP can't find a screen to show on.");
             return;
         }
-        if (!WindowEnumerator.IsAlive(source.Handle))
+        if (source.Screen is { } screen)
+        {
+            // FR-14: a screen that holds the output would show itself, endlessly.
+            if (screen.IsSameScreen(output))
+            {
+                Message($"Display {screen.Number} is where the output is, so it can't be shown on itself. Pick another screen or move the output.");
+                return;
+            }
+            if (!_monitors.Any(m => m.IsSameScreen(screen)))
+            {
+                Message("That screen isn't connected any more.");
+                return;
+            }
+        }
+        else if (!WindowEnumerator.IsAlive(source.Handle))
         {
             Message($"“{source.Title}” has closed.");
             return;
         }
+
+        // FR-04: apply the crop last used for this app.
+        bool savedCrop = false;
+        if (!source.IsScreen && source.Crop is null && Settings.SavedCrops.TryGetValue(source.AppName, out CropRegion? crop))
+        {
+            source = source with { Crop = crop };
+            savedCrop = true;
+        }
+
         CheckDuplicateDisplay();
         bool onlyScreen = _monitors.Count < 2;
         await _session.PresentAsync(source, output, topMost: !onlyScreen);
-        if (onlyScreen && _session.State == SessionState.Presenting)
+        if (_session.State != SessionState.Presenting) return;
+        if (savedCrop)
+            Message($"Cropped like last time. {ActiveShortcut("remove-crop")?.ToString() ?? "Remove the crop"} shows all of it.");
+        if (onlyScreen)
             Message($"Only one screen is connected, so the output covers it. {StopHint()}");
+    }
+
+    // ───────────────────────────── M3: crop, screenshots ─────────────────────────────
+
+    /// <summary>
+    /// UC-04: drag a rectangle over the presented window (or screen) to show only that part. The
+    /// crop is saved for the app and used next time.
+    /// </summary>
+    private async Task CropCurrentAsync()
+    {
+        if (_session.Source is not { } source)
+        {
+            Message("Show a window first, then crop it.");
+            return;
+        }
+        await CropAsync(source, present: false);
+    }
+
+    /// <summary>Lets the user crop <paramref name="source"/>; presents it with the crop if asked (picker "Crop…").</summary>
+    public async Task CropAsync(SourceWindow source, bool present)
+    {
+        Rectangle client;
+        if (source.Screen is { } screen) client = screen.Bounds;
+        else
+        {
+            SourceWindow? alive = WindowEnumerator.Refresh(source);
+            if (alive is null)
+            {
+                Message($"“{source.Title}” has closed.");
+                return;
+            }
+            if (alive.IsMinimized)
+            {
+                Message($"Restore “{source.Title}” first, then crop it.");
+                return;
+            }
+            client = WindowEnumerator.ClientBoundsOnScreen(source.Handle);
+        }
+
+        // Only on the presenter's screens: never draw the selection on the TV (SRS 4.5).
+        DisplayMonitor? output = _session.OutputMonitor ?? ChosenOutput;
+        DisplayMonitor? host = _monitors
+            .Where(m => _monitors.Count < 2 || output is null || !m.IsSameScreen(output))
+            .OrderByDescending(m => Area(Rectangle.Intersect(m.Bounds, client)))
+            .FirstOrDefault();
+        Rectangle area = host is null ? Rectangle.Empty : Rectangle.Intersect(host.Bounds, client);
+        if (host is null || Area(area) < Area(client) / 3)
+        {
+            Message("Move the window onto your own screen to crop it.");
+            return;
+        }
+
+        Rectangle? initial = source.Crop?.ToScreen(client);
+        Rectangle? chosen = await RegionSelector.SelectAsync(area, initial, "Drag to choose what to show", host.Scale);
+        if (chosen is not { } selection) return;
+
+        CropRegion? crop = CropRegion.FromScreen(selection, client);
+        if (crop is { IsFull: true }) crop = null;
+        if (!source.IsScreen)
+        {
+            if (crop is null) Settings.SavedCrops.Remove(source.AppName);
+            else Settings.SavedCrops[source.AppName] = crop;
+            Save();
+        }
+
+        if (present) await PresentAsync(source with { Crop = crop });
+        else await _session.SetCropAsync(crop);
+        if (crop is not null) Message($"Showing part of “{source.Title}”. {ActiveShortcut("remove-crop")?.ToString() ?? "Remove the crop"} shows all of it.");
+    }
+
+    private static long Area(Rectangle r) => r.Width <= 0 || r.Height <= 0 ? 0 : (long)r.Width * r.Height;
+
+    private async Task RemoveCropAsync()
+    {
+        if (_session.Source is not { } source)
+        {
+            Message("Nothing is being shown right now.");
+            return;
+        }
+        if (!source.IsScreen && Settings.SavedCrops.Remove(source.AppName)) Save();
+        if (source.Crop is null)
+        {
+            Message("It isn't cropped.");
+            return;
+        }
+        await _session.SetCropAsync(null);
+        Message($"Showing all of “{source.Title}”.");
+    }
+
+    /// <summary>
+    /// FR-50/51: screenshot of what's being presented, or — when nothing is — of an area you drag
+    /// on your screen. Saved to Pictures\Screenshots and copied to the clipboard.
+    /// </summary>
+    private async Task TakeScreenshotAsync()
+    {
+        SourceWindow? source = _session.State == SessionState.Presenting ? _session.Source : null;
+        if (source is null)
+        {
+            if (PresenterScreen() is not { } screen) return;
+            Rectangle? chosen = await RegionSelector.SelectAsync(screen.Bounds, null, "Drag an area, or press Enter for the whole screen", screen.Scale);
+            if (chosen is not { } selection) return;
+            source = SourceWindow.ForScreen(screen) with { Crop = CropRegion.FromScreen(selection, screen.Bounds) is { IsFull: false } c ? c : null };
+            await Task.Delay(150); // let the selection overlay disappear (it's excluded from capture anyway)
+        }
+
+        string folder = Settings.ScreenshotFolder ?? SavedFiles.DefaultScreenshotFolder;
+        string path;
+        try
+        {
+            Directory.CreateDirectory(folder);
+            path = SavedFiles.NextPath(folder, "Screenshot", DateTime.Now, ".png", File.Exists);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Message("Screenshot not saved: " + SavedFiles.Explain(ex), BadgeDot.Warning);
+            return;
+        }
+        if (SavedFiles.FreeSpace(folder) is < 50L * 1024 * 1024)
+        {
+            Message("Screenshot not saved: the disk is almost full.", BadgeDot.Warning);
+            return;
+        }
+
+        // The capture runs in the helper process, so the GPU driver never loads into SCP itself.
+        bool saved;
+        try
+        {
+            saved = await CaptureHost.CaptureStillToFileAsync(source, Settings.ShowCursor && source.IsScreen, path);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            Debug.WriteLine(ex);
+            saved = false;
+        }
+        if (!saved)
+        {
+            Message(source.IsMinimized ? $"“{source.Title}” is minimised, so there's nothing to capture." : "Couldn't take a screenshot. Try again.", BadgeDot.Warning);
+            return;
+        }
+
+        // FR-51: also on the clipboard. This is the one place a picture is held in SCP's memory
+        // (NFR-09d), and only for the moment it takes to copy it.
+        bool copied;
+        try
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using Image image = Image.FromStream(file);
+            copied = TryCopyToClipboard(image);
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            copied = false;
+        }
+        _badge.ShowActions(copied ? "Screenshot saved and copied" : "Screenshot saved", Path.GetFileName(path),
+        [
+            new BadgeButton("Open", true, () => ShellOpen(path)),
+            new BadgeButton("Show in folder", false, () => ShellOpen("explorer.exe", $"/select,\"{path}\"")),
+        ]);
+        ScheduleTrim();
+    }
+
+    private static bool TryCopyToClipboard(Image image)
+    {
+        // Another app may hold the clipboard for a moment.
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                Clipboard.SetImage(image);
+                return true;
+            }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+                Thread.Sleep(50);
+            }
+        }
+        return false;
+    }
+
+    private void ShellOpen(string file, string? arguments = null)
+    {
+        try
+        {
+            using Process? _ = Process.Start(new ProcessStartInfo(file) { UseShellExecute = true, Arguments = arguments ?? "" });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Message("Windows couldn't open that.", BadgeDot.Warning);
+        }
+    }
+
+    /// <summary>FR-32: Automatic (DWM for windows) or always WGC (shows the pointer, keeps minimised windows' last picture).</summary>
+    public void SetCaptureEngine(bool preferWgc)
+    {
+        Settings.CaptureEngine = preferWgc ? "WGC" : "Automatic";
+        Save();
+        Message(preferWgc
+            ? "Windows will be captured with Windows Graphics Capture from the next one you show."
+            : "Capture engine: automatic.");
+    }
+
+    public void SetShowCursor(bool show)
+    {
+        Settings.ShowCursor = show;
+        Save();
+        Message(show ? "The mouse pointer will show on the TV (screens, and windows captured with Windows Graphics Capture)." : "The mouse pointer won't show on the TV.");
     }
 
     private async Task PresentActiveWindowAsync()
@@ -232,6 +477,12 @@ internal sealed class ScpApp : IDisposable
         if (Settings.Favourites[slot - 1] is not { } favourite)
         {
             Message($"Favourite {slot} is empty. Show a window, then press {ActiveShortcut(ShortcutCatalog.SaveFavouriteId(slot))?.ToString() ?? "save favourite"} to save it.");
+            return;
+        }
+        if (favourite.ScreenDevice is { } device)
+        {
+            if (_monitors.FirstOrDefault(m => m.DeviceName == device) is { } screen) await PresentAsync(SourceWindow.ForScreen(screen));
+            else Message($"The screen saved as favourite {slot} isn't connected.");
             return;
         }
         SourceWindow? match = FavouriteMatcher.FindBest(favourite, WindowEnumerator.GetPresentableWindows());
@@ -546,9 +797,14 @@ internal sealed class ScpApp : IDisposable
         var stop = new BadgeButton("Stop", false, () => _ = RunAsync("stop"));
         var pick = new BadgeButton("Pick…", true, OpenPicker);
 
+        var goLive = new BadgeButton("Go live", true, () => _ = RunAsync("freeze"));
+        bool keepsPicture = s.EngineName is { } engine && engine.StartsWith("Windows Graphics", StringComparison.Ordinal);
+
         BadgeContent? content = s.State switch
         {
             SessionState.Presenting when s.IsBlanked => new BadgeContent(BadgeDot.Hollow, $"{OutputName()} is blank", "Your audience sees black", [showAgain, stop]),
+            SessionState.Presenting when s.IsFrozen => new BadgeContent(BadgeDot.Warning, $"{OutputName()} is frozen", "You can scroll and click privately", [goLive, stop]),
+            SessionState.Presenting when s.IsSourceMinimized && keepsPicture => new BadgeContent(BadgeDot.Warning, "Window minimised", $"{OutputName()} keeps showing its last picture", [stop]),
             SessionState.Presenting when s.IsSourceMinimized => new BadgeContent(BadgeDot.Warning, "Window minimised", $"{OutputName()} is black until you restore it", [stop]),
             SessionState.Presenting => new BadgeContent(BadgeDot.Accent, $"Showing on {OutputName()}", $"{s.Source?.Title} · {s.Source?.AppName}", [blank, stop]),
             SessionState.IdleScreen => new BadgeContent(BadgeDot.Hollow, $"{OutputName()} shows a blank screen", "Pick something to show", [pick, stop]),
@@ -561,7 +817,15 @@ internal sealed class ScpApp : IDisposable
     {
         SessionController s = _session;
         bool show = Settings.ShowOutline && s.State == SessionState.Presenting && !s.IsBlanked && !s.IsSourceMinimized && s.Source is not null;
-        _outline.Update(s.Source?.Handle ?? 0, show, $"Showing on {OutputName()}", _monitors, s.OutputMonitor);
+        // FR-17: around exactly what the audience sees: the window, the cropped part of it, or the screen.
+        Rectangle? bounds = null;
+        if (show && s.Source is { } source)
+        {
+            if (source.Screen is { } screen) bounds = source.Crop?.ToScreen(screen.Bounds) ?? screen.Bounds;
+            else if (WindowEnumerator.IsAlive(source.Handle))
+                bounds = source.Crop is { } crop ? crop.ToScreen(WindowEnumerator.ClientBoundsOnScreen(source.Handle)) : DwmHelpers.GetVisibleBounds((Windows.Win32.Foundation.HWND)source.Handle);
+        }
+        _outline.Update(bounds, s.IsFrozen ? $"Frozen on {OutputName()}" : $"Showing on {OutputName()}", _monitors, s.OutputMonitor);
     }
 
     /// <summary>"TV" for a TV-like output, else "Display 2".</summary>
@@ -577,7 +841,11 @@ internal sealed class ScpApp : IDisposable
 
     private string StopHint() => ActiveShortcut("stop") is { } stop ? $"Press {stop} to stop." : "Use the tray icon to stop.";
 
-    private void Message(string text) => _badge.ShowMessage(text);
+    private void Message(string text, BadgeDot dot = BadgeDot.Accent)
+    {
+        Diag("app: " + text);
+        _badge.ShowMessage(text, dot);
+    }
 
     private void OnThemeChanged(object? sender, EventArgs e)
     {
@@ -604,6 +872,11 @@ internal sealed class ScpApp : IDisposable
                 {
                     await _session.MoveOutputAsync(now, topMost: _monitors.Count > 1);
                 }
+            }
+            if (_session.Source?.Screen is { } shown && !_monitors.Any(m => m.IsSameScreen(shown)))
+            {
+                await _session.StopAsync();
+                Message("The screen you were showing was disconnected, so SCP stopped showing it.");
             }
             CheckDuplicateDisplay();
             OnSessionChanged(reveal: false);

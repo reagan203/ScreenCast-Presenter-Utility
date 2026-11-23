@@ -183,6 +183,26 @@ internal sealed class CommandPalette : ThemedForm
                 return Task.CompletedTask;
             }));
         }
+        items.Add(new(app.Settings.ShowCursor ? "Hide the mouse pointer on the TV" : "Show the mouse pointer on the TV", "", null, "cursor mouse pointer", PaletteKind.Action, () =>
+        {
+            app.SetShowCursor(!app.Settings.ShowCursor);
+            return Task.CompletedTask;
+        }));
+        items.Add(new("Capture engine: automatic", app.Session.EngineName is { } e1 ? $"in use: {e1}" : "", null, "dwm wgc engine capture", PaletteKind.Action, () =>
+        {
+            app.SetCaptureEngine(false);
+            return Task.CompletedTask;
+        }));
+        items.Add(new("Capture engine: always Windows Graphics Capture", "", null, "dwm wgc engine capture", PaletteKind.Action, () =>
+        {
+            app.SetCaptureEngine(true);
+            return Task.CompletedTask;
+        }));
+        foreach (DisplayMonitor m in app.Monitors)
+        {
+            SourceWindow screen = SourceWindow.ForScreen(m);
+            items.Add(new($"Show the whole of Display {m.Number} ({m.ShortName})", "Screen", null, "screen monitor desktop whole", PaletteKind.Action, () => app.PresentAsync(screen)));
+        }
         items.Add(new("Quit ScreenCast Presenter", "", null, "exit close", PaletteKind.Action, () =>
         {
             app.RequestQuit();

@@ -242,6 +242,10 @@ How memory stays low:
 
 The controller uses the DWM engine by default and switches to WGC only for minimised windows or whole monitors. Only the output window ever reaches the TV or Zoom, so the presenter's other windows, notifications and SCP's own UI stay private.
 
+**Capture helper process (rev 2, M3).** Everything that needs the GPU (the WGC engine, freeze, screenshots, and from M4 recording) runs in a short-lived helper: the same exe started with `--capture-host`/`--still`. It draws into a disabled child window inside SCP's output window, so cloaking, fades, topmost and privacy behave exactly as with the DWM engine. Reasons, measured on the development laptop: creating a Direct3D device costs ~26 MB of private memory that a process never gets back, so in-process WGC left SCP at 28–41 MB after use (NFR-01 is 25 MB); with the helper, SCP stays at ~12–17 MB and returns to idle size as soon as the helper exits. A GPU driver crash or reset also only ends the helper; SCP falls back to the DWM engine (SRS 4.4). Measured while presenting with WGC: SCP 16.6 MB + helper 54 MB. The driver's ~26 MB is outside SCP's control; NFR-03 is therefore measured as the sum of both processes with the driver's share reported separately.
+
+**Screen capture compatibility.** A full-screen flip-model surface may be shown by the GPU directly ("independent flip"). Modern capture (Windows Graphics Capture, Desktop Duplication — used by Zoom, Teams, OBS and SCP's own screenshots) sees it; legacy GDI screen grabs may not.
+
 ## 6. External interfaces
 
 ### 6.1 User interface
@@ -337,9 +341,9 @@ Estimated effort for one developer: about 6 weeks to v1.0.
 1. **M1 – Core mirror (week 1).** Window list, DWM thumbnail into a black borderless window on a chosen monitor, no-flash creation. Exit: UC-01 works; NFR-02 and NFR-10–12 pass.
 2. **M2 – Tray, picker and shortcuts (weeks 2–3).** Tray icon and menu, picker overlay with live thumbnails and search, full shortcut set with conflict/layout handling, command palette, shortcut settings, fades, blank (with message), dimming, favourites, badge, outline, light/dark, first run, single instance, stress harness and FlashCheck. Freeze moves to M3 **(rev 2)**. Exit: UC-03 and UC-05 work; NFR-08 and NFR-16 pass.
 3. **M3 – Crop, WGC engine, freeze and screenshots (week 4).** Crop overlay, WGC fallback for minimised windows and monitors, engine auto-select, freeze (GPU-held frame), screenshots (FR-50, FR-51). Exit: UC-04 and UC-06 work; NFR-03 and NFR-05 pass.
-4. **M4 – Zoom screen (week 5).** Virtual display detection, guided setup, floating-window mode. Exit: UC-02 works on Zoom and Teams.
-5. **M5 – Hardening and release (week 6).** Remaining settings, DPI, hot-plug, sleep/resume, 8-hour soak test, signed build. Exit: all Must requirements in 3.1–3.5 pass.
-6. **M6 – Recording (rev 2).** Recording of presented content, window, screen or region; meeting and microphone audio; pause/resume; indicator. Exit: FR-52–FR-56 and NFR-09a pass.
+4. **M4 – Recording (rev 2: moved up from M6).** Recording of presented content, a window (incl. background webinar recording while the user works), a screen or a region; meeting (app-only where supported) and microphone audio; pause/resume; indicator; crash-safe long recordings; auto-stop when the window closes. Exit: FR-52–FR-61 and NFR-09a pass.
+5. **M5 – Zoom screen.** Virtual display detection, guided setup, floating-window mode. Exit: UC-02 works on Zoom and Teams.
+6. **M6 – Hardening and release.** Settings window, DPI, hot-plug, sleep/resume, start with Windows, 8-hour soak test, single-file publish, signed build. Exit: all Must requirements pass.
 
 ### 8.1 Acceptance tests
 

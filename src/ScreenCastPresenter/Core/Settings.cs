@@ -10,6 +10,9 @@ internal sealed class Favourite
 {
     public string AppName { get; set; } = "";
     public string Title { get; set; } = "";
+
+    /// <summary>Set when the favourite is a whole screen (FR-02): its device name, e.g. "\\.\DISPLAY1".</summary>
+    public string? ScreenDevice { get; set; }
 }
 
 /// <summary>Everything SCP remembers (FR-40/41). Unknown JSON fields are ignored, missing ones get defaults.</summary>
@@ -37,6 +40,24 @@ internal sealed class AppSettings
     public bool FirstRunDone { get; set; }
     public string BlankMessage { get; set; } = "We'll be right back";
 
+    /// <summary>"Automatic" (DWM for windows, WGC for screens and freeze) or "WGC" (always). FR-32.</summary>
+    public string CaptureEngine { get; set; } = "Automatic";
+
+    /// <summary>Show the mouse pointer on the output (FR-24; only the WGC engine can).</summary>
+    public bool ShowCursor { get; set; } = true;
+
+    /// <summary>Last crop per app (FR-04), applied automatically next time that app is shown.</summary>
+    public Dictionary<string, CropRegion> SavedCrops { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Where screenshots go; null = Pictures\Screenshots, like the Snipping Tool (FR-51).</summary>
+    public string? ScreenshotFolder { get; set; }
+
+    /// <summary>Where recordings go; null = Videos\Screen Recordings, like the Snipping Tool (FR-52).</summary>
+    public string? RecordingFolder { get; set; }
+
+    [JsonIgnore]
+    public bool PreferWgc => string.Equals(CaptureEngine, "WGC", StringComparison.OrdinalIgnoreCase);
+
     [JsonIgnore]
     public ThemeMode ThemeMode
     {
@@ -60,6 +81,17 @@ internal sealed class AppSettings
         {
             if (Favourites[i] is { } f && (string.IsNullOrWhiteSpace(f.AppName) || f.Title is null)) Favourites[i] = null;
         }
+        CaptureEngine = PreferWgc ? "WGC" : "Automatic";
+        var crops = new Dictionary<string, CropRegion>(StringComparer.OrdinalIgnoreCase);
+        foreach ((string app, CropRegion? crop) in SavedCrops ?? [])
+        {
+            // Re-validate: a hand-edited file could hold anything.
+            if (!string.IsNullOrWhiteSpace(app) && crop is not null && CropRegion.Create(crop.X, crop.Y, crop.Width, crop.Height) is { IsFull: false } valid)
+                crops[app] = valid;
+        }
+        SavedCrops = crops;
+        if (string.IsNullOrWhiteSpace(ScreenshotFolder)) ScreenshotFolder = null;
+        if (string.IsNullOrWhiteSpace(RecordingFolder)) RecordingFolder = null;
         BlankMessage = string.IsNullOrWhiteSpace(BlankMessage) ? "We'll be right back" : BlankMessage.Trim();
         if (BlankMessage.Length > MaxMessageLength) BlankMessage = BlankMessage[..MaxMessageLength];
         return this;

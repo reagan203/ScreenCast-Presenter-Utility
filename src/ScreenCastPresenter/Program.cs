@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using ScreenCastPresenter.Capture;
 using ScreenCastPresenter.Core;
 using ScreenCastPresenter.UI;
 
@@ -7,7 +9,18 @@ namespace ScreenCastPresenter;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
+    {
+        // The same exe doubles as the capture helper process (GPU work kept out of the app).
+        // Dispatch before anything touches WinForms, so the helper never loads it.
+        if (args.Length > 0 && (args[0] == CaptureProtocol.HostSwitch || args[0] == CaptureProtocol.StillSwitch))
+            return CaptureHost.Run(args);
+        RunApp();
+        return 0;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RunApp()
     {
         // FR-29: a second launch just opens the picker in the running copy.
         using SingleInstance? instance = SingleInstance.TryAcquire();

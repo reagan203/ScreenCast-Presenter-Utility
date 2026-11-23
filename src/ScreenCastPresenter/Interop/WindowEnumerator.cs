@@ -6,8 +6,27 @@ using Windows.Win32.UI.WindowsAndMessaging;
 namespace ScreenCastPresenter.Interop;
 
 /// <summary>A window the user can choose to present.</summary>
+/// <summary>
+/// Something the user can present: a window (<see cref="Handle"/>) or a whole screen
+/// (<see cref="Screen"/>, FR-02), optionally cropped (<see cref="Crop"/>, FR-04).
+/// </summary>
 internal sealed record SourceWindow(nint Handle, string Title, string AppName, bool IsMinimized)
 {
+    /// <summary>Set for a whole-screen source; then <see cref="Handle"/> is 0.</summary>
+    public DisplayMonitor? Screen { get; init; }
+
+    /// <summary>The part of the source to show; null shows all of it.</summary>
+    public Core.CropRegion? Crop { get; init; }
+
+    public bool IsScreen => Screen is not null;
+
+    /// <summary>Same window or same screen, whatever the crop or title.</summary>
+    public bool IsSameSource(SourceWindow? other) =>
+        other is not null && (IsScreen ? other.Screen?.DeviceName == Screen!.DeviceName && other.IsScreen : !other.IsScreen && other.Handle == Handle);
+
+    public static SourceWindow ForScreen(DisplayMonitor screen) =>
+        new(0, $"Display {screen.Number} · {screen.ShortName}", "Screen", false) { Screen = screen };
+
     public override string ToString() => Title;
 }
 
@@ -101,6 +120,16 @@ internal static class WindowEnumerator
     }
 
     public static bool IsAlive(nint hwnd) => PInvoke.IsWindow((HWND)hwnd);
+
+    /// <summary>The client area in screen coordinates (physical pixels); empty if the window is gone.</summary>
+    public static Rectangle ClientBoundsOnScreen(nint hwnd)
+    {
+        var h = (HWND)hwnd;
+        if (!PInvoke.GetClientRect(h, out RECT r)) return Rectangle.Empty;
+        var origin = new Point(0, 0);
+        if (!PInvoke.ClientToScreen(h, ref origin)) return Rectangle.Empty;
+        return new Rectangle(origin.X, origin.Y, r.right - r.left, r.bottom - r.top);
+    }
 
     /// <summary>Client-area size in physical pixels (what a client-only DWM thumbnail shows). No message is sent.</summary>
     public static Size ClientSize(nint hwnd) =>

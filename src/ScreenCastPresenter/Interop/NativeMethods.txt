@@ -1,0 +1,53 @@
+// Window enumeration
+EnumWindows
+GetWindowTextLength
+GetWindowText
+GetWindowLong
+GetWindow
+GetShellWindow
+GetWindowThreadProcessId
+GetWindowRect
+GetClientRect
+IsWindow
+IsWindowVisible
+IsIconic
+WINDOW_EX_STYLE
+OpenProcess
+QueryFullProcessImageName
+
+// Monitors
+EnumDisplayMonitors
+GetMonitorInfo
+MonitorFromWindow
+MONITORINFOEXW
+
+// DWM: thumbnails, cloaking, dark title bars
+DwmRegisterThumbnail
+DwmUnregisterThumbnail
+DwmUpdateThumbnailProperties
+DwmFlush
+DwmGetWindowAttribute
+DwmSetWindowAttribute
+DWM_THUMBNAIL_PROPERTIES
+DWM_TNP_RECTDESTINATION
+DWM_TNP_OPACITY
+DWM_TNP_VISIBLE
+DWM_TNP_SOURCECLIENTAREAONLY
+DWM_WINDOW_CORNER_PREFERENCE
+
+// Painting, privacy
+RedrawWindow
+SetWindowDisplayAffinity
+DestroyIcon
+
+// Source window tracking
+SetWinEventHook
+UnhookWinEvent
+EVENT_OBJECT_DESTROY
+EVENT_OBJECT_LOCATIONCHANGE
+EVENT_SYSTEM_MINIMIZESTART
+EVENT_SYSTEM_MINIMIZEEND
+WINEVENT_OUTOFCONTEXT
+WINEVENT_SKIPOWNPROCESS
+OBJECT_IDENTIFIER
+CHILDID_SELF

@@ -137,7 +137,7 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | FR-41 | Remember last source, output monitor, crop and hotkeys across restarts | Must |
 | FR-42 | Optional start with Windows | Should |
 | FR-43 | Command-line: `scp.exe --present "PowerPoint" --output 2` | Could |
-| FR-44 | Appearance: Match Windows (default), Dark or Light; follows live changes of the Windows setting and respects High Contrast **(rev 2)** | Must |
+| FR-44 | Appearance: Light (default), Dark, or Match Windows (follows live changes of the Windows setting); always respects High Contrast **(rev 2; Light made the default at the user's request)** | Must |
 | FR-45 | Settings are written atomically; a corrupt file is backed up and replaced by defaults; unknown fields from newer versions are ignored **(rev 2)** | Must |
 
 ### 3.6 Screenshots and recording (rev 2)
@@ -248,13 +248,15 @@ The controller uses the DWM engine by default and switches to WGC only for minim
 
 **Outputs for Zoom (rev 2, M5).** A screen from a virtual display driver (reported by Windows as an indirect virtual display, or named "virtual"/"IDD…") is labelled "Zoom screen"; the output choice prefers a real TV and uses the Zoom screen only when chosen or when it's the only extra screen. Without a virtual display, the output can be a floating window (FR-11): an ordinary, resizable window with a dark title bar, in the taskbar and Alt+Tab so Zoom lists it as "ScreenCast Presenter output", never topmost, and not excluded from capture. It reopens where it was last left (if its title bar is still on a connected screen). Closing it stops showing; minimising it warns that Zoom then shares nothing. Ctrl+Alt+O cycles through the screens and the window; "Show in Zoom" picks the Zoom screen if there is one, otherwise the window, and SCP says once what to choose in Zoom's Share Screen dialog. While the output is a window, the presenter's screen still counts as theirs (badge, picker, outline and crop all use it), but a whole-screen source can't be the screen the window is on (FR-14). Recording "what the output shows" in a window records the shown window itself, because recording the window's area of the screen would also record anything covering it.
 
+**Hardening (M6).** Settings window (General, Output, Recording & screenshots, Appearance, Advanced; every change applies immediately). Start with Windows through the user's Run key (FR-42), quiet when started at sign-in, repaired if the portable exe moves. The last thing shown is remembered (FR-41), so "previous source" works after a restart. After resume from sleep, unlock and remote-desktop reconnects, SCP re-checks screens, shortcuts and the output a moment later. Release: one self-contained single-file exe per architecture (x64, ARM64), uncompressed for memory (see docs/RELEASE.md).
+
 **Screen capture compatibility.** A full-screen flip-model surface may be shown by the GPU directly ("independent flip"). Modern capture (Windows Graphics Capture, Desktop Duplication — used by Zoom, Teams, OBS and SCP's own screenshots) sees it; legacy GDI screen grabs may not.
 
 ## 6. External interfaces
 
 ### 6.1 User interface
 
-Two themes **(rev 2)**, chosen by Match Windows / Dark / Light. Dark: background #0B0B0C, surfaces #17171A, text #E6E6E6, accent #4C8DFF. Light: background #F3F3F5, surfaces #FAFAFB, text #1B1B1F, accent #2563D9. Rounded corners, Segoe UI Variable, no pure white anywhere. The output and idle screen are always #0B0B0C. Approved mockup: the "ScreenCast Presenter UI" canvas (picker, badge, tray menu, first run, outline, shortcuts, command palette).
+Two themes **(rev 2)**: Light (the default), Dark, or Match Windows. Dark: background #0B0B0C, surfaces #17171A, text #E6E6E6, accent #4C8DFF. Light: background #F3F3F5, surfaces #FAFAFB, text #1B1B1F, accent #2563D9. Rounded corners, Segoe UI Variable, no pure white anywhere. The output and idle screen are always #0B0B0C. Approved mockup: the "ScreenCast Presenter UI" canvas (picker, badge, tray menu, first run, outline, shortcuts, command palette).
 
 | Screen | Contents |
 | --- | --- |

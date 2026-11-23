@@ -15,12 +15,12 @@ internal static class Program
         // Dispatch before anything touches WinForms, so the helper never loads it.
         if (args.Length > 0 && (args[0] == CaptureProtocol.HostSwitch || args[0] == CaptureProtocol.StillSwitch || args[0] == Recording.RecordingProtocol.RecordSwitch))
             return CaptureHost.Run(args);
-        RunApp();
+        RunApp(startedByWindows: args.Contains(StartupRegistration.StartupSwitch));
         return 0;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void RunApp()
+    private static void RunApp(bool startedByWindows)
     {
         // FR-29: a second launch just opens the picker in the running copy.
         using SingleInstance? instance = SingleInstance.TryAcquire();
@@ -49,7 +49,7 @@ internal static class Program
         app.QuitRequested += (_, _) => Application.ExitThread();
         instance.ListenForSecondLaunch(app.OpenPicker);
 
-        app.Start();
+        app.Start(startedByWindows);
         Application.Run();
         Theme.Shutdown();
     }

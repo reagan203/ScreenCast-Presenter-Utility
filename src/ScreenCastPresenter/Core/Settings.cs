@@ -13,6 +13,12 @@ internal sealed class Favourite
 
     /// <summary>Set when the favourite is a whole screen (FR-02): its device name, e.g. "\\.\DISPLAY1".</summary>
     public string? ScreenDevice { get; set; }
+
+    /// <summary>The same source: the same screen, or the same app with the same or a similar title.</summary>
+    public bool Matches(Favourite other) =>
+        ScreenDevice is not null || other.ScreenDevice is not null
+            ? ScreenDevice == other.ScreenDevice
+            : string.Equals(AppName, other.AppName, StringComparison.OrdinalIgnoreCase) && (Title == other.Title || FavouriteMatcher.IsSimilar(Title, other.Title));
 }
 
 /// <summary>Everything SCP remembers (FR-40/41). Unknown JSON fields are ignored, missing ones get defaults.</summary>
@@ -22,11 +28,14 @@ internal sealed class AppSettings
     public const double MaxDim = 0.4;
     public const int MaxMessageLength = 120;
 
-    public int Version { get; set; } = 1;
+    /// <summary>2: light became the default theme (files from version 1 still on the old default move to it once).</summary>
+    public const int CurrentVersion = 2;
+
+    public int Version { get; set; } = CurrentVersion;
     public string? OutputDevice { get; set; }
 
     /// <summary>Stored as text so a value written by a newer version can't make the whole file unreadable.</summary>
-    public string Theme { get; set; } = nameof(ThemeMode.System);
+    public string Theme { get; set; } = nameof(ThemeMode.Light);
 
     public double Dim { get; set; }
     public bool ShowOutline { get; set; } = true;
@@ -54,6 +63,9 @@ internal sealed class AppSettings
 
     /// <summary>Where recordings go; null = Videos\Screen Recordings, like the Snipping Tool (FR-52).</summary>
     public string? RecordingFolder { get; set; }
+
+    /// <summary>The last thing shown (FR-41), so "previous source" works after a restart.</summary>
+    public Favourite? LastSource { get; set; }
 
     /// <summary>"Screen" (fullscreen on OutputDevice) or "Window" (a floating window, FR-11).</summary>
     public string OutputMode { get; set; } = "Screen";
@@ -83,7 +95,7 @@ internal sealed class AppSettings
     [JsonIgnore]
     public ThemeMode ThemeMode
     {
-        get => Enum.TryParse(Theme, ignoreCase: true, out ThemeMode mode) ? mode : ThemeMode.System;
+        get => Enum.TryParse(Theme, ignoreCase: true, out ThemeMode mode) && Enum.IsDefined(mode) ? mode : ThemeMode.Light;
         set => Theme = value.ToString();
     }
 
@@ -91,6 +103,10 @@ internal sealed class AppSettings
     public AppSettings Normalize()
     {
         Dim = double.IsFinite(Dim) ? Math.Clamp(Dim, 0, MaxDim) : 0;
+        // Version 1 defaulted to "Match Windows"; light is the app's theme now. A file from a
+        // newer version is left as it is.
+        if (Version < 2 && string.Equals(Theme, nameof(ThemeMode.System), StringComparison.OrdinalIgnoreCase)) Theme = nameof(ThemeMode.Light);
+        Version = Math.Max(Version, CurrentVersion);
         Theme = ThemeMode.ToString();
         Shortcuts ??= [];
         if (Favourites is null || Favourites.Length != SlotCount)

@@ -98,4 +98,8 @@ internal static class DwmHelpers
 
     /// <summary>Blocks until DWM has composed a frame that includes all changes made so far (at most one refresh).</summary>
     public static void Flush() => _ = PInvoke.DwmFlush();
+
+    /// <summary>Dark or light scroll bars on a scrolling panel (the system draws them light unless told).</summary>
+    public static void SetDarkScrollbars(HWND hwnd, bool dark) =>
+        PInvoke.SetWindowTheme(hwnd, dark ? "DarkMode_Explorer" : "Explorer", null);
 }

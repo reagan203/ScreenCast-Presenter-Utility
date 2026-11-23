@@ -104,6 +104,7 @@ internal sealed class TrayIcon : IDisposable
         _menu.Items.Add(AppearanceMenu());
         _menu.Items.Add(new ToolStripSeparator());
 
+        _menu.Items.Add(Item("Settings…", null, _app.OpenSettings));
         _menu.Items.Add(Item("Keyboard shortcuts…", "cheat-sheet", _app.OpenShortcuts));
         _menu.Items.Add(Check("Pause all shortcuts", _app.ShortcutsPaused, "pause-shortcuts", _app.TogglePauseShortcuts));
         _menu.Items.Add(Check("Show yellow outline", _app.Settings.ShowOutline, "toggle-outline", () => _app.SetShowOutline(!_app.Settings.ShowOutline)));
@@ -280,7 +281,7 @@ internal sealed class TrayIcon : IDisposable
     private ToolStripMenuItem AppearanceMenu()
     {
         ToolStripMenuItem menu = Submenu("Appearance");
-        foreach ((ThemeMode mode, string label) in new[] { (ThemeMode.System, "Match Windows"), (ThemeMode.Dark, "Dark"), (ThemeMode.Light, "Light") })
+        foreach ((ThemeMode mode, string label) in new[] { (ThemeMode.Light, "Light"), (ThemeMode.Dark, "Dark"), (ThemeMode.System, "Match Windows") })
         {
             ThemeMode m = mode;
             ToolStripMenuItem item = Item(label, null, () => _app.SetTheme(m));

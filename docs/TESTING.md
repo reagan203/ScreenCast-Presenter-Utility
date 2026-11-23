@@ -27,6 +27,8 @@ Unit tests cover the logic only, with no windows or displays involved:
   - the recording controller (driven by a fake helper): progress, pause, stop, a crashed helper, a failed start, a disk too full to start, accidental one-second recordings;
   - one real encode on the GPU: three seconds of picture and tone, read back to check size, duration, frame count and both tracks.
 - **Outputs (M5):** virtual displays named "Zoom screen", a real TV chosen before a virtual display, Ctrl+Alt+O cycling, the default and restored floating-window positions, settings round trip and repair; real output windows created on the desktop to check the styles Zoom and privacy rely on (floating: sizable, in the taskbar, not a tool window, not topmost, not excluded from capture; fullscreen: out of Alt+Tab, topmost); the ✕ on the floating window stops showing.
+- **Start with Windows:** enabling, disabling, Task Manager switching it off, repairing the entry after the exe moves (on a throwaway registry key, never the real Run key).
+- **Settings migration:** light became the default theme; version-1 files on the old default move to it once, real choices are kept.
 - **Session controller** (driven by fakes):
   - fades through black, blank and dim;
   - coalescing a thousand switches or blank presses;

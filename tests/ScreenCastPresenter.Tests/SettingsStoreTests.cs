@@ -22,7 +22,7 @@ public sealed class SettingsStoreTests : IDisposable
         AppSettings s = store.Load();
         Assert.Null(store.LoadProblem);
         Assert.True(s.ShowOutline);
-        Assert.Equal(ThemeMode.System, s.ThemeMode);
+        Assert.Equal(ThemeMode.Light, s.ThemeMode); // light is the app's theme by default
         Assert.Equal(9, s.Favourites.Length);
     }
 
@@ -44,6 +44,17 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.Equal("Ctrl+Alt+Shift+B", s.Shortcuts["blank"]);
         Assert.Equal("Deck", s.Favourites[2]!.Title);
         Assert.False(File.Exists(store.FilePath + ".tmp"));
+    }
+
+    [Theory]
+    [InlineData("""{ "Version": 1, "Theme": "System" }""", "Light")]   // the old default moves to light, once
+    [InlineData("""{ "Version": 1, "Theme": "Dark" }""", "Dark")]     // a real choice is kept
+    [InlineData("""{ "Version": 2, "Theme": "System" }""", "System")] // chosen after the change: kept
+    [InlineData("""{ "Version": 7, "Theme": "System" }""", "System")] // newer file: left alone
+    public void Light_became_the_default_theme_without_overriding_real_choices(string json, string expected)
+    {
+        File.WriteAllText(FilePath, json);
+        Assert.Equal(expected, new SettingsStore(FilePath).Load().ThemeMode.ToString());
     }
 
     [Fact]
@@ -142,7 +153,7 @@ public sealed class SettingsStoreTests : IDisposable
         AppSettings s = store.Load();
 
         Assert.Null(store.LoadProblem);
-        Assert.Equal(ThemeMode.System, s.ThemeMode);          // unknown theme → default
+        Assert.Equal(ThemeMode.Light, s.ThemeMode);           // unknown theme → default
         Assert.Equal(AppSettings.MaxDim, s.Dim);              // clamped
         Assert.Equal(AppSettings.SlotCount, s.Favourites.Length); // padded to 9
         Assert.Equal("code", s.Favourites[0]!.AppName);

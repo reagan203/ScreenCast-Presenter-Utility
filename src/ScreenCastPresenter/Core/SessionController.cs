@@ -515,6 +515,17 @@ internal sealed class SessionController : IDisposable
         if (_output is { } output) _engine?.OnOutputResized(output.ClientSize);
     }
 
+    /// <summary>
+    /// After sleep, unlock or a remote-desktop reconnect: re-check the source and the output size
+    /// and let the engine re-sync (a WGC engine that lost its device reports Failed and falls back).
+    /// </summary>
+    public void Refresh()
+    {
+        if (_output is { IsAlive: true } output) _engine?.OnOutputResized(output.ClientSize);
+        _engine?.OnSourceChanged();
+        SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     private void OnSourceChanged(object? sender, EventArgs e)
     {
         if (sender != _watcher) return;

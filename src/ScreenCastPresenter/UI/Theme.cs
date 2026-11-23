@@ -42,7 +42,7 @@ internal static class Theme
         Hex(0x1B1B1F), Hex(0x5F5F68), Hex(0x63636C), Hex(0x2563D9), Hex(0xFAFAFB),
         Hex(0xF2B200), Hex(0xD93036), Hex(0xA86F00), Color.FromArgb(90, 20, 22, 28));
 
-    private static ThemeMode _mode = ThemeMode.System;
+    private static ThemeMode _mode = ThemeMode.Light;
     private static Palette? _current;
     private static SynchronizationContext? _ui;
     private static Font? _uiFont, _titleFont, _smallFont, _boldFont;

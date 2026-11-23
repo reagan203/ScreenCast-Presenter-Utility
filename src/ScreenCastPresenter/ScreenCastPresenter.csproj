@@ -7,6 +7,10 @@
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>ScreenCastPresenter</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>ScreenCast Presenter</Product>
+    <AssemblyTitle>ScreenCast Presenter</AssemblyTitle>
+    <Description>Shows one window, screen or region on a TV, a Zoom screen or a window, privately.</Description>
 
     <!-- Memory budget (NFR-01..03): workstation, non-concurrent GC keeps the heap and thread count small. -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
@@ -15,6 +19,15 @@
          permanent native memory after a busy minute. Compiling once, fully optimised, keeps
          presenting at ~13 MB; startup stays ~420 ms (NFR-07 allows 1 s). See docs/TESTING.md. -->
     <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
+
+  <!-- Release packaging (tools/publish.ps1): one portable exe per architecture. Not compressed:
+       a compressed bundle is unpacked into private memory at start, which would break NFR-01. -->
+  <PropertyGroup Condition="'$(PublishSingleFile)' == 'true'">
+    <SelfContained>true</SelfContained>
+    <DebugType>none</DebugType>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
   <ItemGroup>

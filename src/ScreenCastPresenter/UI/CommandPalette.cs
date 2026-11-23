@@ -174,7 +174,7 @@ internal sealed class CommandPalette : ThemedForm
                 return Task.CompletedTask;
             }));
         }
-        foreach ((ThemeMode mode, string label) in new[] { (ThemeMode.System, "Match Windows"), (ThemeMode.Dark, "Dark"), (ThemeMode.Light, "Light") })
+        foreach ((ThemeMode mode, string label) in new[] { (ThemeMode.Light, "Light"), (ThemeMode.Dark, "Dark"), (ThemeMode.System, "Match Windows") })
         {
             ThemeMode m = mode;
             items.Add(new($"Appearance: {label}", "", null, "theme mode light dark", PaletteKind.Action, () =>
@@ -203,6 +203,17 @@ internal sealed class CommandPalette : ThemedForm
             SourceWindow screen = SourceWindow.ForScreen(m);
             items.Add(new($"Show the whole of Display {m.Number} ({m.ShortName})", "Screen", null, "screen monitor desktop whole", PaletteKind.Action, () => app.PresentAsync(screen)));
         }
+        items.Add(new("Settings", "", null, "preferences options configure startup folder", PaletteKind.Action, () =>
+        {
+            app.OpenSettings();
+            return Task.CompletedTask;
+        }));
+        items.Add(new(app.StartWithWindows ? "Don't start with Windows" : "Start with Windows", "", null, "startup login boot autostart", PaletteKind.Action, () =>
+        {
+            app.SetStartWithWindows(!app.StartWithWindows);
+            return Task.CompletedTask;
+        }));
+
         // Outputs (FR-11, FR-12).
         items.Add(new("Show in a window", "Output", null, "floating zoom share window output", PaletteKind.Action, () =>
         {

@@ -24,11 +24,13 @@ internal sealed class ScpApp : IDisposable
     private readonly SourceOutline _outline;
     private readonly TrayIcon _tray;
     private readonly RecordingController _recording;
+    private readonly StartupRegistration _startup = new(Registry.CurrentUser, Environment.ProcessPath ?? "ScreenCastPresenter.exe");
     private readonly System.Windows.Forms.Timer _trimTimer = new() { Interval = 3000 };
     private List<DisplayMonitor> _monitors;
     private PickerOverlay? _picker;
     private CommandPalette? _palette;
     private ShortcutsForm? _shortcutsForm;
+    private SettingsForm? _settingsForm;
     private FirstRunForm? _firstRun;
     private bool _shortcutsSuspended;
     private bool _duplicateWarned;
@@ -64,6 +66,8 @@ internal sealed class ScpApp : IDisposable
         };
         Theme.Changed += OnThemeChanged;
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        SystemEvents.SessionSwitch += OnSessionSwitch;
         _trimTimer.Tick += (_, _) =>
         {
             _trimTimer.Stop();
@@ -142,15 +146,88 @@ internal sealed class ScpApp : IDisposable
     public OutputOption CurrentOutputOption =>
         (_session.State != SessionState.Off ? _session.OutputIsFloating : Settings.OutputInWindow) ? OutputOption.Window : new OutputOption(ChosenOutput);
 
-    public void Start()
+    /// <param name="startedByWindows">Started at sign-in (FR-42): stay quiet unless something needs attention.</param>
+    public void Start(bool startedByWindows = false)
     {
         _ = _session.SetDimAsync(Settings.Dim);
         ApplyShortcuts(reportProblems: true);
         if (_store.LoadProblem is { } problem) _badge.ShowMessage(problem, BadgeDot.Warning);
         CheckDuplicateDisplay();
         PreparePickerSoon();
+        TryRegistry(() => _startup.RepairPath()); // portable exe moved since "start with Windows" was set
         if (!Settings.FirstRunDone) OpenFirstRun();
-        else Message($"ScreenCast Presenter is running. Press {ActiveShortcut("picker")?.ToString() ?? "the tray icon"} to choose what to show.");
+        else if (!startedByWindows) Message($"ScreenCast Presenter is running. Press {ActiveShortcut("picker")?.ToString() ?? "the tray icon"} to choose what to show.");
+    }
+
+    // ───────────────────────────── start with Windows (FR-42) ─────────────────────────────
+
+    public bool StartWithWindows => TryRegistry(() => _startup.IsEnabled);
+
+    /// <summary>Registered, but switched off in Task Manager › Startup apps.</summary>
+    public bool StartupDisabledInTaskManager => TryRegistry(() => _startup.DisabledInTaskManager);
+
+    public void SetStartWithWindows(bool on)
+    {
+        bool done = TryRegistry(() =>
+        {
+            if (on) _startup.Enable();
+            else _startup.Disable();
+            return true;
+        });
+        if (!done) Message("Windows didn't allow SCP to change its startup setting.", BadgeDot.Warning);
+        else if (on && _startup.DisabledInTaskManager)
+            Message("SCP is switched off in Task Manager › Startup apps. Switch it on there too.", BadgeDot.Warning);
+    }
+
+    private static bool TryRegistry(Func<bool> action)
+    {
+        try
+        {
+            return action();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+        {
+            Debug.WriteLine(ex);
+            return false;
+        }
+    }
+
+    // ───────────────────────────── sleep, lock, remote desktop (SRS 4.4) ─────────────────────────────
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        Diag("power: " + e.Mode);
+        if (e.Mode == PowerModes.Resume) RecoverAfterPause("resume");
+    }
+
+    private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        Diag("session: " + e.Reason);
+        if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect or SessionSwitchReason.RemoteConnect)
+            RecoverAfterPause(e.Reason.ToString());
+    }
+
+    /// <summary>
+    /// The PC woke up, was unlocked, or a remote-desktop session switched: screens may have
+    /// changed, a TV may have been unplugged while asleep, and shortcuts may have been grabbed by
+    /// another app. Re-check everything, a moment later so Windows has settled.
+    /// </summary>
+    private void RecoverAfterPause(string why)
+    {
+        var timer = new System.Windows.Forms.Timer { Interval = 1500 };
+        timer.Tick += (_, _) =>
+        {
+            timer.Dispose();
+            Guard(() =>
+            {
+                Diag("recover: " + why);
+                OnDisplaySettingsChanged(this, EventArgs.Empty);
+                ApplyShortcuts(reportProblems: true);
+                _session.Refresh();
+                UpdateOutline();
+            });
+        };
+        timer.Start();
     }
 
     private void OpenFirstRun()
@@ -730,8 +807,36 @@ internal sealed class ScpApp : IDisposable
 
     private async Task PresentPreviousAsync()
     {
-        if (_session.PreviousSource is { } previous && WindowEnumerator.Refresh(previous) is { } alive) await PresentAsync(alive);
-        else Message("There's no previous window to go back to.");
+        if (_session.PreviousSource is { } previous && WindowEnumerator.Refresh(previous) is { } alive)
+        {
+            await PresentAsync(alive);
+            return;
+        }
+        // FR-41: after a restart, the last thing shown before SCP closed.
+        if (Settings.LastSource is { } last && !(_session.Source is { } now && FavouriteMatcher.FromSource(now).Matches(last)))
+        {
+            if (last.ScreenDevice is { } device && _monitors.FirstOrDefault(m => m.DeviceName == device) is { } screen)
+            {
+                await PresentAsync(SourceWindow.ForScreen(screen));
+                return;
+            }
+            if (last.ScreenDevice is null && FavouriteMatcher.FindBest(last, WindowEnumerator.GetPresentableWindows()) is { } match)
+            {
+                await PresentAsync(match);
+                return;
+            }
+        }
+        Message("There's no previous window to go back to.");
+    }
+
+    /// <summary>FR-41: remember what is shown, so "previous source" can bring it back after a restart.</summary>
+    private void RememberLastSource()
+    {
+        if (_session.State != SessionState.Presenting || _session.Source is not { } source) return;
+        Favourite last = FavouriteMatcher.FromSource(source);
+        if (Settings.LastSource is { } saved && saved.Matches(last) && saved.Title == last.Title) return;
+        Settings.LastSource = last;
+        Save();
     }
 
     private async Task CycleAsync(int direction)
@@ -973,9 +1078,13 @@ internal sealed class ScpApp : IDisposable
         }
     }
 
+    /// <summary>Any setting changed (from the tray, a shortcut or the settings window).</summary>
+    public event EventHandler? SettingsChanged;
+
     private void Save()
     {
         _session.BlankMessage = Settings.BlankMessage;
+        SettingsChanged?.Invoke(this, EventArgs.Empty);
         if (_store.Save())
         {
             _lastSaveProblem = null;
@@ -1081,6 +1190,81 @@ internal sealed class ScpApp : IDisposable
     }
 
     /// <summary>Keyboard shortcuts page and cheat sheet (FR-26).</summary>
+    /// <summary>Settings window (SRS 6.1), optionally at a section. One at a time.</summary>
+    public void OpenSettings() => OpenSettings(SettingsForm.Section.General);
+
+    public void OpenSettings(SettingsForm.Section section)
+    {
+        if (_settingsForm is { IsDisposed: false })
+        {
+            if (_settingsForm.WindowState == FormWindowState.Minimized) _settingsForm.WindowState = FormWindowState.Normal;
+            _settingsForm.Show(section);
+            _settingsForm.Activate();
+            return;
+        }
+        _settingsForm = new SettingsForm(this, section);
+        _settingsForm.FormClosed += (_, _) =>
+        {
+            _settingsForm = null;
+            ScheduleTrim();
+        };
+        if (PresenterScreen() is { } screen)
+        {
+            // On the presenter's screen, never the TV.
+            _settingsForm.StartPosition = FormStartPosition.Manual;
+            Rectangle area = screen.WorkArea;
+            Size size = new(Math.Min((int)(860 * screen.Scale), area.Width - 40), Math.Min((int)(640 * screen.Scale), area.Height - 40));
+            _settingsForm.Bounds = new Rectangle(area.Left + (area.Width - size.Width) / 2, area.Top + (area.Height - size.Height) / 2, size.Width, size.Height);
+        }
+        _settingsForm.Show();
+        _settingsForm.Activate();
+    }
+
+    public void SetBlankMessage(string message)
+    {
+        string before = Settings.BlankMessage;
+        Settings.BlankMessage = message;
+        Settings.Normalize(); // trims, limits the length, restores the default when empty
+        if (Settings.BlankMessage != before) Save();
+    }
+
+    /// <summary>Null = the default folder (Videos\Screen Recordings).</summary>
+    public void SetRecordingFolder(string? folder)
+    {
+        Settings.RecordingFolder = folder;
+        Save();
+    }
+
+    /// <summary>Null = the default folder (Pictures\Screenshots).</summary>
+    public void SetScreenshotFolder(string? folder)
+    {
+        Settings.ScreenshotFolder = folder;
+        Save();
+    }
+
+    public string SettingsFilePath => _store.FilePath;
+
+    public string VersionText =>
+        $"ScreenCast Presenter {typeof(ScpApp).Assembly.GetName().Version?.ToString(3) ?? "1.0.0"} · .NET {Environment.Version} · {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}";
+
+    /// <summary>Opens Explorer at a file (selected) or a folder, creating the folder if needed.</summary>
+    public void ShowInFolder(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) ShellOpen("explorer.exe", $"/select,\"{path}\"");
+            else
+            {
+                Directory.CreateDirectory(path);
+                ShellOpen(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Message(SavedFiles.Explain(ex), BadgeDot.Warning);
+        }
+    }
+
     public void OpenShortcuts()
     {
         if (_shortcutsForm is { IsDisposed: false })
@@ -1124,6 +1308,7 @@ internal sealed class ScpApp : IDisposable
         _picker?.Dismiss();
         _palette?.Close();
         _shortcutsForm?.Close();
+        _settingsForm?.Close();
         _firstRun?.Close();
         await _session.StopAsync();
         if (_recording.IsActive)
@@ -1142,6 +1327,7 @@ internal sealed class ScpApp : IDisposable
     private void OnSessionChanged(bool reveal)
     {
         StopOutputRecordingIfOrphaned();
+        RememberLastSource();
         if (_session.FloatingBounds is { } floating && Settings.FloatingWindow?.ToRectangle() != floating)
         {
             Settings.FloatingWindow = WindowBounds.From(floating); // reopen it where the user left it
@@ -1322,6 +1508,8 @@ internal sealed class ScpApp : IDisposable
     public void Dispose()
     {
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        SystemEvents.SessionSwitch -= OnSessionSwitch;
         Theme.Changed -= OnThemeChanged;
         _trimTimer.Dispose();
         _picker?.Dispose();

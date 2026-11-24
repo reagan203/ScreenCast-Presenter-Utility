@@ -33,4 +33,26 @@ $link.IconLocation = "$target,0"
 $link.Description = 'Show one window, screen or region on a TV, a Zoom screen or a window, privately.'
 $link.Save()
 "Installed $target and the desktop shortcut."
-if ($Start) { Start-Process $target }
+if ($Start) {
+    # Start it through Explorer so it belongs to the desktop session, not to this script: a
+    # process started by a script (or a terminal, or a tool) can be closed when that ends.
+    Start-Process explorer.exe -ArgumentList "`"$target`""
+    "Started ScreenCast Presenter."
+}
+
+# Windows 11 hides new tray icons behind the ^ arrow. Show this one on the taskbar (the same
+# switch as Settings > Personalization > Taskbar > Other system tray icons). The entry appears
+# once the icon has been shown, so wait a little for it.
+$deadline = (Get-Date).AddSeconds(20)
+$pinned = $false
+while (-not $pinned -and (Get-Date) -lt $deadline) {
+    foreach ($key in Get-ChildItem 'HKCU:\Control Panel\NotifyIconSettings' -ErrorAction SilentlyContinue) {
+        if ((Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue).ExecutablePath -eq $target) {
+            Set-ItemProperty $key.PSPath -Name IsPromoted -Value 1 -Type DWord
+            $pinned = $true
+        }
+    }
+    if (-not $pinned) { if ($Start) { Start-Sleep -Seconds 1 } else { break } }
+}
+if ($pinned) { "Tray icon set to always show on the taskbar." }
+elseif ($Start) { "Couldn't find the tray icon entry yet; if it's hidden, open the ^ arrow by the clock and drag it onto the taskbar." }

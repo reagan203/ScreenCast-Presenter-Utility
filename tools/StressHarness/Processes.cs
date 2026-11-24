@@ -6,7 +6,7 @@ using System.Text.Json.Nodes;
 namespace StressHarness;
 
 /// <summary>One measurement of the SCP process.</summary>
-internal sealed record Sample(DateTime Time, double PrivateMb, int Handles, uint Gdi, uint User, double ResponseMs);
+internal sealed record Sample(DateTime Time, double PrivateMb, int Handles, uint Gdi, uint User, double ResponseMs, int Threads = 0);
 
 /// <summary>The SCP app under test, started with throwaway settings and favourites for the test windows.</summary>
 internal sealed class ScpProcess : IDisposable
@@ -118,7 +118,7 @@ internal sealed class ScpProcess : IDisposable
     {
         _process.Refresh();
         return new Sample(DateTime.Now, _process.PrivateMemorySize64 / (1024.0 * 1024.0), _process.HandleCount,
-            Native.GetGuiResources(_process.Handle, 0), Native.GetGuiResources(_process.Handle, 1), ResponseMs());
+            Native.GetGuiResources(_process.Handle, 0), Native.GetGuiResources(_process.Handle, 1), ResponseMs(), _process.Threads.Count);
     }
 
     /// <summary>Visible SCP windows titled as output windows.</summary>

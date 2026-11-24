@@ -314,7 +314,14 @@ internal sealed class RecordingHelperProcess : IRecordingProcess
             {
                 // pipe broken: treated as exit
             }
-            _process.WaitForExit(5000);
+            try
+            {
+                _process.WaitForExit(5000);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+            {
+                // SCP is quitting and already let go of the helper (it finishes the file by itself)
+            }
             LineReceived?.Invoke(null);
         }) { IsBackground = true, Name = "SCP recording replies" }.Start();
     }

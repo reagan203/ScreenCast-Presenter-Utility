@@ -231,6 +231,10 @@ internal static partial class Program
             Native.TopLevelWindows(scp.Id, visibleOnly: true).FirstOrDefault(h => Native.Title(h) == "ScreenCast Presenter now showing");
     }
 
+    /// <summary>The output is a floating window (smaller than the output screen), not fullscreen.</summary>
+    private static bool IsFloatingWindow(nint hwnd) =>
+        Native.GetWindowRect(hwnd, out Native.RECT r) && (r.Right - r.Left < _outputScreen.Width || r.Bottom - r.Top < _outputScreen.Height);
+
     private static bool WaitFor(Func<bool> condition, int timeoutMs)
     {
         var clock = Stopwatch.StartNew();
@@ -488,6 +492,12 @@ internal static partial class Program
         Native.CtrlAlt('1'); Wait(500); Native.CtrlAlt('2'); Wait(500);
         Native.CtrlAlt('B'); Wait(300); Native.CtrlAlt('B'); Wait(300);
         Native.CtrlAlt('P'); Wait(700); Native.Chord(Native.VK_ESCAPE); Wait(300);
+        // First-use costs that would otherwise look like growth: the clipboard (first screenshot)
+        // and a captioned window with a system menu (the floating output).
+        Native.CtrlAltShift('S'); Wait(2500);
+        if (Directory.Exists(scp.ScreenshotDir)) foreach (string shot in Directory.GetFiles(scp.ScreenshotDir)) File.Delete(shot);
+        for (int i = 0; i < 6 && !(scp.OutputWindows() is [var w] && IsFloatingWindow(w)); i++) { Native.CtrlAlt('O'); Wait(700); }
+        for (int i = 0; i < 6 && scp.OutputWindows() is [var f] && IsFloatingWindow(f); i++) { Native.CtrlAlt('O'); Wait(700); }
         Native.CtrlAlt('S'); Wait(4000);
         Sample baseline = scp.Measure() with { PrivateMb = scp.SettledMb() };
         Samples.Add(baseline);
@@ -507,9 +517,16 @@ internal static partial class Program
         if (scp.HasExited) return;
 
         Sample end = scp.Measure() with { PrivateMb = scp.SettledMb() };
+        // .NET retires idle worker threads ~20 s after a busy spell, and each takes its handles
+        // with it. Growth that is still receding isn't a leak: give it up to 30 s to settle.
+        for (int i = 0; i < 10 && end.Handles > baseline.Handles * 1.02 + 30; i++)
+        {
+            Wait(3000);
+            end = scp.Measure() with { PrivateMb = end.PrivateMb };
+        }
         Samples.Add(end);
         double growth = end.PrivateMb - baseline.PrivateMb;
-        Console.WriteLine($"    memory {baseline.PrivateMb:F1} → {end.PrivateMb:F1} MB, handles {baseline.Handles} → {end.Handles}, GDI {baseline.Gdi} → {end.Gdi}, USER {baseline.User} → {end.User}");
+        Console.WriteLine($"    memory {baseline.PrivateMb:F1} → {end.PrivateMb:F1} MB, handles {baseline.Handles} → {end.Handles}, threads {baseline.Threads} → {end.Threads}, GDI {baseline.Gdi} → {end.Gdi}, USER {baseline.User} → {end.User}");
         Check(growth < memoryBudgetMb, $"{name}: memory grew {growth:F1} MB (budget {memoryBudgetMb} MB)");
         Check(end.Handles <= baseline.Handles * 1.02 + 30, $"{name}: handles grew {baseline.Handles} → {end.Handles}");
         Check(end.Gdi <= baseline.Gdi * 1.02 + 10, $"{name}: GDI objects grew {baseline.Gdi} → {end.Gdi}");
@@ -572,9 +589,9 @@ internal static partial class Program
 
     private static void WriteCsv()
     {
-        var csv = new StringBuilder("time,private_mb,handles,gdi,user,response_ms\n");
+        var csv = new StringBuilder("time,private_mb,handles,threads,gdi,user,response_ms\n");
         foreach (Sample s in Samples)
-            csv.AppendLine(string.Create(CultureInfo.InvariantCulture, $"{s.Time:O},{s.PrivateMb:F2},{s.Handles},{s.Gdi},{s.User},{s.ResponseMs:F1}"));
+            csv.AppendLine(string.Create(CultureInfo.InvariantCulture, $"{s.Time:O},{s.PrivateMb:F2},{s.Handles},{s.Threads},{s.Gdi},{s.User},{s.ResponseMs:F1}"));
         string path = Path.Combine(AppContext.BaseDirectory, $"stress-{DateTime.Now:yyyyMMdd-HHmmss}.csv");
         File.WriteAllText(path, csv.ToString());
         Console.WriteLine($"Samples: {path}");

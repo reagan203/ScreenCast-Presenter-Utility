@@ -321,6 +321,7 @@ internal sealed class ScpApp : IDisposable
 
     public async Task PresentAsync(SourceWindow source)
     {
+        if (!await EnsureTvIsSeparateAsync()) return; // a TV copying this screen would show everything
         if (_session.State == SessionState.Off) await OfferNewScreenAsync(); // plugged in since: show on it, not in the window
         OutputPlacement? placement = ChosenPlacement;
         if (placement is null)
@@ -2311,9 +2312,59 @@ internal sealed class ScpApp : IDisposable
             duplicated = false;
         }
         if (duplicated && !_duplicateWarned)
-            _badge.ShowMessage("Your TV is copying this screen, so the audience sees everything. Press Win+P and choose Extend.", BadgeDot.Warning);
+            Message("Your TV is copying your whole screen, so everyone sees every window on it.", BadgeDot.Warning,
+                Button("Show only my choice on the TV", MakeTvSeparateAsync));
         _duplicateWarned = duplicated;
         IsDisplayDuplicated = duplicated;
+    }
+
+    /// <summary>
+    /// Privacy first: a TV that copies the presenter's screen (Windows' "Duplicate") shows everything
+    /// on it, whatever the app does. Before anything is shown, offer to make the TV a screen of its
+    /// own; nothing is shown while it still copies. False when showing should not go ahead.
+    /// </summary>
+    private async Task<bool> EnsureTvIsSeparateAsync()
+    {
+        CheckDuplicateDisplay();
+        if (!IsDisplayDuplicated) return true;
+        if (!ConfirmForm.Ask("Your TV is copying your whole screen",
+                "Everyone watching the TV sees everything on your screen: every window, not only what you choose. Make the TV a separate screen, so it shows only your choice?",
+                "Show only my choice on the TV", "Don't show anything"))
+        {
+            Message("Nothing was shown: your TV is still copying your whole screen.", BadgeDot.Warning,
+                Button("Show only my choice on the TV", MakeTvSeparateAsync));
+            return false;
+        }
+        return await MakeTvSeparateAsync();
+    }
+
+    /// <summary>Switches Windows to "Extend" and puts the presentation full screen on the TV. True when the TV no longer copies.</summary>
+    private async Task<bool> MakeTvSeparateAsync()
+    {
+        var before = _monitors.Select(m => m.DeviceName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool asked = DisplayHelpers.ExtendDisplays();
+        // Windows takes a moment to switch (the screens flicker); wait up to six seconds.
+        for (int i = 0; asked && i < 40; i++)
+        {
+            await Task.Delay(150);
+            List<DisplayMonitor> now = DisplayHelpers.GetMonitors();
+            if (now.Count > before.Count && !DisplayHelpers.IsAnyScreenDuplicated())
+            {
+                _monitors = now;
+                break;
+            }
+        }
+        CheckDuplicateDisplay();
+        if (!asked || IsDisplayDuplicated || OutputChooser.SeparatedTv(_monitors, before) is not { } tv)
+        {
+            Message("Windows didn't make the TV a separate screen. Press Win+P and choose Extend.", BadgeDot.Warning,
+                Button("Open display settings", () => ShellOpen("ms-settings:display")));
+            return false;
+        }
+        RememberWindowModeScreens(); // the TV isn't "new" any more: don't offer it twice
+        await SetOutputMonitorAsync(tv, quiet: true);
+        Message($"Your TV ({tv.Name}) is now a separate screen: it shows only what you choose.", BadgeDot.Accent);
+        return true;
     }
 
     /// <summary>Runs a UI callback; any exception becomes a message instead of a crash.</summary>

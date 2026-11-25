@@ -89,6 +89,7 @@ GetWindowDisplayAffinity
 EVENT_OBJECT_CREATE
 EVENT_OBJECT_SHOW
 QueryDisplayConfig
+SetDisplayConfig
 GetDisplayConfigBufferSizes
 DisplayConfigGetDeviceInfo
 DISPLAYCONFIG_TARGET_DEVICE_NAME

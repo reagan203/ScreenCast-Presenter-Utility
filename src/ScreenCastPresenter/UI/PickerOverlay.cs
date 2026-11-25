@@ -286,7 +286,7 @@ internal sealed class PickerOverlay : ThemedForm
         BuildScreens();
         UpdateShowButton();
         UpdateHints();
-        _banner.Text = "⚠  Your TV is copying this screen, so the audience sees everything. Press Win+P and choose Extend.";
+        _banner.Text = "⚠  Your TV is copying your whole screen. When you choose what to show, you'll be offered to make the TV show only that.";
         _banner.Visible = _app.IsDisplayDuplicated;
     }
 

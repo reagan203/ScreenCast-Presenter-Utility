@@ -95,18 +95,26 @@ internal static class DisplayHelpers
     /// True when any screen is duplicated onto another (Windows "Duplicate" mode). Then the TV
     /// shows the presenter's whole screen and SCP cannot keep anything private.
     /// </summary>
-    public static bool IsAnyScreenDuplicated()
+    public static bool IsAnyScreenDuplicated() =>
+        IsCloned(QueryActivePaths().Select(p => (p.sourceInfo.adapterId.LowPart, p.sourceInfo.adapterId.HighPart, p.sourceInfo.id)));
+
+    /// <summary>Two active paths (screens) fed by the same source = one picture on two screens (Windows' "Duplicate").</summary>
+    public static bool IsCloned(IEnumerable<(uint AdapterLow, int AdapterHigh, uint SourceId)> activeSources)
     {
-        DISPLAYCONFIG_PATH_INFO[] paths = QueryActivePaths();
-        var sources = new HashSet<(uint Low, int High, uint Id)>();
-        foreach (DISPLAYCONFIG_PATH_INFO p in paths)
+        var seen = new HashSet<(uint, int, uint)>();
+        foreach ((uint, int, uint) source in activeSources)
         {
-            // Two active paths (targets) fed by the same source = one picture on two screens.
-            if (!sources.Add((p.sourceInfo.adapterId.LowPart, p.sourceInfo.adapterId.HighPart, p.sourceInfo.id)))
-                return true;
+            if (!seen.Add(source)) return true;
         }
         return false;
     }
+
+    /// <summary>
+    /// Switches Windows from "Duplicate" to "Extend", exactly what Win+P › Extend does: the TV
+    /// becomes a screen of its own that shows only what's put on it. True if Windows accepted it.
+    /// </summary>
+    public static unsafe bool ExtendDisplays() =>
+        PInvoke.SetDisplayConfig(0, null, 0, null, SET_DISPLAY_CONFIG_FLAGS.SDC_TOPOLOGY_EXTEND | SET_DISPLAY_CONFIG_FLAGS.SDC_APPLY) == 0;
 
     private static unsafe bool TryDescribe(HMONITOR hmon, Dictionary<string, (string Name, string Connection)>? names,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out DisplayMonitor? monitor)

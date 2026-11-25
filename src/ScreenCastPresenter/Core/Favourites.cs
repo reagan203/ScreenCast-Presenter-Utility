@@ -85,6 +85,19 @@ internal static class OutputChooser
     }
 
     /// <summary>
+    /// After a copying TV was made a separate screen: the screen to show on. The one that wasn't
+    /// there before, a TV first; otherwise any TV or other screen that isn't the main one. Never a
+    /// virtual (Zoom) screen. Null when there's still only one screen.
+    /// </summary>
+    public static DisplayMonitor? SeparatedTv(IReadOnlyList<DisplayMonitor> monitors, IReadOnlySet<string> before)
+    {
+        if (monitors.Count < 2) return null;
+        var candidates = monitors.Where(m => !m.IsVirtual).ToList();
+        return candidates.Where(m => !before.Contains(m.DeviceName)).OrderBy(m => m.IsTv ? 0 : 1).ThenBy(m => m.IsPrimary ? 1 : 0).FirstOrDefault()
+               ?? candidates.Where(m => !m.IsPrimary).OrderBy(m => m.IsTv ? 0 : 1).FirstOrDefault();
+    }
+
+    /// <summary>
     /// Set to show in a window, but a screen has been plugged in since that choice (an HDMI TV or
     /// projector): that screen, so the presentation can move onto it instead of the TV just
     /// showing an ordinary extended desktop. A TV before another monitor; never a virtual screen

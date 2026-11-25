@@ -9,15 +9,19 @@ internal sealed class SingleInstance : IDisposable
 {
     private const string MutexName = @"Local\ScreenCastPresenter.Instance";
     private const string SignalName = @"Local\ScreenCastPresenter.OpenPicker";
+    private const string QuitName = @"Local\ScreenCastPresenter.Quit";
 
     private readonly Mutex _mutex;
     private readonly EventWaitHandle? _signal;
+    private readonly EventWaitHandle? _quit;
     private RegisteredWaitHandle? _wait;
+    private RegisteredWaitHandle? _quitWait;
 
-    private SingleInstance(Mutex mutex, EventWaitHandle? signal)
+    private SingleInstance(Mutex mutex, EventWaitHandle? signal, EventWaitHandle? quit)
     {
         _mutex = mutex;
         _signal = signal;
+        _quit = quit;
     }
 
     /// <summary>
@@ -52,7 +56,36 @@ internal sealed class SingleInstance : IDisposable
         }
 
         var signal = new EventWaitHandle(false, EventResetMode.AutoReset, SignalName);
-        return new SingleInstance(mutex, signal);
+        var quit = new EventWaitHandle(false, EventResetMode.AutoReset, QuitName);
+        return new SingleInstance(mutex, signal, quit);
+    }
+
+    /// <summary>
+    /// Uninstalling from Settings › Apps: ask the running copy (if any) to quit as if Quit was
+    /// chosen (a recording is finished and saved first), and wait until it has. True when no copy
+    /// is running any more.
+    /// </summary>
+    public static bool AskRunningCopyToQuit(TimeSpan wait)
+    {
+        if (!Mutex.TryOpenExisting(MutexName, out Mutex? running)) return true;
+        using (running)
+        {
+            if (EventWaitHandle.TryOpenExisting(QuitName, out EventWaitHandle? quit))
+            {
+                quit.Set();
+                quit.Dispose();
+            }
+            try
+            {
+                if (!running.WaitOne(wait)) return false;
+            }
+            catch (AbandonedMutexException)
+            {
+                // It ended without releasing the mutex; it's gone either way.
+            }
+            running.ReleaseMutex();
+            return true;
+        }
     }
 
     /// <summary>Calls <paramref name="onSignal"/> on the UI thread whenever another launch signals us.</summary>
@@ -63,10 +96,20 @@ internal sealed class SingleInstance : IDisposable
         _wait = ThreadPool.RegisterWaitForSingleObject(_signal, (_, _) => ui.Post(_ => onSignal(), null), null, Timeout.Infinite, executeOnlyOnce: false);
     }
 
+    /// <summary>Calls <paramref name="onQuit"/> on the UI thread when an uninstall asks this copy to quit.</summary>
+    public void ListenForQuit(Action onQuit)
+    {
+        if (_quit is null) return;
+        SynchronizationContext ui = SynchronizationContext.Current ?? throw new InvalidOperationException("Call from the UI thread.");
+        _quitWait = ThreadPool.RegisterWaitForSingleObject(_quit, (_, _) => ui.Post(_ => onQuit(), null), null, Timeout.Infinite, executeOnlyOnce: true);
+    }
+
     public void Dispose()
     {
         _wait?.Unregister(null);
+        _quitWait?.Unregister(null);
         _signal?.Dispose();
+        _quit?.Dispose();
         try
         {
             _mutex.ReleaseMutex();

@@ -88,11 +88,14 @@ internal sealed class CardGrid : Control
 
     private int Scaled(int logical) => LogicalToDeviceUnits(logical);
 
+    /// <summary>Caption space grows with Settings › Appearance › Text size, so larger text isn't clipped.</summary>
+    private int TextScaled(int logical) => LogicalToDeviceUnits((int)Math.Round(logical * Theme.TextScale));
+
     private int CardHeight()
     {
         int width = CardWidth();
         int thumbHeight = (width - 2 * Scaled(Pad)) * 10 / 16;
-        return Scaled(Pad) * 2 + thumbHeight + Scaled(LabelHeight);
+        return Scaled(Pad) * 2 + thumbHeight + TextScaled(LabelHeight);
     }
 
     private int CardWidth() => Math.Max(1, (ContentWidth - Scaled(Gap) * (_columns - 1)) / _columns);
@@ -217,11 +220,11 @@ internal sealed class CardGrid : Control
             }
 
             int labelTop = area.Bottom + Scaled(8);
-            var badge = new RectangleF(card.Left + Scaled(10), labelTop + Scaled(8), Scaled(20), Scaled(20));
+            var badge = new RectangleF(card.Left + Scaled(10), labelTop + TextScaled(8), Scaled(20), Scaled(20));
             Draw.LetterBadge(g, w.AppName, badge, _letterFont!);
             int textLeft = (int)badge.Right + Scaled(8);
-            var titleRect = new Rectangle(textLeft, labelTop, card.Right - textLeft - Scaled(8), Scaled(20));
-            var appRect = new Rectangle(textLeft, labelTop + Scaled(19), titleRect.Width, Scaled(18));
+            var titleRect = new Rectangle(textLeft, labelTop, card.Right - textLeft - Scaled(8), TextScaled(20));
+            var appRect = new Rectangle(textLeft, labelTop + TextScaled(19), titleRect.Width, TextScaled(18));
             Draw.Text(g, w.Title, _titleFont!, titleRect, p.Text);
             Draw.Text(g, w.AppName, _appFont!, appRect, p.TextDim);
         }
@@ -239,10 +242,10 @@ internal sealed class CardGrid : Control
     private void EnsureFonts()
     {
         if (_titleFont is not null) return;
-        _titleFont = new Font(Theme.UiFont.FontFamily, 9.75f, FontStyle.Bold);
-        _appFont = new Font(Theme.UiFont.FontFamily, 9f);
-        _chipFont = new Font(Theme.UiFont.FontFamily, 9f);
-        _letterFont = new Font(Theme.UiFont.FontFamily, 8.25f, FontStyle.Bold);
+        _titleFont = Theme.NewFont(9.75f, FontStyle.Bold);
+        _appFont = Theme.NewFont(9f);
+        _chipFont = Theme.NewFont(9f);
+        _letterFont = Theme.NewFont(8.25f, FontStyle.Bold);
     }
 
     private int HitTest(Point p)

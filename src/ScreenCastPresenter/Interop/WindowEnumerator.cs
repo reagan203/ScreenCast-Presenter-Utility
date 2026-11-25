@@ -25,7 +25,7 @@ internal sealed record SourceWindow(nint Handle, string Title, string AppName, b
         other is not null && (IsScreen ? other.Screen?.DeviceName == Screen!.DeviceName && other.IsScreen : !other.IsScreen && other.Handle == Handle);
 
     public static SourceWindow ForScreen(DisplayMonitor screen) =>
-        new(0, $"Display {screen.Number} · {screen.ShortName}", "Screen", false) { Screen = screen };
+        new(0, $"{screen.Name} · {screen.ShortName}", "Screen", false) { Screen = screen };
 
     public override string ToString() => Title;
 }

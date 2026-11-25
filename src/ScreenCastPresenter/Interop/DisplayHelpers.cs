@@ -47,9 +47,12 @@ internal sealed record DisplayMonitor(
         : Connection == "Built-in" ? "This screen"
         : IsTv ? $"TV · {Connection}"
         : FriendlyName.Length > 0 ? FriendlyName
-        : $"Display {Number}";
+        : $"Screen {Number}";
 
-    public string Label => $"Display {Number} · {ShortName} · {Bounds.Width} × {Bounds.Height}{(IsPrimary ? " (main)" : "")}";
+    /// <summary>"Screen 2": the one word for a screen everywhere in SCP (Windows' own number, as Identify shows it).</summary>
+    public string Name => $"Screen {Number}";
+
+    public string Label => $"{Name}{(ShortName == Name ? "" : " · " + ShortName)} · {Bounds.Width} × {Bounds.Height}{(IsPrimary ? " (main)" : "")}";
 
     /// <summary>Same physical screen (device name), even if its resolution changed.</summary>
     public bool IsSameScreen(DisplayMonitor? other) => other is not null && other.DeviceName == DeviceName;

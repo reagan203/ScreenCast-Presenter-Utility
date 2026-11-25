@@ -17,7 +17,7 @@ internal sealed class ShortcutsForm : ThemedForm
     private readonly Label _title = new() { Text = "Keyboard shortcuts", AutoSize = true };
     private readonly Label _summary = new() { AutoSize = true };
     private readonly ShortcutList _list;
-    private readonly Font _titleFont = new(Theme.UiFont.FontFamily, 15f, FontStyle.Bold);
+    private readonly Font _titleFont = Theme.NewFont(15f, FontStyle.Bold);
 
     public ShortcutsForm(ScpApp app)
     {

@@ -117,7 +117,7 @@ public class ShortcutResolverTests
         Assert.Equal(ShortcutStatus.Pending, Find(list, "picker").Status);
         ShortcutBinding stop = Find(list, "stop");
         Assert.Equal(ShortcutStatus.Taken, stop.Status);
-        Assert.Contains("Open the picker", stop.Note);
+        Assert.Contains("Choose what to show", stop.Note);
     }
 
     [Fact]

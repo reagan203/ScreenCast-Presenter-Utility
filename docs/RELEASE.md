@@ -23,6 +23,8 @@ Measured on the development laptop (x64 single-file build): idle at 15.3 MB priv
 
 ## Install on this PC
 
+For people who download the exe: running it shows "Add to the Start menu and desktop" in the first-run window (on by default) and in Settings › General. It installs to the same folder as the script below, with Start menu and desktop shortcuts and an entry in Settings › Apps for uninstalling. A newer download offers to replace the installed copy. Only a published single-file exe offers this, never a development build.
+
 `.\tools\install.ps1` copies the exe to `%LOCALAPPDATA%\Programs\ScreenCast Presenter\` (no admin rights needed) and puts a "ScreenCast Presenter" shortcut on the desktop. Run it again to update: it waits until you quit SCP from the tray (it never closes it for you), and the shortcut, settings and start-with-Windows entry all stay. `-Start` starts it afterwards.
 
 ## Sign

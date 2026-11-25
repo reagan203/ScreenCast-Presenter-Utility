@@ -210,7 +210,7 @@ internal sealed class SearchBox : Panel
         {
             BorderStyle = BorderStyle.None,
             PlaceholderText = placeholder,
-            Font = new Font(Theme.UiFont.FontFamily, 11f),
+            Font = Theme.NewFont(11f),
             AccessibleName = placeholder,
         };
         Controls.Add(Box);

@@ -9,7 +9,9 @@ namespace ScreenCastPresenter.Output;
 /// <summary>
 /// The black window the capture engine draws into: borderless and fullscreen on the TV or a
 /// virtual "Zoom screen" (FR-10, FR-12), or a floating, resizable, dark-framed window on the
-/// presenter's screen that Zoom can share by name (FR-11).
+/// presenter's screen that Zoom can share by name (FR-11). The floating window takes the shape of
+/// what it shows (no black bars), keeps it while resized, has only a close button (✕ stops
+/// showing), and a double-click on it takes the presenter to what it shows.
 /// Life cycle (NFR-12): created cloaked → painted black → engine attaches at opacity 0 →
 /// <see cref="Reveal"/> → engine fades in. When no source is attached it is the idle screen (FR-16).
 /// It is deliberately NOT excluded from capture: Zoom must be able to see it (FR-14).
@@ -19,12 +21,16 @@ internal sealed class OutputWindow : Form, IOutputSurface
 {
     private const int WM_MOUSEACTIVATE = 0x0021;
     private const int MA_NOACTIVATE = 3;
+    private const int WM_SIZING = 0x0214, WM_ENTERSIZEMOVE = 0x0231, WM_EXITSIZEMOVE = 0x0232;
 
     private readonly bool _topMost;
     private readonly bool _floating;
     private string? _message;
     private double _messageBrightness;
     private Font? _messageFont;
+    private readonly System.Windows.Forms.Timer? _fitTimer;
+    private Size? _content;
+    private bool _inSizeMove;
 
     public OutputWindow(OutputPlacement placement)
     {
@@ -39,7 +45,18 @@ internal sealed class OutputWindow : Form, IOutputSurface
         {
             // A normal window: in the taskbar and Alt+Tab, so it can be found and so Zoom lists it.
             FormBorderStyle = FormBorderStyle.Sizable;
+            // Only ✕ (which stops showing): minimised, Zoom would share nothing; maximised, it
+            // would cover the presenter's work. It takes the shape of what it shows instead.
+            MinimizeBox = false;
+            MaximizeBox = false;
             ShowInTaskbar = true;
+            // A source resizing many times a second reshapes the window at most every 150 ms.
+            _fitTimer = new System.Windows.Forms.Timer { Interval = 150 };
+            _fitTimer.Tick += (_, _) =>
+            {
+                _fitTimer.Stop();
+                FitToContent();
+            };
             Icon = AppIcon.Shared; // its taskbar button, and Zoom's window list
             MinimumSize = OutputPlacement.MinimumWindow;
             Bounds = placement.Window!.Value;
@@ -83,6 +100,63 @@ internal sealed class OutputWindow : Form, IOutputSurface
     public bool IsMinimized => WindowState == FormWindowState.Minimized;
 
     public bool IsPrivatePreview { get; private set; }
+
+    public event EventHandler? DoubleClicked;
+
+    public void StepBack(bool back)
+    {
+        if (!_floating || !IsAlive) return;
+        const SET_WINDOW_POS_FLAGS Flags = SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
+            SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER;
+        var hwnd = (HWND)Handle;
+        if (back)
+        {
+            // Behind everything, but still open: a meeting sharing it keeps sharing it.
+            Windows.Win32.PInvoke.SetWindowPos(hwnd, (HWND)(nint)(-2), 0, 0, 0, 0, Flags); // not on top any more
+            Windows.Win32.PInvoke.SetWindowPos(hwnd, (HWND)(nint)1, 0, 0, 0, 0, Flags);   // to the bottom
+        }
+        else
+        {
+            Windows.Win32.PInvoke.SetWindowPos(hwnd, _topMost ? (HWND)(nint)(-1) : (HWND)(nint)0, 0, 0, 0, 0, Flags);
+        }
+    }
+
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+        if (e.Button == MouseButtons.Left) DoubleClicked?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void SetContentAspect(Size? content)
+    {
+        if (!_floating || _fitTimer is null) return;
+        if (content is { Width: <= 0 } or { Height: <= 0 }) content = null;
+        if (content is not { } next) return; // nothing shown: keep the current shape
+        bool first = _content is null;
+        bool same = _content is { } previous && FloatingFit.SameShape(next, previous);
+        _content = next;
+        if (same) return;
+        if (first)
+        {
+            FitToContent(); // before it is revealed: never seen with black bars
+            return;
+        }
+        _fitTimer.Stop();
+        _fitTimer.Start();
+    }
+
+    /// <summary>Same width, height following the content (or less tall when that wouldn't fit the screen); stays on screen.</summary>
+    private void FitToContent()
+    {
+        if (!IsAlive || _inSizeMove || WindowState != FormWindowState.Normal || _content is not { } content) return;
+        Size nonClient = Size - ClientSize;
+        Rectangle work = Screen.FromHandle(Handle).WorkingArea;
+        Size client = FloatingFit.Client(ClientSize, content,
+            new Size(MinimumSize.Width - nonClient.Width, MinimumSize.Height - nonClient.Height),
+            new Size(work.Width - nonClient.Width, work.Height - nonClient.Height));
+        if (client == ClientSize) return;
+        Bounds = FloatingFit.KeepOn(new Rectangle(Location, client + nonClient), work);
+    }
 
     public void SetPrivatePreview(bool on)
     {
@@ -161,6 +235,7 @@ internal sealed class OutputWindow : Form, IOutputSurface
         DwmHelpers.SetCloaked(hwnd, true);
         DwmHelpers.ApplyFrame(hwnd, dark: true, roundCorners: _floating); // dark title bar on the floating window (NFR-11)
         DwmHelpers.MakeBareSurface(hwnd);
+        if (_floating && _content is not null) FitToContent(); // a shape given before the window existed
     }
 
     protected override void OnHandleDestroyed(EventArgs e)
@@ -226,12 +301,46 @@ internal sealed class OutputWindow : Form, IOutputSurface
             m.Result = MA_NOACTIVATE;
             return;
         }
+        if (_floating)
+        {
+            switch (m.Msg)
+            {
+                case WM_ENTERSIZEMOVE:
+                    _inSizeMove = true;
+                    break;
+                case WM_EXITSIZEMOVE:
+                    _inSizeMove = false;
+                    break;
+                case WM_SIZING when _content is { } content:
+                    KeepShapeWhileSizing(ref m, content);
+                    return;
+            }
+        }
         base.WndProc(ref m);
+    }
+
+    /// <summary>Dragging an edge or corner keeps the shape of what is shown.</summary>
+    private unsafe void KeepShapeWhileSizing(ref Message m, Size content)
+    {
+        var rect = (RECT*)m.LParam;
+        var window = Rectangle.FromLTRB(rect->left, rect->top, rect->right, rect->bottom);
+        Size nonClient = Size - ClientSize;
+        Rectangle fitted = FloatingFit.Sizing(window, (int)m.WParam, nonClient, content,
+            new Size(MinimumSize.Width - nonClient.Width, MinimumSize.Height - nonClient.Height));
+        rect->left = fitted.Left;
+        rect->top = fitted.Top;
+        rect->right = fitted.Right;
+        rect->bottom = fitted.Bottom;
+        m.Result = 1;
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _messageFont?.Dispose();
+        if (disposing)
+        {
+            _messageFont?.Dispose();
+            _fitTimer?.Dispose();
+        }
         base.Dispose(disposing);
     }
 }

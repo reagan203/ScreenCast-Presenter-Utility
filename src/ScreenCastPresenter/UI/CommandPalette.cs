@@ -4,14 +4,15 @@ using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace ScreenCastPresenter.UI;
 
-internal enum PaletteKind { Action, Window }
+internal enum PaletteKind { Action, Window, Help }
 
 /// <summary>One thing the palette can run.</summary>
-internal sealed record PaletteItem(string Title, string Detail, string? Shortcut, string Keywords, PaletteKind Kind, Func<Task> Run);
+internal sealed record PaletteItem(string Title, string Detail, string? Shortcut, string Keywords, PaletteKind Kind, Func<Task> Run, char? Icon = null);
 
 /// <summary>
-/// Command palette (FR-25, Ctrl+Alt+Space): type the name of any action or window and press
-/// Enter. Everything SCP can do is reachable here, so no one has to remember every shortcut.
+/// Search and help (FR-25, the command palette): type the name of any action or window, or a
+/// question, and press Enter. Everything SCP can do is reachable here, so no one has to remember
+/// every shortcut. "How do I…?" topics come first; choosing one does the thing it asks about.
 /// </summary>
 internal sealed class CommandPalette : ThemedForm
 {
@@ -19,7 +20,7 @@ internal sealed class CommandPalette : ThemedForm
 
     private readonly ScpApp _app;
     private readonly DisplayMonitor _screen;
-    private readonly SearchBox _search = new("Type a command or window name") { Hint = "Esc" };
+    private readonly SearchBox _search = new("Type what you want to do, like “share in Zoom”") { Hint = "Esc" };
     private readonly ResultList _list = new();
     private readonly Label _footer = new() { AutoSize = false, TextAlign = ContentAlignment.MiddleLeft };
     private readonly List<PaletteItem> _items;
@@ -30,7 +31,7 @@ internal sealed class CommandPalette : ThemedForm
         _app = app;
         _screen = screen;
         _items = BuildItems(app);
-        Text = "ScreenCast Presenter command palette";
+        Text = "ScreenCast Presenter search and help";
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -142,8 +143,11 @@ internal sealed class CommandPalette : ThemedForm
         var items = new List<PaletteItem>();
         string? Key(string id) => app.ActiveShortcut(id)?.ToString();
 
+        foreach (HelpTopic topic in HelpTopics.All)
+            items.Add(new(topic.Question, topic.Answer, null, "how help " + topic.Keywords, PaletteKind.Help, () => app.RunCommandAsync(topic.Command), Icons.Help));
+
         foreach (ShortcutAction action in ShortcutCatalog.All.Where(a => a.Available && a.Group != ShortcutGroup.Favourites && a.Id != "palette"))
-            items.Add(new(action.Name, "", Key(action.Id), action.Keywords, PaletteKind.Action, () => app.RunAsync(action.Id)));
+            items.Add(new(action.Name, "", Key(action.Id), action.Keywords, PaletteKind.Action, () => app.RunAsync(action.Id), Icons.ForCommand(action.Id)));
 
         for (int slot = 1; slot <= AppSettings.SlotCount; slot++)
         {
@@ -188,20 +192,25 @@ internal sealed class CommandPalette : ThemedForm
             app.SetShowCursor(!app.Settings.ShowCursor);
             return Task.CompletedTask;
         }));
-        items.Add(new("Capture engine: automatic", app.Session.EngineName is { } e1 ? $"in use: {e1}" : "", null, "dwm wgc engine capture", PaletteKind.Action, () =>
+        items.Add(new(app.Settings.PreferWgc ? "Windows: back to automatic (least memory)" : "Windows: always show the pointer and keep a minimised window's picture", "", null,
+            "dwm wgc engine capture pointer minimised", PaletteKind.Action, () =>
         {
-            app.SetCaptureEngine(false);
+            app.SetCaptureEngine(!app.Settings.PreferWgc);
             return Task.CompletedTask;
         }));
-        items.Add(new("Capture engine: always Windows Graphics Capture", "", null, "dwm wgc engine capture", PaletteKind.Action, () =>
+        foreach ((float scale, string label) in TextSize.Choices)
         {
-            app.SetCaptureEngine(true);
-            return Task.CompletedTask;
-        }));
+            float value = scale;
+            items.Add(new($"Text size: {label}", Math.Abs(app.Settings.TextSize - scale) < 0.01 ? "current" : "", null, "text size bigger larger font read", PaletteKind.Action, () =>
+            {
+                app.SetTextSize(value);
+                return Task.CompletedTask;
+            }));
+        }
         foreach (DisplayMonitor m in app.Monitors)
         {
             SourceWindow screen = SourceWindow.ForScreen(m);
-            items.Add(new($"Show the whole of Display {m.Number} ({m.ShortName})", "Screen", null, "screen monitor desktop whole", PaletteKind.Action, () => app.PresentAsync(screen)));
+            items.Add(new($"Show the whole of {m.Name} ({m.ShortName})", "Screen", null, "screen monitor desktop whole", PaletteKind.Action, () => app.PresentAsync(screen)));
         }
         items.Add(new("Settings", "", null, "preferences options configure startup folder", PaletteKind.Action, () =>
         {
@@ -215,12 +224,14 @@ internal sealed class CommandPalette : ThemedForm
         }));
 
         // Outputs (FR-11, FR-12).
-        items.Add(new("Show in a window", "Output", null, "floating zoom share window output", PaletteKind.Action, () =>
+        items.Add(new("Show in a window", "Where it shows", null, "floating zoom share window output", PaletteKind.Action, () =>
         {
             app.SetOutputWindow();
             return Task.CompletedTask;
         }));
-        items.Add(new("Show in Zoom", app.Monitors.Any(m => m.IsVirtual) ? "on the Zoom screen" : "in a window you share", null, "zoom teams meet share virtual display", PaletteKind.Action, app.ShowInZoomAsync));
+        items.Add(new("Show in Zoom or Teams", app.Monitors.Any(m => m.IsVirtual) ? "on the Zoom screen" : "in a window you share", null, "zoom teams meet share virtual display", PaletteKind.Action, app.ShowInZoomAsync));
+        if (!app.Monitors.Any(m => m.IsVirtual))
+            items.Add(new("Set up a Zoom screen", "share a whole screen without a second monitor", null, "zoom teams virtual display driver install", PaletteKind.Action, app.SetUpZoomScreenAsync));
 
         // Recording (FR-52/53): the record shortcut entry above toggles; these pick a source or the sound.
         items.Add(new("Record a window or screen…", "Recording", null, "record video webinar capture", PaletteKind.Action, () =>
@@ -260,6 +271,33 @@ internal sealed class CommandPalette : ThemedForm
             app.OpenRecordingsFolder();
             return Task.CompletedTask;
         }));
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (items[i].Icon is not null || items[i].Kind != PaletteKind.Action) continue;
+            string t = items[i].Title;
+            char? icon = t switch
+            {
+                _ when t.StartsWith("Show favourite", StringComparison.Ordinal) || t.StartsWith("Save what", StringComparison.Ordinal) => Icons.Star,
+                _ when t.StartsWith("Show on", StringComparison.Ordinal) || t.StartsWith("Show the whole", StringComparison.Ordinal) => Icons.Tv,
+                _ when t.StartsWith("Dim", StringComparison.Ordinal) => Icons.Brightness,
+                _ when t.StartsWith("Appearance", StringComparison.Ordinal) => Icons.Colour,
+                _ when t.Contains("pointer", StringComparison.Ordinal) && !t.StartsWith("Windows", StringComparison.Ordinal) => Icons.Mouse,
+                _ when t.StartsWith("Windows:", StringComparison.Ordinal) || t == "Show in a window" => Icons.Window,
+                _ when t.StartsWith("Text size", StringComparison.Ordinal) => Icons.Font,
+                _ when t == "Settings" => Icons.Settings,
+                _ when t.Contains("start with Windows", StringComparison.OrdinalIgnoreCase) => Icons.Power,
+                _ when t.StartsWith("Show in Zoom", StringComparison.Ordinal) => Icons.Share,
+                _ when t.StartsWith("Set up a Zoom", StringComparison.Ordinal) => Icons.Download,
+                _ when t.StartsWith("Record", StringComparison.Ordinal) => Icons.Record,
+                _ when t.StartsWith("Recording sound", StringComparison.Ordinal) => Icons.Volume,
+                _ when t.Contains("microphone", StringComparison.Ordinal) => Icons.Microphone,
+                _ when t.StartsWith("Open recordings", StringComparison.Ordinal) => Icons.Folder,
+                _ when t.StartsWith("Quit", StringComparison.Ordinal) => Icons.Power,
+                _ => null,
+            };
+            if (icon is not null) items[i] = items[i] with { Icon = icon };
+        }
+
         List<SourceWindow> windows = WindowEnumerator.GetPresentableWindows();
         foreach (SourceWindow w in windows)
         {
@@ -362,6 +400,13 @@ internal sealed class CommandPalette : ThemedForm
 
                 var icon = new RectangleF(r.Left + 12 * s, r.Top + (r.Height - 20 * s) / 2, 20 * s, 20 * s);
                 if (item.Kind == PaletteKind.Window) Draw.LetterBadge(g, item.Detail, icon, Theme.SmallFont);
+                else if (item.Kind == PaletteKind.Help)
+                {
+                    Draw.Fill(g, p.Selected, RectangleF.Inflate(icon, 2 * s, 2 * s), icon.Width / 2 + 2 * s);
+                    if (Icons.Available) Icons.Draw(g, Icons.Help, icon, p.Accent, 14 * s);
+                    else Draw.Text(g, "?", Theme.BoldFont, Rectangle.Round(icon), p.Accent, centre: true);
+                }
+                else if (item.Icon is { } glyph && Icons.Available) Icons.Draw(g, glyph, icon, p.TextDim, 16 * s);
                 else Draw.Stroke(g, p.TextDim, 1.6f * s, RectangleF.Inflate(icon, -4 * s, -4 * s), 3 * s);
 
                 int right = r.Right - (int)(12 * s);
@@ -373,6 +418,15 @@ internal sealed class CommandPalette : ThemedForm
                     right -= size.Width + (int)(12 * s);
                 }
                 int left = (int)(icon.Right + 12 * s);
+                if (item.Kind == PaletteKind.Help)
+                {
+                    // The question, then its one-line answer, dimmer.
+                    int question = Math.Min(TextRenderer.MeasureText(item.Title, Theme.BoldFont).Width, right - left);
+                    Draw.Text(g, item.Title, Theme.BoldFont, new Rectangle(left, r.Top, question, r.Height), p.Text);
+                    int answer = left + question + (int)(10 * s);
+                    if (right - answer > 40 * s) Draw.Text(g, item.Detail, Theme.UiFont, new Rectangle(answer, r.Top, right - answer, r.Height), p.TextDim);
+                    continue;
+                }
                 string text = item.Kind == PaletteKind.Window ? $"{item.Title}  ·  {item.Detail}" : item.Title;
                 Draw.Text(g, text, Theme.UiFont, new Rectangle(left, r.Top, right - left, r.Height), p.Text);
             }
@@ -420,7 +474,7 @@ internal sealed class CommandPalette : ThemedForm
 
         private sealed class ItemAccessible(ResultList list, int index) : AccessibleObject
         {
-            public override string? Name => index < list._items.Count ? list._items[index].Title + (list._items[index].Shortcut is { } k ? $", {k}" : "") : null;
+            public override string? Name => index < list._items.Count ? list._items[index].Title + (list._items[index].Kind == PaletteKind.Help ? ". " + list._items[index].Detail : "") + (list._items[index].Shortcut is { } k ? $", {k}" : "") : null;
             public override AccessibleRole Role => AccessibleRole.ListItem;
             public override AccessibleObject? Parent => list.AccessibilityObject;
             public override AccessibleStates State => AccessibleStates.Selectable | (index == list._selected ? AccessibleStates.Selected | AccessibleStates.Focused : 0);

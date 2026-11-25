@@ -42,7 +42,7 @@ internal sealed class RemoteWgcEngine : ICaptureEngine
         if (!Direct3D.IsCaptureSupported) throw new NotSupportedException("Screen capture isn't available on this version of Windows.");
         _ui = SynchronizationContext.Current;
 
-        var info = new ProcessStartInfo(Environment.ProcessPath ?? throw new InvalidOperationException("Can't find SCP's own exe."), CaptureProtocol.HostSwitch)
+        var info = new ProcessStartInfo(Environment.ProcessPath ?? throw new InvalidOperationException("Can't find ScreenCast Presenter's own exe."), CaptureProtocol.HostSwitch)
         {
             UseShellExecute = false,
             RedirectStandardInput = true,

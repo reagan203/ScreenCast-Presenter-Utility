@@ -105,6 +105,83 @@ public class SessionControllerTests
     }
 
     [Fact]
+    public async Task The_floating_window_takes_the_shape_of_what_it_shows_before_it_is_seen()
+    {
+        await _session.PresentAsync(Notepad, Floating);
+        FakeOutput output = _platform.Outputs[0];
+        Assert.Equal(new Size(1600, 900), output.Shapes[^1]);
+        Assert.True(output.ShapedBeforeReveal, "never seen with black bars");
+
+        _platform.SourceSize = new Size(900, 1200); // a different, portrait source
+        await _session.PresentAsync(Deck, Floating);
+        Assert.Equal(new Size(900, 1200), output.Shapes[^1]);
+    }
+
+    [Fact]
+    public async Task Only_a_floating_window_steps_back()
+    {
+        await _session.PresentAsync(Notepad, Floating);
+        _session.SetOutputSteppedBack(true);
+        _session.SetOutputSteppedBack(false);
+        Assert.Equal([true, false], _platform.Outputs[0].StepBacks);
+
+        await _session.MoveOutputAsync(new OutputPlacement(TestData.Tv, true));
+        _session.SetOutputSteppedBack(true); // full screen on the TV: never steps back
+        Assert.Empty(_platform.Outputs[^1].StepBacks);
+    }
+
+    [Fact]
+    public async Task A_minimised_source_never_reshapes_the_floating_window_and_restoring_brings_its_shape_back()
+    {
+        await _session.PresentAsync(Notepad, Floating);
+        FakeOutput output = _platform.Outputs[0];
+        FakeWatcher watcher = _platform.Watchers[0];
+        int before = output.Shapes.Count;
+
+        _platform.SourceSize = new Size(160, 28); // what a minimised window measures as
+        watcher.Minimize();
+        watcher.RaiseChanged(); // Windows reports the move to the minimised spot
+        Assert.Equal(before, output.Shapes.Count);
+
+        _platform.SourceSize = new Size(1600, 900);
+        watcher.Restore();
+        for (int i = 0; i < 20 && output.Shapes.Count == before; i++) await Task.Delay(10);
+        Assert.Equal(new Size(1600, 900), output.Shapes[^1]);
+    }
+
+    [Fact]
+    public async Task A_crop_reshapes_the_floating_window_to_the_part_shown()
+    {
+        await _session.PresentAsync(Notepad, Floating);
+        await _session.SetCropAsync(CropRegion.Create(0, 0, 0.5, 1));
+        Assert.Equal(new Size(800, 900), _platform.Outputs[0].Shapes[^1]);
+    }
+
+    [Fact]
+    public async Task A_full_screen_output_keeps_the_screen_shape()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        Assert.Empty(_platform.Outputs[0].Shapes); // letterboxed on the TV, as before
+    }
+
+    [Fact]
+    public async Task Double_clicking_the_output_is_passed_on_and_a_closed_output_is_ignored()
+    {
+        int clicks = 0;
+        _session.OutputDoubleClicked += (_, _) => clicks++;
+        await _session.PresentAsync(Notepad, Floating);
+        FakeOutput first = _platform.Outputs[0];
+        first.UserDoubleClicks();
+        Assert.Equal(1, clicks);
+
+        await _session.MoveOutputAsync(new OutputPlacement(TestData.Tv, true));
+        first.UserDoubleClicks(); // the old window is gone
+        Assert.Equal(1, clicks);
+        _platform.Outputs[^1].UserDoubleClicks();
+        Assert.Equal(2, clicks);
+    }
+
+    [Fact]
     public async Task Minimising_the_floating_window_warns_that_Zoom_shows_nothing()
     {
         await _session.PresentAsync(Notepad, Floating);
@@ -280,6 +357,75 @@ public class SessionControllerTests
         await _session.PresentAsync(Notepad, TestData.Tv, true);
         Assert.True(_platform.Engines[0].Disposed);
         Assert.Equal(SessionState.IdleScreen, _session.State);
+    }
+
+    // ── browsers: another tab or page cuts to black at once, and comes back ──
+
+    [Fact]
+    public async Task Moving_off_the_chosen_page_cuts_to_black_at_once_without_a_fade()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        FakeEngine engine = _platform.Engines[^1];
+        int fades = _platform.Fades.Count;
+        _session.CutAway();
+        Assert.True(_session.IsAwayFromPage);
+        Assert.Equal(0, engine.Opacities[^1]);
+        Assert.Equal(0, _session.TargetOpacity);
+        Assert.Equal(fades, _platform.Fades.Count); // no fade: the new page is never seen
+        _session.CutAway(); // twice is fine
+        Assert.True(_session.IsAwayFromPage);
+    }
+
+    [Fact]
+    public async Task A_fade_that_is_running_cant_bring_the_new_page_back()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        FakeEngine engine = _platform.Engines[^1];
+        _platform.HoldFades = true;
+        Task dim = _session.SetDimAsync(0.2); // a fade towards 80%, held mid-way
+        _session.CutAway();
+        _platform.HoldFades = false;
+        _platform.ReleaseHeldFades();
+        await dim;
+        Assert.Equal(0, engine.Opacities[^1]);
+    }
+
+    [Fact]
+    public async Task Going_back_to_the_chosen_page_fades_it_back_in()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        _session.CutAway();
+        await _session.ComeBackAsync();
+        Assert.False(_session.IsAwayFromPage);
+        Assert.Equal(1, _platform.Engines[^1].Opacities[^1]);
+    }
+
+    [Fact]
+    public async Task Coming_back_while_blanked_stays_blank()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        await _session.ToggleBlankAsync(withMessage: false);
+        _session.CutAway();
+        await _session.ComeBackAsync();
+        Assert.True(_session.IsBlanked);
+        Assert.Equal(0, _platform.Engines[^1].Opacities[^1]);
+    }
+
+    [Fact]
+    public async Task Showing_something_else_starts_on_its_own_page()
+    {
+        await _session.PresentAsync(Notepad, TestData.Tv, true);
+        _session.CutAway();
+        await _session.PresentAsync(Deck, TestData.Tv, true);
+        Assert.False(_session.IsAwayFromPage);
+        Assert.Equal(1, _platform.Engines[^1].Opacities[^1]);
+    }
+
+    [Fact]
+    public void Nothing_shown_nothing_to_cut()
+    {
+        _session.CutAway();
+        Assert.False(_session.IsAwayFromPage);
     }
 
     [Fact]
@@ -545,6 +691,12 @@ internal sealed class FakePlatform : ISessionPlatform
     /// <summary>Whether a fallback engine is offered when one fails.</summary>
     public bool OfferFallback { get; set; } = true;
 
+    /// <summary>What every source "is" in size (before its crop); null: unknown.</summary>
+    public Size? SourceSize { get; set; } = new Size(1600, 900);
+
+    public Size? ContentSize(SourceWindow source) =>
+        SourceSize is { } whole ? source.Crop is { } crop ? crop.ToPixels(whole).Size : whole : null;
+
     public IOutputSurface CreateOutput(OutputPlacement placement)
     {
         var output = new FakeOutput(placement.Monitor) { IsFloating = placement.IsFloating, WindowBounds = placement.Window ?? placement.Monitor.Bounds };
@@ -626,6 +778,26 @@ internal sealed class FakeOutput(DisplayMonitor monitor) : IOutputSurface
 
     /// <summary>The user clicks ✕ on the floating window.</summary>
     public void UserCloses() => CloseRequested?.Invoke(this, EventArgs.Empty);
+
+    public event EventHandler? DoubleClicked;
+
+    /// <summary>The user double-clicks the output.</summary>
+    public void UserDoubleClicks() => DoubleClicked?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Every content shape it was given, and whether the first came before it was revealed.</summary>
+    public List<Size?> Shapes { get; } = [];
+    public bool ShapedBeforeReveal { get; private set; }
+
+    /// <summary>Every step-back request, in order.</summary>
+    public List<bool> StepBacks { get; } = [];
+
+    public void StepBack(bool back) => StepBacks.Add(back);
+
+    public void SetContentAspect(Size? content)
+    {
+        if (Shapes.Count == 0) ShapedBeforeReveal = !Calls.Contains("Reveal");
+        Shapes.Add(content);
+    }
 
     public bool PrivatePreview { get; private set; }
 

@@ -2,6 +2,10 @@
 
 Nov 23, 2026 · Revision 2 (same day): adds light/dark appearance, the presented-source outline, the extended shortcut set and command palette, screenshots and recording with audio, and load/stress acceptance tests. Changed requirements are marked **(rev 2)**.
 
+Nov 25, 2026 · Revision 3: easier for non-technical users. A short tray menu that only lists what applies, messages that wrap, stay long enough to read and carry buttons, no jargon (one word for screens: "Screen 2"), one status indicator at a time, a first run that shows where the icon is and ends by showing something, a share guide and one-click Zoom screen setup, Search and help, text size, and adding SCP to the Start menu from the downloaded exe. Changed requirements are marked **(rev 3)**.
+
+Nov 25, 2026 · Revision 4: a Windows 11 look. Icons from Windows' icon font throughout, Mica and acrylic backdrops, the Windows 11 type ramp, short entrance animations, an option to use the Windows accent colour, Settings laid out like Windows Settings, and a quick-actions panel on left-click of the tray icon. Changed requirements are marked **(rev 4)**.
+
 ScreenCast Presenter is a lightweight Windows tray utility that mirrors one chosen window or screen region to a TV, a virtual display or a Zoom share, while the presenter keeps working privately on their main screen. It can also take screenshots and record what is presented. It targets under 60 MB of RAM while presenting, under 3% CPU and no bright flashes at any point.
 
 ## 1. Introduction
@@ -64,7 +68,7 @@ SCP is a standalone desktop app. It doesn't replace Zoom or Teams. It feeds them
 ### 2.4 Design and implementation constraints
 
 - Language: C# on .NET 10 (LTS) with WinForms. No Electron, WPF or embedded browser.
-- Single executable, portable (no install required); optional installer for the virtual display driver.
+- Single executable, portable (no install required); optional installer for the virtual display driver. **(rev 3)** The exe can add itself to the Start menu (per user, no admin rights).
 - No admin rights needed, except when installing the virtual display driver.
 - No network access, telemetry or account sign-in.
 
@@ -95,13 +99,14 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | ID | Requirement | Priority |
 | --- | --- | --- |
 | FR-10 | Show the source fullscreen and borderless on a chosen monitor (TV), scaled to fit with black letterboxing | Must |
-| FR-11 | Show the source in a floating, resizable, dark-framed window | Must |
-| FR-12 | Detect a virtual display and offer it as "Zoom screen"; guide the user to share that screen in Zoom | Should |
+| FR-10a | **(rev 4, from a user test)** Set to show in a window, a TV or screen connected since that choice (at start, on hot-plug, or just before presenting) gets the presentation: at once with "Keep it in a window" when nothing is showing; asked while showing in the window. Asked once per new screen; a virtual (Zoom) screen is never chosen this way | Must |
+| FR-11 | Show the source in a floating, resizable, dark-framed window. **(rev 4)** It takes the shape of what it shows (no black bars) and keeps it while resized; only a close button (✕ stops showing); double-click brings the presented window to the front, or moves the pointer to the presented screen. As a private preview only (showing its own screen, hidden from capture), it steps behind other windows while the presenter works on that screen and comes back when clicked in the taskbar. A window a meeting could share never steps behind: some meeting apps share a window by copying its area of the screen and would send whatever covers it; the audience must only ever see the chosen source | Must |
+| FR-12 | Detect a virtual display and offer it as "Zoom screen"; guide the user to share that screen in Zoom. **(rev 3)** "Show me how" opens a three-step share guide (generic drawings of a meeting toolbar and share picker, the right tile outlined in yellow) for the window or the Zoom screen. "Set up a Zoom screen" installs the virtual display driver with winget after asking (Windows asks for admin rights), waits for the screen, makes it the output; without winget it offers the driver's page | Should |
 | FR-13 | Keep the output window out of Alt+Tab and the taskbar when fullscreen on another monitor | Must |
 | FR-14 | Prevent mirror loops: never list the output window as a source, and refuse a monitor source that hosts the active output. Do NOT apply `WDA_EXCLUDEFROMCAPTURE` to the output window, or Zoom and other capture tools will see black | Must |
-| FR-15 | Show an optional small "Presenting" badge on the presenter's screen only, never on the output | Should |
+| FR-15 | Show an optional small "Presenting" badge on the presenter's screen only, never on the output. **(rev 3)** Called the "status pill". While the now-showing bar (FR-19a) is visible the pill carries messages only, so one indicator shows the status at a time. Messages wrap to up to four lines, stay 5–15 s depending on length and buttons (longer while the mouse is over them), and can carry buttons that act on them ("Show in a window", "Show all of it", "Undo") instead of naming a shortcut | Should |
 | FR-16 | Idle screen when nothing is presented: solid #0B0B0C, optional logo or text, never white | Must |
-| FR-17 | While presenting, draw a yellow outline on the presenter's screen around the presented window or screen, with a small "Showing on TV" tab. It is click-through, excluded from capture, follows the source when it moves or resizes, hides while the source is minimised, is never drawn on the output monitor, and can be turned off **(rev 2)** | Must |
+| FR-17 | While presenting, draw a yellow outline on the presenter's screen around the presented window or screen, with a small "Showing on TV" tab. It is click-through, excluded from capture, follows the source when it moves or resizes, hides while the source is minimised, is never drawn on the output monitor, and can be turned off **(rev 2)**. **(rev 4)** 2 px at 100% scaling. Around a window it is stacked directly above that window (not always on top), so windows in front of the presented one cover it too, and it follows the window when that comes to the front; around a whole screen it stays on top | Must |
 | FR-18 | "Identify screens": show each monitor's number large on that monitor for about one second (first run and output selection) **(rev 2)** | Should |
 | FR-19a | Now-showing bar **(rev 2, user request)**: a small always-on-top bar on the presenter's screen while presenting or recording, like Teams' sharing bar: a live mini preview, what is shown and where, recording time. Click it to bring the presented window to the front; ⋯ / right-click for Blank, Freeze, Stop, recording controls and Hide; drag to move (remembered). Never on the TV, excluded from capture, never takes focus. Ctrl+Alt+N shows/hides it | Must |
 
@@ -109,15 +114,17 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 
 | ID | Requirement | Priority |
 | --- | --- | --- |
-| FR-20 | Start, pause (freeze last frame), blank (fade to black) and stop from the tray menu | Must |
+| FR-20 | Start, pause (freeze last frame), blank (fade to black) and stop from the tray menu. **(rev 3)** The menu lists only what applies now: show something (and "Show “…” again" after stopping), the presenting controls while presenting, screenshot, record, the recording controls while recording, Show on, Favourites once there are some, Search and help, Settings, Quit. Appearance, dimming, indicators, shortcuts and the capture method are in Settings | Must |
 | FR-21 | Global hotkeys, each user-configurable or switchable off, with a master "pause all shortcuts". Defaults (all Ctrl+Alt+…): P picker, Enter command palette, W show the active window, Backspace previous source, PgDn/PgUp next/previous window, S stop, B blank, Shift+B blank with message, F freeze, D dim (cycles 0–40%), M move output to next screen, O switch output type, 1–9 show favourite, Shift+1–9 save favourite, C crop, Shift+C remove crop, R start/stop recording, Shift+R pause recording, Shift+S screenshot, Y outline on/off, I badge on/off, K list shortcuts, Shift+P pause all shortcuts. **(rev 2)** | Must |
 | FR-21a | A shortcut that another app already owns is reported (tray, badge, Settings) and the rest still work. A default shortcut whose keys type a character on the current keyboard layout (AltGr layouts, e.g. Ctrl+Alt+4 = € on UK) moves automatically to Ctrl+Alt+Shift+… and the user is told **(rev 2)** | Must |
 | FR-22 | Switching source cross-fades through black over 150–250 ms | Must |
 | FR-23 | Save up to 9 favourite sources (app + crop + output) for one-key recall | Should |
 | FR-24 | Optionally hide the mouse cursor on the output | Should |
-| FR-25 | Command palette: type any action or window name and press Enter; every action is reachable this way **(rev 2)** | Must |
+| FR-24a | **(rev 4, from a user test)** Browsers keep to the page chosen (on by default; Settings › Where it shows): a browser window shows whichever tab is active, so when its title shows another tab or page, the picture cuts to black at once (no fade) until it matches again; "Show this page instead" makes the new page the chosen one. Unread counters in titles ("(3) Inbox") are ignored | Must |
+| FR-25 | Command palette: type any action or window name and press Enter; every action is reachable this way **(rev 2)**. **(rev 3)** Called "Search and help": "How do I…?" questions come first, and choosing one does the thing (or opens where it is done) | Must |
 | FR-26 | Shortcut cheat sheet (Ctrl+Alt+K) and a Settings page to view, search, change, disable and reset shortcuts **(rev 2)** | Must |
 | FR-27 | Blank with message: the output fades to the idle screen showing a short text ("We'll be right back", editable) **(rev 2)** | Should |
+| FR-27a | After Stop, the message offers "Show it again" (the same window, crop and output) **(rev 3)** | Should |
 | FR-28 | Rapid commands are coalesced: only the latest pending source switch runs, so key-mashing never builds a backlog of fades **(rev 2)** | Must |
 | FR-29 | Only one SCP instance runs; launching it again opens the picker in the running instance **(rev 2)** | Must |
 
@@ -138,8 +145,12 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | FR-41 | Remember last source, output monitor, crop and hotkeys across restarts | Must |
 | FR-42 | Optional start with Windows | Should |
 | FR-43 | Command-line: `scp.exe --present "PowerPoint" --output 2` | Could |
-| FR-44 | Appearance: Light (default), Dark, or Match Windows (follows live changes of the Windows setting); always respects High Contrast **(rev 2; Light made the default at the user's request)** | Must |
+| FR-44 | Appearance: Light (default), Dark, or Match Windows (follows live changes of the Windows setting); always respects High Contrast **(rev 2; Light made the default at the user's request)**. **(rev 4)** Accent colour: SCP blue (default) or the Windows accent (the shade Windows 11 uses for buttons in that mode), adjusted only as needed for 4.5:1 button text and 3:1 against the page; the presented-source outline stays yellow | Must |
 | FR-45 | Settings are written atomically; a corrupt file is backed up and replaced by defaults; unknown fields from newer versions are ignored **(rev 2)** | Must |
+| FR-46 | Text size: Normal, Large (115%) or Larger (130%) for SCP's own windows, menus and messages; the output is unaffected **(rev 3)** | Should |
+| FR-47 | Add to the Start menu: a downloaded single-file exe copies itself to %LOCALAPPDATA%\Programs\ScreenCast Presenter, adds Start menu and desktop shortcuts and a Settings › Apps entry; offered in first run and Settings, and to replace a different installed build. Uninstall (Settings or Settings › Apps) closes the running copy, removes all of that and deletes the exe after exit; recordings, screenshots and settings are kept **(rev 3)** | Should |
+| FR-48 | Keep the tray icon visible: on Windows 11, first run (on by default) and Settings set the icon to show next to the clock instead of behind ^ **(rev 3)** | Should |
+| FR-49 | Quick-actions panel **(rev 4)**: left-click on the tray icon opens a panel above the clock, like Windows 11's Quick Settings: a live preview of what's showing, tiles for what applies now (Show something, Show it again, Blank, Freeze, Part of it, Screenshot, Record / Stop recording / Pause, Share in a meeting, My recordings), switched-on tiles in the accent colour and recording in red, and a footer with Stop showing, Search and help, Settings. Toggles keep it open; Esc, clicking elsewhere or a second click on the icon closes it. Never on the TV, excluded from capture, keyboard and Narrator accessible | Should |
 
 ### 3.6 Screenshots and recording (rev 2)
 
@@ -201,10 +212,11 @@ How memory stays low:
 
 - A first-time user presents a window to a TV within 3 clicks and 15 seconds, without reading help.
 - Every action is reachable from the tray icon; hotkeys are optional.
-- Plain-language labels ("Show on TV", "Show in Zoom"), no jargon like "DWM" outside Settings.
+- Plain-language labels ("Show on TV", "Show in Zoom"), no jargon like "DWM" outside Settings. **(rev 3)** Not in Settings either, except "Now using: …" under Advanced. One word for a screen everywhere: "Screen 2" (Windows' number, as Identify shows it). The app is "ScreenCast Presenter" in all text, never "SCP"; an automated test checks the source.
+- **(rev 3)** No message asks the user to remember a shortcut to act on it: it carries a button. Shortcuts are mentioned as an extra ("or press Ctrl+Alt+P").
 - Keyboard-navigable picker (arrows, Enter, Esc); works with Windows Narrator.
 - Scales correctly at 100–250% DPI and on mixed-DPI setups (per-monitor DPI v2).
-- First-run screen of at most 2 steps: pick output monitor, learn the picker hotkey.
+- First-run screen of at most 2 steps: pick output monitor, learn the picker hotkey. **(rev 3)** Step 2 is "Find ScreenCast Presenter by the clock": a drawing of the taskbar corner with the icon pointed out (on the taskbar or behind ^), the shortcut as a secondary tip, switches to keep the icon visible and add SCP to the Start menu where they apply, and "Show something now", which opens the picker.
 
 ### 4.4 Reliability
 
@@ -218,7 +230,7 @@ How memory stays low:
 - Toast notifications and SCP's own UI never appear on the output.
 - **(rev 2) The audience never sees SCP or what it is doing.** Every SCP top-level window except the output (picker, palette, badge, outline, menus, tooltips, drop-downs, settings, first run) is excluded from capture at creation; a capture guard applies this to any window the UI framework creates on its own, and an automated audit checks it. SCP UI never opens on the output monitor. SCP never uses Windows notifications (they can appear on any screen); messages go to the badge. Shortcuts never move focus or the mouse, so the presented app does not change state when the presenter uses SCP.
 - **(rev 2)** If the TV duplicates (mirrors) the presenter's screen, SCP warns the user to switch to Extend (Win+P), because in that mode the audience sees everything.
-- No network calls, no telemetry, no crash upload unless the user opts in.
+- No network calls, no telemetry, no crash upload unless the user opts in. **(rev 3)** The one exception is user-initiated: "Set up a Zoom screen" runs Windows' winget, which downloads the driver.
 - Signed executable to avoid SmartScreen warnings.
 
 ## 5. System architecture
@@ -257,16 +269,20 @@ The controller uses the DWM engine by default and switches to WGC only for minim
 
 ### 6.1 User interface
 
+**(rev 4) Windows 11 look.** Icons come from Windows' own icon font (Segoe Fluent Icons; Segoe MDL2 Assets on Windows 10), so there are no image files and they match the system. Text follows the Windows 11 type ramp: Body 14 px, Caption 12 px, Subtitle 20 px, Title 28 px, Segoe UI Variable Text and Display, semibold where bold is asked for. On Windows 11 22H2 and later, Mica sits behind title bars and the Settings section list, and acrylic behind the quick-actions panel; content with text boxes and labels stays on a solid layer, because GDI-drawn text can't keep its transparency on a backdrop (surfaces on a backdrop are drawn into an alpha bitmap and alpha-blended). Windows 10, older Windows 11 and High Contrast get solid colours. Settings is laid out like Windows Settings: icons in the section list, a 28 px page title, small group headings, and rows with icons. Search and help and Settings pages enter with a 160 ms fade or slide, the quick-actions panel slides up; all motion is off when Windows' Animation effects are off, and nothing on the TV ever animates except the existing fades through black.
+
 Two themes **(rev 2)**: Light (the default), Dark, or Match Windows. Dark: background #0B0B0C, surfaces #17171A, text #E6E6E6, accent #4C8DFF. Light: background #F3F3F5, surfaces #FAFAFB, text #1B1B1F, accent #2563D9. Rounded corners, Segoe UI Variable, no pure white anywhere. The output and idle screen are always #0B0B0C. Approved mockup: the "ScreenCast Presenter UI" canvas (picker, badge, tray menu, first run, outline, shortcuts, command palette).
 
 | Screen | Contents |
 | --- | --- |
-| Tray icon | Grey when idle, accent dot when presenting; left-click opens the picker, right-click opens the menu |
-| Tray menu | Present…, Blank, Freeze, Stop, Favourites ▸, Output ▸ (monitor list), Settings, Quit |
+| Tray icon | Grey when idle, accent dot when presenting; left-click opens the picker, right-click opens the menu. **(rev 4)** Left-click opens the quick-actions panel (FR-49) |
+| Tray menu | **(rev 3)** Status; Show something… (Show “…” again); while presenting: Blank, Freeze, Show only part of it, Stop; Take a screenshot; Record… (recording controls while recording); Open my recordings; Show on ▸; Favourites ▸ (once there are some); Search and help…; Settings…; Quit |
 | Picker | Centred overlay on the presenter's screen: search box, grid of live window thumbnails, monitors row, output selector (TV / Zoom screen / Floating), "Crop…" button |
 | Crop overlay | Dimmed source with a draggable rectangle and a size readout; Enter confirms, Esc cancels |
 | Presenting badge | Small pill at the top of the presenter's screen: source name, Blank, Stop; auto-hides after 3 s |
-| Settings | Tabs: General (start with Windows, cursor), Keyboard shortcuts, Output (monitor, dimming, idle screen text), Recording (folders, audio), Appearance, Advanced (capture engine, diagnostics) **(rev 2)** |
+| Settings | Tabs: General (start with Windows, cursor), Keyboard shortcuts, Output (monitor, dimming, idle screen text), Recording (folders, audio), Appearance, Advanced (capture engine, diagnostics) **(rev 2)**. **(rev 3)** General (start with Windows, icon by the clock, Start menu / uninstall, shortcuts, outline, now-showing bar, status pill, pointer), Where it shows (screen or window, keep on top, sharing in Zoom or Teams, Zoom screen setup, dimming, blank message), Recording & screenshots, Appearance (theme, text size), Advanced (how windows are shown, settings file, privacy, version) |
+| Share guide **(rev 3)** | Three numbered steps with drawings; Done, Choose what to show, Share a whole screen instead… |
+| Quick-actions panel **(rev 4)** | Acrylic panel above the clock: preview and status, tiles, footer (FR-49) |
 | Output | Borderless, black, source scaled to fit; nothing else |
 | Outline **(rev 2)** | Yellow (#FFC83D dark / #F2B200 light) edge around the presented source with a "Showing on TV" tab |
 | Command palette **(rev 2)** | Centred search box listing matching actions (with their shortcuts) and windows |

@@ -37,6 +37,21 @@ internal interface IOutputSurface : IDisposable
     /// <summary>The floating window was minimised or restored.</summary>
     event EventHandler? MinimizedChanged;
 
+    /// <summary>Double-click on the output: take the presenter to what it shows.</summary>
+    event EventHandler? DoubleClicked;
+
+    /// <summary>
+    /// The size of what is shown (null: nothing, or unknown). A floating window takes its shape,
+    /// so there are no black bars; a full-screen output ignores it.
+    /// </summary>
+    void SetContentAspect(Size? content);
+
+    /// <summary>
+    /// A floating window steps behind other windows (true) or comes back to the front (false),
+    /// without being hidden or minimised, so a meeting sharing it keeps sharing it.
+    /// </summary>
+    void StepBack(bool back);
+
     /// <summary>Shows the window while cloaked and paints it black.</summary>
     void ShowCloaked();
 
@@ -69,6 +84,9 @@ internal interface ISessionPlatform
     ICaptureEngine? CreateFallbackEngine(SourceWindow source, ICaptureEngine failed);
 
     ISourceWatcher Watch(SourceWindow source);
+
+    /// <summary>The size of what <paramref name="source"/> shows: the window's client area or the screen, cropped. Null if unknown.</summary>
+    Size? ContentSize(SourceWindow source);
     Task Fade(double from, double to, TimeSpan duration, Action<double> apply);
 }
 
@@ -90,6 +108,27 @@ internal sealed class Win32SessionPlatform(Func<AppSettings> settings) : ISessio
     };
 
     public ISourceWatcher Watch(SourceWindow source) => source.IsScreen ? new ScreenWatcher() : new WindowWatcher(source.Handle);
+
+    public Size? ContentSize(SourceWindow source) =>
+        ContentSizeOf(source, WindowEnumerator.IsMinimized(source.Handle), WindowEnumerator.ClientSize(source.Handle));
+
+    /// <summary>
+    /// A minimised window measures as the small strip Windows shrinks it to (apps that draw their
+    /// own title bar report it as client area), and would squash the floating window into a black
+    /// sliver; so a minimised or implausibly small window has no shape, and the window keeps its
+    /// last one until the source is restored.
+    /// </summary>
+    internal static Size? ContentSizeOf(SourceWindow source, bool minimized, Size client)
+    {
+        Size whole = source.Screen is { } screen ? screen.Bounds.Size : client;
+        if (source.Screen is null && minimized) return null;
+        if (whole.Width < MinimumContent.Width || whole.Height < MinimumContent.Height) return null; // closed, or not a real picture
+        Size shown = source.Crop is { } crop ? crop.ToPixels(whole).Size : whole;
+        return shown.Width > 0 && shown.Height > 0 ? shown : null;
+    }
+
+    /// <summary>Anything smaller isn't a picture worth reshaping the window for (a minimised title strip is 160 × 28).</summary>
+    internal static readonly Size MinimumContent = new(80, 60);
 
     public Task Fade(double from, double to, TimeSpan duration, Action<double> apply) => Fader.RunAsync(from, to, duration, apply);
 

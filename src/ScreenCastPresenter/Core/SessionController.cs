@@ -70,7 +70,48 @@ internal sealed class SessionController : IDisposable
     public string BlankMessage { get; set; } = "We'll be right back";
 
     /// <summary>The brightness the source is shown at: 0 when blanked, else 1 minus dimming (NFR-15).</summary>
-    public double TargetOpacity => IsBlanked ? 0 : 1 - _dim;
+    public double TargetOpacity => IsBlanked || IsAwayFromPage ? 0 : 1 - _dim;
+
+    /// <summary>
+    /// The shown browser moved off the page that was chosen (another tab or page): the picture is
+    /// black until it comes back (BrowserTab). Separate from Blank, which the presenter controls.
+    /// </summary>
+    public bool IsAwayFromPage { get; private set; }
+
+    /// <summary>
+    /// Cuts the picture to black this instant, with no fade and without waiting for anything else
+    /// in progress: the new page must not be seen even for a moment. A fade that is running can't
+    /// bring it back (FadeAsync keeps it at 0).
+    /// </summary>
+    public void CutAway()
+    {
+        if (State != SessionState.Presenting || _engine is not { } engine || IsAwayFromPage) return;
+        IsAwayFromPage = true;
+        _opacity = 0;
+        engine.SetOpacity(0);
+        SetState(State);
+    }
+
+    /// <summary>Back on the chosen page (or the presenter chose to show the new one): fade the picture back in.</summary>
+    public async Task ComeBackAsync()
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (!IsAwayFromPage) return;
+            IsAwayFromPage = false;
+            if (_engine is not null && !HidesWhenMinimized && !IsBlanked) await FadeAsync(TargetOpacity, SwitchFadeIn);
+            SetState(State);
+        }
+        catch (Exception ex)
+        {
+            RecoverFromError(ex);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     /// <summary>Current engine opacity; exposed for tests.</summary>
     internal double CurrentOpacity => _opacity;
@@ -144,6 +185,7 @@ internal sealed class SessionController : IDisposable
             if (previous is not null && !previous.IsSameSource(source)) PreviousSource = previous;
             Source = source;
             UpdatePrivatePreview();
+            UpdateContentShape(); // before it's seen: a floating window takes the source's shape
             output.Reveal();
             SetState(SessionState.Presenting);
             SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
@@ -389,6 +431,7 @@ internal sealed class SessionController : IDisposable
         await FadeAsync(0, SwitchFadeOut);
         engine.SetCrop(crop);
         Source = source with { Crop = crop };
+        UpdateContentShape();
         SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
         if (!HidesWhenMinimized) await FadeAsync(target, SwitchFadeIn);
         SetState(State);
@@ -494,6 +537,7 @@ internal sealed class SessionController : IDisposable
         if (engine is null || Math.Abs(_opacity - to) < 0.001) return Task.CompletedTask;
         return _platform.Fade(_opacity, to, duration, value =>
         {
+            if (IsAwayFromPage) value = 0; // cut away mid-fade: stays black
             _opacity = value;
             engine.SetOpacity(value);
         });
@@ -566,7 +610,29 @@ internal sealed class SessionController : IDisposable
     {
         if (sender != _watcher) return;
         _engine?.OnSourceChanged();
+        UpdateContentShape(); // the source was resized
         SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>A floating window follows the shape of what it shows (no black bars). Nothing shown: it keeps its shape.</summary>
+    private void UpdateContentShape()
+    {
+        if (_output is { IsAlive: true, IsFloating: true } output && Source is { } source && !IsSourceMinimized)
+            output.SetContentAspect(_platform.ContentSize(source));
+    }
+
+    /// <summary>The floating output window steps behind other windows, or comes back on top (FloatingStepBack).</summary>
+    public void SetOutputSteppedBack(bool back)
+    {
+        if (_output is { IsAlive: true, IsFloating: true } output) output.StepBack(back);
+    }
+
+    /// <summary>The output was double-clicked: the app takes the presenter to what it shows.</summary>
+    public event EventHandler? OutputDoubleClicked;
+
+    private void OnOutputDoubleClicked(object? sender, EventArgs e)
+    {
+        if (sender == _output) OutputDoubleClicked?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>The engine broke mid-session (GPU reset, capture refused): try the other engine, else go idle.</summary>
@@ -675,6 +741,7 @@ internal sealed class SessionController : IDisposable
         {
             if (sender != _watcher || _engine is null) return;
             _engine.OnSourceChanged();
+            UpdateContentShape(); // its real shape again, now it's restored
             SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
             if (!IsBlanked) await FadeAsync(TargetOpacity, FirstFadeIn);
         }
@@ -690,6 +757,7 @@ internal sealed class SessionController : IDisposable
 
     private void StopEngine()
     {
+        IsAwayFromPage = false; // a new source (or none) starts on its own page
         if (_watcher is { } watcher)
         {
             watcher.Closed -= OnSourceClosed;
@@ -715,6 +783,7 @@ internal sealed class SessionController : IDisposable
         _output.Resized += OnOutputResized;
         _output.CloseRequested += OnOutputCloseRequested;
         _output.MinimizedChanged += OnOutputMinimizedChanged;
+        _output.DoubleClicked += OnOutputDoubleClicked;
         _output.ShowCloaked();
     }
 
@@ -738,6 +807,7 @@ internal sealed class SessionController : IDisposable
         _output.Resized -= OnOutputResized;
         _output.CloseRequested -= OnOutputCloseRequested;
         _output.MinimizedChanged -= OnOutputMinimizedChanged;
+        _output.DoubleClicked -= OnOutputDoubleClicked;
         if (_output.IsFloating && _output.IsAlive) FloatingBounds = _output.WindowBounds; // reopen it where the user left it
         _output.Conceal(); // cloak first so closing can never show a last frame
         _output.Dispose();

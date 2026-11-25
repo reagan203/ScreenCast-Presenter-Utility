@@ -32,38 +32,38 @@ internal static class ShortcutCatalog
 
         var list = new List<ShortcutAction>
         {
-            new("picker", "Open the picker", ShortcutGroup.Presenting, C(Keys.P), Keywords: "present choose window"),
-            new("palette", "Command palette", ShortcutGroup.Presenting, C(Keys.Enter), Keywords: "search command"),
+            new("picker", "Choose what to show", ShortcutGroup.Presenting, C(Keys.P), Keywords: "present choose window picker open"),
+            new("palette", "Search actions and help", ShortcutGroup.Presenting, C(Keys.Enter), Keywords: "search command palette help how"),
             new("present-active", "Show the window I am in", ShortcutGroup.Presenting, C(Keys.W), Keywords: "active current"),
-            new("previous-source", "Back to the previous source", ShortcutGroup.Presenting, C(Keys.Back), Keywords: "last undo"),
-            new("next-window", "Next window", ShortcutGroup.Presenting, C(Keys.PageDown)),
-            new("previous-window", "Previous window", ShortcutGroup.Presenting, C(Keys.PageUp)),
+            new("previous-source", "Show the previous window again", ShortcutGroup.Presenting, C(Keys.Back), Keywords: "last undo back source"),
+            new("next-window", "Show the next window", ShortcutGroup.Presenting, C(Keys.PageDown), Keywords: "next cycle"),
+            new("previous-window", "Show the window before", ShortcutGroup.Presenting, C(Keys.PageUp), Keywords: "previous cycle"),
             new("stop", "Stop showing", ShortcutGroup.Presenting, C(Keys.S), Keywords: "end close"),
 
             new("blank", "Blank the TV / show again", ShortcutGroup.OnTheTv, C(Keys.B), Keywords: "black hide"),
             new("blank-message", "Blank with a message", ShortcutGroup.OnTheTv, CS(Keys.B), Keywords: "right back break"),
             new("freeze", "Freeze the TV / go live", ShortcutGroup.OnTheTv, C(Keys.F), Keywords: "pause still"),
             new("dim", "Dim the TV (0–40%)", ShortcutGroup.OnTheTv, C(Keys.D), Keywords: "night darker brightness"),
-            new("move-output", "Move output to the next screen", ShortcutGroup.OnTheTv, C(Keys.M), Keywords: "monitor display"),
-            new("switch-output", "Switch output: TV, Zoom screen, window", ShortcutGroup.OnTheTv, C(Keys.O), Keywords: "zoom floating window virtual share"),
+            new("move-output", "Show on the next screen", ShortcutGroup.OnTheTv, C(Keys.M), Keywords: "monitor display output move"),
+            new("switch-output", "Switch where it shows: TV, Zoom screen, window", ShortcutGroup.OnTheTv, C(Keys.O), Keywords: "zoom floating window virtual share output"),
         };
 
         for (int slot = 1; slot <= AppSettings.SlotCount; slot++)
             list.Add(new(ShowFavouriteId(slot), $"Show favourite {slot}", ShortcutGroup.Favourites, C(Keys.D0 + slot)));
         for (int slot = 1; slot <= AppSettings.SlotCount; slot++)
-            list.Add(new(SaveFavouriteId(slot), $"Save current as favourite {slot}", ShortcutGroup.Favourites, CS(Keys.D0 + slot)));
+            list.Add(new(SaveFavouriteId(slot), $"Save what's showing as favourite {slot}", ShortcutGroup.Favourites, CS(Keys.D0 + slot)));
 
         list.AddRange(
         [
-            new("crop", "Crop the current source", ShortcutGroup.Crop, C(Keys.C), Keywords: "part area region zoom"),
-            new("remove-crop", "Remove the crop", ShortcutGroup.Crop, CS(Keys.C), Keywords: "uncrop whole all"),
+            new("crop", "Show only part of it (crop)", ShortcutGroup.Crop, C(Keys.C), Keywords: "part area region zoom crop"),
+            new("remove-crop", "Show all of it again", ShortcutGroup.Crop, CS(Keys.C), Keywords: "uncrop whole all remove crop"),
 
             new("record", "Start / stop recording", ShortcutGroup.Recording, C(Keys.R), Keywords: "video capture webinar record"),
             new("pause-recording", "Pause / resume recording", ShortcutGroup.Recording, CS(Keys.R), Keywords: "hold break"),
             new("screenshot", "Take a screenshot", ShortcutGroup.Recording, CS(Keys.S), Keywords: "snip capture image"),
 
             new("toggle-outline", "Yellow outline on / off", ShortcutGroup.OnMyScreen, C(Keys.Y), Keywords: "border frame"),
-            new("toggle-badge", "Presenting badge on / off", ShortcutGroup.OnMyScreen, C(Keys.I), Keywords: "pill status"),
+            new("toggle-badge", "Status pill on / off", ShortcutGroup.OnMyScreen, C(Keys.I), Keywords: "pill status badge"),
             new("toggle-widget", "Now-showing bar on / off", ShortcutGroup.OnMyScreen, C(Keys.N), Keywords: "widget bar teams sharing toolbar go to"),
             new("cheat-sheet", "Show all shortcuts", ShortcutGroup.OnMyScreen, C(Keys.K), Keywords: "help keys list"),
             new(PauseShortcutsId, "Pause all shortcuts", ShortcutGroup.OnMyScreen, CS(Keys.P), Keywords: "disable game"),
@@ -122,7 +122,7 @@ internal static class ShortcutResolver
                 }
                 if (!Hotkey.TryParse(custom, out Hotkey parsed))
                 {
-                    result.Add(new(action, null, ShortcutStatus.Invalid, $"“{custom}” isn't a shortcut SCP can use"));
+                    result.Add(new(action, null, ShortcutStatus.Invalid, $"“{custom}” isn't a shortcut ScreenCast Presenter can use"));
                     continue;
                 }
                 hotkey = parsed;

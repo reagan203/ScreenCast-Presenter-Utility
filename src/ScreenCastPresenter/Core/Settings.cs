@@ -82,6 +82,24 @@ internal sealed class AppSettings
     /// <summary>Where the floating output window was last (physical pixels); null = a default corner.</summary>
     public WindowBounds? FloatingWindow { get; set; }
 
+    /// <summary>Text size of SCP's own windows (1, 1.15 or 1.3); the TV is unaffected.</summary>
+    public double TextSize { get; set; } = Core.TextSize.Normal;
+
+    /// <summary>
+    /// Browsers: keep to the page that was chosen. Switching tabs or going to another page in the
+    /// shown browser window cuts the picture to black until you go back to it.
+    /// </summary>
+    public bool KeepBrowserPage { get; set; } = true;
+
+    /// <summary>
+    /// The screens connected when "show in a window" was chosen. A screen plugged in later (an HDMI
+    /// TV) is then offered as the output. Null in older settings: only the main screen counts.
+    /// </summary>
+    public string[]? WindowModeScreens { get; set; }
+
+    /// <summary>Buttons and highlights in the Windows accent colour instead of SCP's blue.</summary>
+    public bool UseWindowsAccent { get; set; }
+
     [JsonIgnore]
     public bool OutputInWindow => string.Equals(OutputMode, "Window", StringComparison.OrdinalIgnoreCase);
 
@@ -112,6 +130,7 @@ internal sealed class AppSettings
     public AppSettings Normalize()
     {
         Dim = double.IsFinite(Dim) ? Math.Clamp(Dim, 0, MaxDim) : 0;
+        TextSize = Math.Round(Core.TextSize.Clamp(TextSize), 2); // 1.15, not 1.149999976 in the file
         // Version 1 defaulted to "Match Windows"; light is the app's theme now. A file from a
         // newer version is left as it is.
         if (Version < 2 && string.Equals(Theme, nameof(ThemeMode.System), StringComparison.OrdinalIgnoreCase)) Theme = nameof(ThemeMode.Light);
@@ -189,12 +208,12 @@ internal sealed class SettingsStore(string path)
         {
             string? backup = BackUpCorruptFile();
             LoadProblem = backup is null
-                ? "Your settings file was damaged, so SCP started with default settings."
-                : $"Your settings file was damaged, so SCP started with default settings. The old file was kept as {Path.GetFileName(backup)}.";
+                ? "Your settings file was damaged, so ScreenCast Presenter started with default settings."
+                : $"Your settings file was damaged, so ScreenCast Presenter started with default settings. The old file was kept as {Path.GetFileName(backup)}.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            LoadProblem = "SCP couldn't read its settings file, so it started with default settings.";
+            LoadProblem = "ScreenCast Presenter couldn't read its settings file, so it started with default settings.";
         }
         return Current = new AppSettings();
     }
@@ -222,8 +241,8 @@ internal sealed class SettingsStore(string path)
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             SaveProblem = ex is UnauthorizedAccessException
-                ? "SCP couldn't save your settings: the settings file or folder is read-only."
-                : "SCP couldn't save your settings. The disk may be full.";
+                ? "ScreenCast Presenter couldn't save your settings: the settings file or folder is read-only."
+                : "ScreenCast Presenter couldn't save your settings. The disk may be full.";
             TryDelete(temp);
             return false;
         }

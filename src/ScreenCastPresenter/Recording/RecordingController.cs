@@ -289,7 +289,7 @@ internal sealed class RecordingHelperProcess : IRecordingProcess
 
     public RecordingHelperProcess()
     {
-        var info = new ProcessStartInfo(Environment.ProcessPath ?? throw new InvalidOperationException("Can't find SCP's own exe."), RecordingProtocol.RecordSwitch)
+        var info = new ProcessStartInfo(Environment.ProcessPath ?? throw new InvalidOperationException("Can't find ScreenCast Presenter's own exe."), RecordingProtocol.RecordSwitch)
         {
             UseShellExecute = false,
             RedirectStandardInput = true,

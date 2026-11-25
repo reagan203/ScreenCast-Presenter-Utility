@@ -33,8 +33,8 @@ internal sealed class PickerOverlay : ThemedForm
     private readonly Label _hints = new() { AutoSize = true };
     private readonly Label _footerLabel = new() { Text = "Show on", AutoSize = true, Anchor = AnchorStyles.Left, Tag = "dim" };
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1000 };
-    private readonly Font _titleFont = new(Theme.UiFont.FontFamily, 15f, FontStyle.Bold);
-    private readonly Font _sectionFont = new(Theme.UiFont.FontFamily, 8.5f, FontStyle.Bold);
+    private readonly Font _titleFont = Theme.NewFont(15f, FontStyle.Bold);
+    private readonly Font _sectionFont = Theme.NewFont(8.5f, FontStyle.Bold);
     private List<SourceWindow> _all = [];
     private bool _dismissing;
     private PickerMode _mode;
@@ -188,7 +188,7 @@ internal sealed class PickerOverlay : ThemedForm
             {
                 Detail = "  · follows what you present",
                 Radius = 10,
-                AccessibleName = "Record what the output shows",
+                AccessibleName = "Record what the TV shows",
                 Margin = new Padding(0, 0, LogicalToDeviceUnits(8), 0),
             };
             tv.Size = tv.Measure();
@@ -207,12 +207,12 @@ internal sealed class PickerOverlay : ThemedForm
             // (a private preview); only a full-screen output can't show the screen it covers.
             bool floating = _app.Session.State != SessionState.Off ? _app.Session.OutputIsFloating : _app.Settings.OutputInWindow;
             bool isOutput = !record && !floating && output is not null && m.IsSameScreen(output);
-            var pill = new PillButton($"Display {m.Number}", PillKind.Secondary)
+            var pill = new PillButton(m.Name, PillKind.Secondary)
             {
-                Detail = isOutput ? "  · your output is here" : $"  · {m.ShortName} · {m.Bounds.Width} × {m.Bounds.Height}",
+                Detail = isOutput ? "  · your presentation is shown here" : $"  · {m.ShortName} · {m.Bounds.Width} × {m.Bounds.Height}",
                 Enabled = !isOutput,
                 Radius = 10,
-                AccessibleName = isOutput ? $"Display {m.Number}: your output is on it, so it can't be shown" : $"{(record ? "Record" : "Show")} the whole of {m.Label}",
+                AccessibleName = isOutput ? $"{m.Name}: your presentation is shown on it, so it can't be shown" : $"{(record ? "Record" : "Show")} the whole of {m.Label}",
                 Margin = new Padding(0, 0, LogicalToDeviceUnits(8), 0),
             };
             pill.Size = pill.Measure();
@@ -439,7 +439,7 @@ internal sealed class PickerOverlay : ThemedForm
             bool selected = !current.IsWindow && current.Screen is not null && m.IsSameScreen(current.Screen);
             var pill = new PillButton(OutputLabel(m), selected ? PillKind.Selected : PillKind.Secondary)
             {
-                Detail = $"  Display {m.Number}",
+                Detail = $"  {m.Name}",
                 AccessibleName = $"Show on {m.Label}",
                 Margin = new Padding(0, 0, LogicalToDeviceUnits(6), 0),
             };
@@ -532,7 +532,7 @@ internal sealed class PickerOverlay : ThemedForm
         string target = _mode == PickerMode.Record ? "● Start recording"
             : current.IsWindow ? "Show in a window"
             : output is null ? "Show" : output.IsVirtual ? "Show on the Zoom screen" : output.IsTv ? "Show on TV"
-            : _app.Monitors.Count < 2 ? "Show on this screen" : $"Show on Display {output.Number}";
+            : _app.Monitors.Count < 2 ? "Show on this screen" : $"Show on {output.Name}";
         _show.Text = target;
         _show.Enabled = _grid.Selected is not null;
         _crop.Enabled = _grid.Selected is { IsMinimized: false };

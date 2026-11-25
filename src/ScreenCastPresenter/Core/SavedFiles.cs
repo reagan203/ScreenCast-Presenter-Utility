@@ -42,7 +42,7 @@ internal static class SavedFiles
     /// <summary>Plain-language reason a save failed.</summary>
     public static string Explain(Exception ex) => ex switch
     {
-        UnauthorizedAccessException => "SCP isn't allowed to save in that folder.",
+        UnauthorizedAccessException => "ScreenCast Presenter isn't allowed to save in that folder.",
         IOException io when io.HResult is unchecked((int)0x80070070) or unchecked((int)0x80070027) => "The disk is full.",
         DirectoryNotFoundException => "The folder doesn't exist any more.",
         _ => "The file couldn't be saved (" + ex.Message + ").",

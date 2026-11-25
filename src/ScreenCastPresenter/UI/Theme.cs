@@ -61,10 +61,55 @@ internal static class Theme
 
     public static Palette Current => _current ??= Resolve();
 
-    public static Font UiFont => _uiFont ??= CreateFont(10f, FontStyle.Regular);
-    public static Font BoldFont => _boldFont ??= CreateFont(10f, FontStyle.Bold);
-    public static Font TitleFont => _titleFont ??= CreateFont(12f, FontStyle.Bold);
-    public static Font SmallFont => _smallFont ??= CreateFont(9f, FontStyle.Regular);
+    /// <summary>Windows 11's type ramp: Body 14 px, Caption 12 px, Subtitle 20 px, Title 28 px (in points at 96 dpi).</summary>
+    public const float BodyPoints = 10.5f, CaptionPoints = 9f, SubtitlePoints = 15f, TitlePoints = 21f;
+
+    public static Font UiFont => _uiFont ??= CreateFont(BodyPoints * _textScale, FontStyle.Regular);
+
+    /// <summary>"Bold" is drawn semibold, as Windows 11 does (Body Strong).</summary>
+    public static Font BoldFont => _boldFont ??= CreateFont(BodyPoints * _textScale, FontStyle.Bold);
+
+    public static Font TitleFont => _titleFont ??= CreateFont(12f * _textScale, FontStyle.Bold);
+    public static Font SmallFont => _smallFont ??= CreateFont(CaptionPoints * _textScale, FontStyle.Regular);
+
+    private static float _textScale = 1f;
+
+    /// <summary>
+    /// "Text size" in Settings › Appearance (1, 1.15 or 1.3): every font SCP draws its own UI with is
+    /// this much bigger. The TV output is unaffected. Windows opened afterwards pick it up; the
+    /// badge and tray menu are redrawn at once.
+    /// </summary>
+    public static float TextScale
+    {
+        get => _textScale;
+        set
+        {
+            float next = TextSize.Clamp(value);
+            if (Math.Abs(next - _textScale) < 0.001f) return;
+            _textScale = next;
+            // The old fonts stay alive: controls that are still open may hold them, and disposing a
+            // font a control still paints with throws. It's a handful of small objects per change.
+            _uiFont = _boldFont = _titleFont = _smallFont = null;
+            Changed?.Invoke(null, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>A UI font at <paramref name="points"/> × the text size. The caller owns (disposes) it.</summary>
+    public static Font NewFont(float points, FontStyle style = FontStyle.Regular) => CreateFont(points * _textScale, style);
+
+    private static bool _useWindowsAccent;
+
+    /// <summary>Settings › Appearance › Accent colour: Windows' accent instead of SCP's blue (contrast-checked).</summary>
+    public static bool UseWindowsAccent
+    {
+        get => _useWindowsAccent;
+        set
+        {
+            if (_useWindowsAccent == value) return;
+            _useWindowsAccent = value;
+            Refresh();
+        }
+    }
 
     /// <summary>Call once on the UI thread at startup.</summary>
     public static void Initialize(ThemeMode mode)
@@ -101,12 +146,43 @@ internal static class Theme
     private static Palette Resolve()
     {
         if (SystemInformation.HighContrast) return HighContrast();
-        return _mode switch
+        Palette palette = _mode switch
         {
             ThemeMode.Dark => Dark,
             ThemeMode.Light => Light,
             _ => WindowsUsesLightApps() ? Light : Dark,
         };
+        return _useWindowsAccent && WindowsAccent(palette.IsDark) is { } accent ? WithAccent(palette, accent) : palette;
+    }
+
+    /// <summary>The palette with another accent, adjusted to stay readable (<see cref="AccentColour.Fit"/>).</summary>
+    public static Palette WithAccent(Palette palette, Color accent)
+    {
+        (Color fitted, Color onAccent) = AccentColour.Fit(accent, palette.Background);
+        return palette with
+        {
+            Accent = fitted,
+            OnAccent = onAccent,
+            Selected = AccentColour.Tint(fitted, palette.Background, palette.IsDark),
+        };
+    }
+
+    /// <summary>Windows' accent shade for buttons in this mode, or null if it can't be read.</summary>
+    private static Color? WindowsAccent(bool dark)
+    {
+        try
+        {
+            using (RegistryKey? accent = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent"))
+            {
+                if (AccentColour.FromPalette(accent?.GetValue("AccentPalette") as byte[], dark) is { } fromPalette) return fromPalette;
+            }
+            using RegistryKey? dwm = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\DWM");
+            return dwm?.GetValue("AccentColor") is int abgr ? AccentColour.FromDwm(abgr) : null;
+        }
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Windows' "app mode" (Settings › Personalisation › Colours). Missing value → dark.</summary>
@@ -150,27 +226,48 @@ internal static class Theme
 
     private static Color Hex(int rgb) => Color.FromArgb((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
 
-    /// <summary>Segoe UI Variable ships with Windows 11; Windows 10 falls back to Segoe UI.</summary>
-    private static Font CreateFont(float size, FontStyle style)
+    /// <summary>
+    /// Segoe UI Variable (Windows 11) in its optical sizes: Text below 20 px, Display for headings,
+    /// and its Semibold instance where SCP asks for bold, as Windows 11 does. Windows 10 falls back
+    /// to Segoe UI and Segoe UI Semibold. (Windows lists the semibold instances under names cut at
+    /// 31 characters, hence "Display Semib".)
+    /// </summary>
+    internal static Font CreateFont(float size, FontStyle style, GraphicsUnit unit = GraphicsUnit.Point)
     {
-        foreach (string family in new[] { "Segoe UI Variable Text", "Segoe UI" })
+        float points = unit == GraphicsUnit.Pixel ? size * 0.75f : size;
+        bool display = points >= SubtitlePoints;
+        bool strong = style.HasFlag(FontStyle.Bold);
+        FontStyle rest = style & ~FontStyle.Bold;
+        (string Family, FontStyle Style)[] choices = strong
+            ?
+            [
+                (display ? "Segoe UI Variable Display Semib" : "Segoe UI Variable Text Semibold", rest),
+                ("Segoe UI Semibold", rest),
+                ("Segoe UI", style),
+            ]
+            :
+            [
+                (display ? "Segoe UI Variable Display" : "Segoe UI Variable Text", style),
+                ("Segoe UI", style),
+            ];
+        foreach ((string family, FontStyle fontStyle) in choices)
         {
             try
             {
                 using var probe = new FontFamily(family);
-                return new Font(probe, size, style);
+                return new Font(probe, size, fontStyle, unit);
             }
             catch (ArgumentException)
             {
                 // Not installed; try the next one.
             }
         }
-        return new Font(FontFamily.GenericSansSerif, size, style);
+        return new Font(FontFamily.GenericSansSerif, size, style, unit);
     }
 
     /// <summary>Pixel-sized font for custom-drawn surfaces at a given monitor scale.</summary>
     public static Font PixelFont(float logicalPixels, double scale, FontStyle style = FontStyle.Regular) =>
-        new(UiFont.FontFamily, (float)(logicalPixels * scale), style, GraphicsUnit.Pixel);
+        CreateFont((float)(logicalPixels * scale * _textScale), style, GraphicsUnit.Pixel);
 
     /// <summary>Flat button in the current palette, with an outline while it has keyboard focus.</summary>
     public static void StyleButton(Button button, bool primary)

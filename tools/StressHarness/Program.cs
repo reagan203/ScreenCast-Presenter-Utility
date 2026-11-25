@@ -287,7 +287,7 @@ internal static partial class Program
             for (int i = 0; i < count; i++)
             {
                 Native.Chord(Native.VK_CONTROL, Native.VK_MENU, 0x0D); Wait(500);
-                Check(Native.TopLevelWindows(scp.Id, true).Any(h => Native.Title(h) == "ScreenCast Presenter command palette"), "ui: palette didn't open");
+                Check(Native.TopLevelWindows(scp.Id, true).Any(h => Native.Title(h) == "ScreenCast Presenter search and help"), "ui: search and help didn't open");
                 Probe(scp, $"palette open {i}");
                 Native.Chord(Native.VK_ESCAPE); Wait(300);
 

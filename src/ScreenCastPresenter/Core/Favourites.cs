@@ -84,6 +84,23 @@ internal static class OutputChooser
         return monitors.Where(m => !m.IsPrimary).OrderBy(m => m.IsVirtual ? 1 : 0).FirstOrDefault() ?? monitors[0];
     }
 
+    /// <summary>
+    /// Set to show in a window, but a screen has been plugged in since that choice (an HDMI TV or
+    /// projector): that screen, so the presentation can move onto it instead of the TV just
+    /// showing an ordinary extended desktop. A TV before another monitor; never a virtual screen
+    /// (that's the Zoom screen, chosen on purpose). <paramref name="knownWhenChosen"/> is the
+    /// screens connected when the window was chosen; unknown (older settings) means only the main one.
+    /// </summary>
+    public static DisplayMonitor? NewScreenSinceWindowChosen(IReadOnlyList<DisplayMonitor> monitors, IReadOnlyCollection<string>? knownWhenChosen, bool showingInWindow)
+    {
+        if (!showingInWindow || monitors.Count < 2) return null;
+        IEnumerable<string> known = knownWhenChosen ?? monitors.Where(m => m.IsPrimary).Select(m => m.DeviceName);
+        var knownSet = new HashSet<string>(known, StringComparer.OrdinalIgnoreCase);
+        return monitors.Where(m => !m.IsVirtual && !m.IsPrimary && !knownSet.Contains(m.DeviceName))
+            .OrderBy(m => m.IsTv ? 0 : 1)
+            .FirstOrDefault();
+    }
+
     /// <summary>The next screen after <paramref name="current"/>, wrapping around.</summary>
     public static DisplayMonitor? Next(IReadOnlyList<DisplayMonitor> monitors, DisplayMonitor? current)
     {

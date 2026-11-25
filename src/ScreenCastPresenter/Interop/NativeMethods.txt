@@ -201,3 +201,10 @@ MFTranscodeContainerType_MPEG4
 SetWindowTheme
 SetForegroundWindow
 ShowWindow
+
+// Modern look: Mica/acrylic backdrops, alpha-correct painting on them, "animation effects" setting
+DwmExtendFrameIntoClientArea
+DWM_SYSTEMBACKDROP_TYPE
+AlphaBlend
+PatBlt
+SystemParametersInfo

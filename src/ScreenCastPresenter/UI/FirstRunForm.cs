@@ -4,34 +4,39 @@ using ScreenCastPresenter.Interop;
 namespace ScreenCastPresenter.UI;
 
 /// <summary>
-/// First run (SRS 4.3), at most two steps: 1. pick the output screen (hover a screen to see its
-/// number on it), 2. learn the picker shortcut and where the tray icon is.
+/// First run (SRS 4.3), two steps: 1. pick the TV (hover a screen to see its number on it);
+/// 2. where to find SCP: a drawing of the icon by the clock, the mouse first and the shortcut
+/// second, with two switches that are on by default when they apply: keep the icon next to the
+/// clock (Windows 11 hides new icons behind ^) and add SCP to the Start menu (a downloaded exe).
+/// It ends with "Show something now", so the first presentation happens with the guide still in
+/// mind instead of being left to remember a shortcut.
 /// </summary>
 internal sealed class FirstRunForm : ThemedForm
 {
     private readonly ScpApp _app;
     private readonly Label _step = new() { AutoSize = true, Tag = "dim" };
-    private readonly Label _heading = new() { AutoSize = true };
-    private readonly Label _body = new() { AutoSize = false, Height = 48, Tag = "dim" };
+    private readonly Label _heading = new() { AutoSize = true, UseMnemonic = false };
+    private readonly Label _body = new() { AutoSize = false, Height = 48, Tag = "dim", UseMnemonic = false };
     private readonly ScreenChooser _screens;
-    private readonly KeysPanel _keys;
-    private readonly Label _tip = new() { AutoSize = false, Height = 64, Tag = "dim" };
+    private readonly FindItPanel _findIt;
+    private readonly Label _tip = new() { AutoSize = false, Height = 40, Tag = "dim", UseMnemonic = false };
     private readonly PillButton _back = new("Back");
+    private readonly PillButton _done = new("Done");
     private readonly PillButton _next = new("Next", PillKind.Primary);
-    private readonly Font _headingFont = new(Theme.UiFont.FontFamily, 15f, FontStyle.Bold);
+    private readonly Font _headingFont = Theme.NewFont(15f, FontStyle.Bold);
     private int _page;
 
     public FirstRunForm(ScpApp app)
     {
         _app = app;
         _screens = new ScreenChooser(app);
-        _keys = new KeysPanel(app);
+        _findIt = new FindItPanel(app);
         Text = "Welcome to ScreenCast Presenter";
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
         ShowIcon = false;
-        ClientSize = new Size(600, 500);
+        ClientSize = new Size(620, (int)(540 * Math.Max(1f, Theme.TextScale * 0.95f)));
         KeyPreview = true;
 
         _heading.Font = _headingFont;
@@ -45,17 +50,19 @@ internal sealed class FirstRunForm : ThemedForm
         _body.Dock = DockStyle.Fill;
         _tip.Dock = DockStyle.Fill;
         _screens.Dock = DockStyle.Fill;
-        _keys.Dock = DockStyle.Fill;
+        _findIt.Dock = DockStyle.Fill;
 
         var content = new Panel { Dock = DockStyle.Fill };
         content.Controls.Add(_screens);
-        content.Controls.Add(_keys);
+        content.Controls.Add(_findIt);
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Margin = new Padding(0, 12, 0, 0) };
-        _next.Size = _next.Measure();
-        _back.Size = _back.Measure();
-        buttons.Controls.Add(_next);
-        buttons.Controls.Add(_back);
+        foreach (PillButton b in new[] { _next, _done, _back })
+        {
+            b.Size = b.Measure();
+            b.Margin = new Padding(8, 0, 0, 0);
+            buttons.Controls.Add(b);
+        }
 
         layout.Controls.Add(_step, 0, 0);
         layout.Controls.Add(_heading, 0, 1);
@@ -66,6 +73,7 @@ internal sealed class FirstRunForm : ThemedForm
         Controls.Add(layout);
 
         _next.Click += (_, _) => Next();
+        _done.Click += (_, _) => Finish(showNow: false);
         _back.Click += (_, _) => ShowPage(0);
         AcceptButton = _next;
         ApplyPalette(Theme.Current);
@@ -80,7 +88,7 @@ internal sealed class FirstRunForm : ThemedForm
 
     private static void Recolour(Control control, Palette p)
     {
-        if (control is PillButton or ScreenChooser or KeysPanel) return;
+        if (control is PillButton or ScreenChooser or TrayPicture or ToggleSwitch) return;
         control.BackColor = p.Background;
         control.ForeColor = control.Tag is "dim" ? p.TextDim : p.Text;
         foreach (Control child in control.Controls) Recolour(child, p);
@@ -91,19 +99,21 @@ internal sealed class FirstRunForm : ThemedForm
         _page = page;
         bool first = page == 0;
         _step.Text = first ? "STEP 1 OF 2" : "STEP 2 OF 2";
-        _heading.Text = first ? "Where should your presentation appear?" : "Open the picker any time";
+        _heading.Text = first ? "Where should your presentation appear?" : "Find ScreenCast Presenter by the clock";
         _body.Text = first
-            ? (_app.Monitors.Count > 1 ? "Pick the TV or projector. Your own screen stays private." : "Only one screen is connected. Connect your TV now, or continue and choose it later from the tray icon.")
-            : "Press these keys together, from any app:";
+            ? (_app.Monitors.Count > 1 ? "Pick the TV or projector. Your own screen stays private." : "Only one screen is connected. Connect your TV now, or continue and choose it later from the icon by the clock.")
+            : "Click this icon to show something, blank the TV, record and more. Right-click it for the full menu.";
         _tip.Text = first
-            ? "Not sure which is which? Hover over a screen and its number appears on it."
-            : "Or click the ScreenCast Presenter icon next to the clock. To keep it visible: Settings › Personalisation › Taskbar › Other system tray icons.";
+            ? "Not sure which is which? Point at a screen here and its number appears on it."
+            : _app.ActiveShortcut("picker") is { } key ? $"From any app you can also press {key}." : "";
         _screens.Visible = first;
-        _keys.Visible = !first;
+        _findIt.Visible = !first;
         _back.Visible = !first;
-        _next.Text = first ? "Next" : "Done";
+        _done.Visible = !first;
+        _next.Text = first ? "Next" : "Show something now";
         _next.Size = _next.Measure();
         if (first) _screens.Focus();
+        else _next.Focus();
     }
 
     private void Next()
@@ -114,7 +124,12 @@ internal sealed class FirstRunForm : ThemedForm
             ShowPage(1);
             return;
         }
-        _app.CompleteFirstRun();
+        Finish(showNow: true);
+    }
+
+    private void Finish(bool showNow)
+    {
+        _app.CompleteFirstRun(showNow, install: _findIt.Install, pinIcon: _findIt.PinIcon);
         Close();
     }
 
@@ -189,7 +204,7 @@ internal sealed class FirstRunForm : ThemedForm
             g.Clear(p.Background);
             Draw.HighQuality(g);
             float s = DeviceDpi / 96f;
-            using var numberFont = new Font(Theme.UiFont.FontFamily, 20f, FontStyle.Bold);
+            using var numberFont = Theme.NewFont(20f, FontStyle.Bold);
             for (int i = 0; i < _cards.Count; i++)
             {
                 (DisplayMonitor m, Rectangle r) = _cards[i];
@@ -281,17 +296,86 @@ internal sealed class FirstRunForm : ThemedForm
         }
     }
 
-    /// <summary>Big keycaps for the picker shortcut.</summary>
-    private sealed class KeysPanel : Control
+    /// <summary>Step 2: the drawing of the taskbar corner, and the two switches that apply on this PC.</summary>
+    private sealed class FindItPanel : Panel
     {
-        private readonly ScpApp _app;
+        private readonly TrayPicture _picture = new() { Dock = DockStyle.Top };
+        private readonly ToggleSwitch? _pin;
+        private readonly ToggleSwitch? _install;
 
-        public KeysPanel(ScpApp app)
+        public FindItPanel(ScpApp app)
         {
-            _app = app;
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            AccessibleRole = AccessibleRole.StaticText;
+            Controls.Add(_picture);
+            int y = 0;
+            var rows = new Panel { Dock = DockStyle.Fill };
+            // New icons start behind the ^ arrow on Windows 10 and 11. Only Windows 11 can be told
+            // to show it (CanPinTrayIcon); on Windows 10 the drawing shows where to look instead.
+            bool hiddenByWindows = app.TrayIconPinned != true;
+            if (app.CanPinTrayIcon)
+                _pin = AddRow(rows, ref y, "Keep the icon next to the clock", "Windows hides new icons behind the ^ arrow.");
+            if (app.CanInstall)
+                _install = AddRow(rows, ref y, "Add to the Start menu and desktop", "So you can always find it again. You can remove it in Settings › Apps.");
+            Controls.Add(rows);
+            rows.BringToFront();
+            // The drawing shows where the icon will be once Done is pressed.
+            _picture.HiddenBehindArrow = hiddenByWindows && !(_pin?.Checked ?? false);
+            if (_pin is not null) _pin.CheckedChanged += (_, _) => _picture.HiddenBehindArrow = !_pin.Checked;
         }
+
+        public bool PinIcon => _pin?.Checked ?? false;
+        public bool Install => _install?.Checked ?? false;
+
+        protected override void OnLayout(LayoutEventArgs levent)
+        {
+            _picture.Height = LogicalToDeviceUnits(170);
+            base.OnLayout(levent);
+        }
+
+        private ToggleSwitch AddRow(Panel rows, ref int y, string title, string detail)
+        {
+            var toggle = new ToggleSwitch { Checked = true, AccessibleName = title, AccessibleDescription = detail, Location = new Point(0, y + LogicalToDeviceUnits(4)) };
+            var titleLabel = new Label { Text = title, AutoSize = true, UseMnemonic = false, Font = Theme.BoldFont, Location = new Point(LogicalToDeviceUnits(58), y) };
+            var detailLabel = new Label { Text = detail, AutoSize = true, UseMnemonic = false, Tag = "dim", Location = new Point(LogicalToDeviceUnits(58), y + LogicalToDeviceUnits(20) + (int)(4 * Theme.TextScale)) };
+            titleLabel.Click += (_, _) => toggle.Checked = !toggle.Checked;
+            rows.Controls.Add(toggle);
+            rows.Controls.Add(titleLabel);
+            rows.Controls.Add(detailLabel);
+            y += LogicalToDeviceUnits((int)(52 * Theme.TextScale));
+            return toggle;
+        }
+    }
+
+    /// <summary>
+    /// The right-hand end of the taskbar, drawn: the ^ arrow, two status icons and the clock, with
+    /// SCP's icon pointed out, either on the taskbar or in the ^ flyout where Windows hides it.
+    /// </summary>
+    private sealed class TrayPicture : Control
+    {
+        private bool _hidden;
+
+        public TrayPicture()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            AccessibleRole = AccessibleRole.Graphic;
+            UpdateAccessibleName();
+        }
+
+        /// <summary>The icon is in the ^ flyout rather than on the taskbar.</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool HiddenBehindArrow
+        {
+            get => _hidden;
+            set
+            {
+                _hidden = value;
+                UpdateAccessibleName();
+                Invalidate();
+            }
+        }
+
+        private void UpdateAccessibleName() => AccessibleName = _hidden
+            ? "The ScreenCast Presenter icon is behind the up arrow next to the clock, at the bottom right of the screen."
+            : "The ScreenCast Presenter icon is on the taskbar, next to the clock, at the bottom right of the screen.";
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -299,26 +383,70 @@ internal sealed class FirstRunForm : ThemedForm
             Graphics g = e.Graphics;
             g.Clear(p.Background);
             Draw.HighQuality(g);
-            IReadOnlyList<string> parts = _app.ActiveShortcut("picker")?.Parts ?? ["Tray icon"];
-            AccessibleName = string.Join(" plus ", parts);
             float s = DeviceDpi / 96f;
-            using var font = new Font(Theme.UiFont.FontFamily, 14f, FontStyle.Bold);
-            float x = 0, h = 60 * s, y = 20 * s;
-            for (int i = 0; i < parts.Count; i++)
+
+            // The taskbar, as a strip along the bottom, fading in from the left.
+            float barHeight = 48 * s;
+            var bar = new RectangleF(0, Height - barHeight - 6 * s, Width, barHeight);
+            Color barColour = p.IsDark ? Color.FromArgb(0x20, 0x20, 0x24) : Color.FromArgb(0xE9, 0xEA, 0xEE);
+            Draw.Fill(g, barColour, bar, 10 * s);
+            Draw.Stroke(g, p.Border, 1, bar, 10 * s);
+
+            Color glyph = p.IsDark ? Color.FromArgb(0xD8, 0xD8, 0xDE) : Color.FromArgb(0x30, 0x30, 0x38);
+            using var clockFont = Theme.NewFont(9f);
+            float right = bar.Right - 16 * s;
+            var clock = new RectangleF(right - 62 * s, bar.Top, 62 * s, barHeight);
+            Draw.Text(g, "10:24", clockFont, Rectangle.Round(clock), glyph, centre: true);
+            right = clock.Left - 10 * s;
+            // Wi-Fi and sound, as simple shapes.
+            for (int i = 0; i < 2; i++)
             {
-                float w = Math.Max(60 * s, TextRenderer.MeasureText(parts[i], font).Width + 28 * s);
-                var r = new RectangleF(x, y, w, h);
-                bool last = i == parts.Count - 1;
-                Draw.Fill(g, p.Surface, r, 10 * s);
-                Draw.Stroke(g, last ? p.Accent : p.Border, 1.5f * s, r, 10 * s);
-                Draw.Text(g, parts[i], font, Rectangle.Round(r), last ? p.Accent : p.Text, centre: true);
-                x += w;
-                if (!last)
-                {
-                    Draw.Text(g, "+", font, new Rectangle((int)x, (int)y, (int)(32 * s), (int)h), p.TextFaint, centre: true);
-                    x += 32 * s;
-                }
+                var icon = new RectangleF(right - 18 * s, bar.Top + (barHeight - 14 * s) / 2, 14 * s, 14 * s);
+                using var pen = new Pen(glyph, 1.6f * s);
+                if (i == 0) g.DrawArc(pen, icon, 200, 140);
+                else g.DrawPolygon(pen, [new PointF(icon.Left, icon.Top + 4 * s), new PointF(icon.Left + 5 * s, icon.Top + 4 * s), new PointF(icon.Right - 2 * s, icon.Top), new PointF(icon.Right - 2 * s, icon.Bottom), new PointF(icon.Left + 5 * s, icon.Bottom - 4 * s), new PointF(icon.Left, icon.Bottom - 4 * s)]);
+                right = icon.Left - 10 * s;
             }
+
+            RectangleF ours;
+            if (_hidden)
+            {
+                // The ^ arrow, with its flyout open above it and SCP's icon inside.
+                var chevron = new RectangleF(right - 22 * s, bar.Top + (barHeight - 22 * s) / 2, 22 * s, 22 * s);
+                Draw.Fill(g, p.Raised, chevron, 5 * s);
+                using (var pen = new Pen(glyph, 1.8f * s) { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round })
+                {
+                    float cx = chevron.Left + chevron.Width / 2, cy = chevron.Top + chevron.Height / 2 + 2 * s;
+                    g.DrawLines(pen, [new PointF(cx - 5 * s, cy), new PointF(cx, cy - 5 * s), new PointF(cx + 5 * s, cy)]);
+                }
+                var flyout = new RectangleF(chevron.Left + chevron.Width / 2 - 66 * s, bar.Top - 66 * s, 132 * s, 58 * s);
+                Draw.Fill(g, barColour, flyout, 8 * s);
+                Draw.Stroke(g, p.Border, 1, flyout, 8 * s);
+                for (int i = 0; i < 4; i++)
+                {
+                    var slot = new RectangleF(flyout.Left + 12 * s + i * 29 * s, flyout.Top + 17 * s, 22 * s, 22 * s);
+                    if (i == 1) continue;
+                    Draw.Fill(g, Draw.LetterTint("abcd"[i].ToString()), RectangleF.Inflate(slot, -3 * s, -3 * s), 4 * s);
+                }
+                ours = new RectangleF(flyout.Left + 12 * s + 29 * s, flyout.Top + 17 * s, 22 * s, 22 * s);
+            }
+            else
+            {
+                ours = new RectangleF(right - 24 * s, bar.Top + (barHeight - 24 * s) / 2, 24 * s, 24 * s);
+            }
+
+            g.DrawIcon(AppIcon.Shared, Rectangle.Round(ours));
+            Draw.Stroke(g, p.Outline, 3 * s, RectangleF.Inflate(ours, 6 * s, 6 * s), 9 * s);
+
+            // A callout pointing at it.
+            string label = _hidden ? "Click ^ then this icon" : "Click this icon";
+            using var labelFont = Theme.NewFont(10f, FontStyle.Bold);
+            Size size = TextRenderer.MeasureText(label, labelFont);
+            var callout = new RectangleF(Math.Max(0, ours.Left + ours.Width / 2 - size.Width / 2 - 14 * s - 70 * s), Math.Max(0, ours.Top - 54 * s), size.Width + 28 * s, 32 * s);
+            Draw.Fill(g, p.Accent, callout, 8 * s);
+            Draw.Text(g, label, labelFont, Rectangle.Round(callout), p.OnAccent, centre: true);
+            using var arrow = new Pen(p.Accent, 2.5f * s) { EndCap = System.Drawing.Drawing2D.LineCap.ArrowAnchor };
+            g.DrawLine(arrow, callout.Left + callout.Width * 0.75f, callout.Bottom, ours.Left + ours.Width / 2, ours.Top - 8 * s);
         }
     }
 }

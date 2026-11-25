@@ -22,12 +22,34 @@ internal class ThemedForm : Form
 
     protected Palette Palette => Theme.Current;
 
+    /// <summary>
+    /// The Windows 11 material behind this window: Mica behind the title bar of framed windows,
+    /// nothing for borderless ones unless they ask (see <see cref="Backdrop"/>).
+    /// </summary>
+    protected virtual BackdropKind WindowBackdrop => FormBorderStyle == FormBorderStyle.None ? BackdropKind.None : BackdropKind.Mica;
+
+    /// <summary>Client margins (device pixels) where the backdrop shows through; null = the whole window.</summary>
+    protected virtual Padding? GlassMargins => Padding.Empty;
+
+    /// <summary>The backdrop is showing (Windows 11 22H2+, not High Contrast).</summary>
+    protected bool HasBackdrop { get; private set; }
+
+    /// <summary>(Re)applies the backdrop, e.g. after the see-through margins changed size.</summary>
+    protected void ApplyBackdrop()
+    {
+        if (IsHandleCreated) HasBackdrop = Backdrop.Apply((HWND)Handle, WindowBackdrop, GlassMargins);
+    }
+
     /// <summary>Override to recolour child controls; call base.</summary>
     protected virtual void ApplyPalette(Palette palette)
     {
         BackColor = palette.Background;
         ForeColor = palette.Text;
-        if (IsHandleCreated) DwmHelpers.ApplyFrame((HWND)Handle, palette.IsDark, roundCorners: true);
+        if (IsHandleCreated)
+        {
+            DwmHelpers.ApplyFrame((HWND)Handle, palette.IsDark, roundCorners: true);
+            ApplyBackdrop(); // comes off in High Contrast, back on after it
+        }
         Invalidate(true);
     }
 
@@ -44,6 +66,7 @@ internal class ThemedForm : Form
         var hwnd = (HWND)Handle;
         DwmHelpers.ExcludeFromCapture(hwnd);
         DwmHelpers.ApplyFrame(hwnd, Theme.Current.IsDark, roundCorners: true);
+        ApplyBackdrop();
         // Stay cloaked until every control has painted once (see OnShown): WinForms controls
         // briefly show the system (white) background before their first WM_PAINT.
         DwmHelpers.SetCloaked(hwnd, true);

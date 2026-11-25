@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using ScreenCastPresenter.Core;
 using ScreenCastPresenter.Interop;
 using ScreenCastPresenter.Output;
 
@@ -16,12 +17,14 @@ internal sealed record BadgeContent(BadgeDot Dot, string Title, string Detail, I
 /// The small pill at the top of the presenter's screen (FR-15, SRS 6.1): what's showing, with
 /// Blank and Stop. Hides itself after 3 seconds and comes back when the mouse touches the top
 /// edge. Also carries SCP's messages, because Windows notifications could appear on the TV.
+/// A long message wraps onto up to four lines instead of being cut off, stays long enough to read
+/// (<see cref="MessageTiming"/>) and stays while the mouse is over it; a message can carry buttons
+/// ("Show in a window", "Undo") so nobody has to remember a shortcut to act on it.
 /// Never activated, never on the output screen, excluded from capture.
 /// </summary>
 internal sealed class PresentingBadge : LayeredWindow
 {
     private static readonly TimeSpan AutoHide = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan MessageTime = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan Fade = TimeSpan.FromMilliseconds(120);
 
     private readonly Func<DisplayMonitor?> _presenterScreen;
@@ -54,7 +57,7 @@ internal sealed class PresentingBadge : LayeredWindow
             if (_pendingMessages.TryDequeue(out BadgeContent? next))
             {
                 _message = next;
-                ShowBadge(MessageTime);
+                ShowBadge(MessageTiming.For(next.Title, next.Buttons.Count));
                 return;
             }
             _message = null;
@@ -78,10 +81,10 @@ internal sealed class PresentingBadge : LayeredWindow
         else if (_visible) Render(); // e.g. the recording timer ticking: redraw without restarting the hide timer
     }
 
-    /// <summary>A short message for the presenter, e.g. "Notepad was closed."</summary>
-    public void ShowMessage(string text, BadgeDot dot = BadgeDot.Accent)
+    /// <summary>A message for the presenter, e.g. "Notepad was closed.", optionally with buttons that act on it.</summary>
+    public void ShowMessage(string text, BadgeDot dot = BadgeDot.Accent, IReadOnlyList<BadgeButton>? buttons = null)
     {
-        var message = new BadgeContent(dot, text, "", []);
+        var message = new BadgeContent(dot, text, "", buttons ?? []);
         if (_message is not null && _visible)
         {
             // Queue behind the one showing (several can arrive at startup); skip repeats, cap the backlog.
@@ -90,7 +93,7 @@ internal sealed class PresentingBadge : LayeredWindow
             return;
         }
         _message = message;
-        ShowBadge(MessageTime);
+        ShowBadge(MessageTiming.For(text, message.Buttons.Count));
     }
 
     /// <summary>A message with buttons (e.g. "Screenshot saved · Open · Show in folder"); stays a little longer.</summary>
@@ -98,7 +101,8 @@ internal sealed class PresentingBadge : LayeredWindow
     {
         _pendingMessages.Clear();
         _message = new BadgeContent(BadgeDot.Accent, title, detail, buttons);
-        ShowBadge(TimeSpan.FromSeconds(8));
+        TimeSpan reading = MessageTiming.For(title + " " + detail, buttons.Count);
+        ShowBadge(reading > TimeSpan.FromSeconds(8) ? reading : TimeSpan.FromSeconds(8));
     }
 
     private BadgeContent? Content => _message ?? _status;
@@ -161,9 +165,10 @@ internal sealed class PresentingBadge : LayeredWindow
         using Font regular = Theme.PixelFont(13, _scale);
         using Font button = Theme.PixelFont(12.5f, _scale, FontStyle.Bold);
 
-        float margin = 14 * s, height = 44 * s, pad = 16 * s, gap = 10 * s, dot = 10 * s;
-        float buttonHeight = 32 * s, buttonPad = 12 * s;
-        float maxText = 420 * s;
+        float t = Theme.TextScale;
+        float margin = 14 * s, height = 44 * s * t, pad = 16 * s, gap = 10 * s, dot = 10 * s;
+        float buttonHeight = 32 * s * t, buttonPad = 12 * s;
+        float maxText = 420 * s * t, maxWrapped = 480 * s * t;
 
         using var measureBitmap = new Bitmap(1, 1);
         using Graphics measure = Graphics.FromImage(measureBitmap);
@@ -171,6 +176,19 @@ internal sealed class PresentingBadge : LayeredWindow
         StringFormat format = StringFormat.GenericTypographic;
 
         float titleWidth = Math.Min(maxText, measure.MeasureString(content.Title, bold, int.MaxValue, format).Width + 2);
+
+        // A message too long for one line wraps (up to four lines) in regular weight, instead of
+        // being cut off with an ellipsis; the badge grows taller and gets rounded corners.
+        bool wrapped = content.Detail.Length == 0 && content.Recording is null
+            && measure.MeasureString(content.Title, bold, int.MaxValue, format).Width + 2 > maxText;
+        Font titleFont = wrapped ? regular : bold;
+        if (wrapped)
+        {
+            SizeF block = measure.MeasureString(content.Title, regular, (int)maxWrapped, format);
+            float lineHeight = regular.GetHeight(measure);
+            titleWidth = Math.Min(maxWrapped, block.Width + 2);
+            height = Math.Max(height, Math.Min(block.Height, lineHeight * 4) + 22 * s);
+        }
         float detailWidth = content.Detail.Length == 0 ? 0 : Math.Min(maxText, measure.MeasureString(content.Detail, regular, int.MaxValue, format).Width + 2);
         float recordingWidth = content.Recording is { Length: > 0 } rec ? measure.MeasureString(rec, bold, int.MaxValue, format).Width + 2 : 0;
         var buttonWidths = content.Buttons.Select(b => measure.MeasureString(b.Label, button, int.MaxValue, format).Width + 2 * buttonPad).ToList();
@@ -193,15 +211,16 @@ internal sealed class PresentingBadge : LayeredWindow
             g.Clear(Color.Transparent);
 
             var pill = new RectangleF(margin, margin, width, height);
+            GraphicsPath Shape(RectangleF r) => wrapped ? Draw.Rounded(r, 22 * s) : Pill(r);
             // Soft shadow: a few expanding, fading pills.
             for (int i = (int)margin; i > 0; i -= 2)
             {
                 int alpha = (int)(p.IsDark ? 50 : 22) * (int)(margin - i + 1) / (int)margin;
                 using var shadow = new SolidBrush(Color.FromArgb(Math.Clamp(alpha / 3, 0, 255), 0, 0, 0));
-                using GraphicsPath sp = Pill(RectangleF.Inflate(pill, i * 0.6f, i * 0.6f) with { Y = pill.Y + i * 0.3f });
+                using GraphicsPath sp = Shape(RectangleF.Inflate(pill, i * 0.6f, i * 0.6f) with { Y = pill.Y + i * 0.3f });
                 g.FillPath(shadow, sp);
             }
-            using (GraphicsPath path = Pill(pill))
+            using (GraphicsPath path = Shape(pill))
             using (var fill = new SolidBrush(p.Surface))
             using (var border = new Pen(p.Border, Math.Max(1, s)))
             {
@@ -214,7 +233,8 @@ internal sealed class PresentingBadge : LayeredWindow
             DrawDot(g, content.Dot, new RectangleF(x, midY - dot / 2, dot, dot), p, s);
             x += dot + gap;
 
-            DrawText(g, content.Title, bold, p.Text, new RectangleF(x, margin, titleWidth, height));
+            if (wrapped) DrawWrapped(g, content.Title, titleFont, p.Text, new RectangleF(x, margin + 11 * s, titleWidth, height - 22 * s));
+            else DrawText(g, content.Title, titleFont, p.Text, new RectangleF(x, margin, titleWidth, height));
             x += titleWidth;
             if (detailWidth > 0)
             {
@@ -270,6 +290,17 @@ internal sealed class PresentingBadge : LayeredWindow
             LineAlignment = StringAlignment.Center,
             Trimming = StringTrimming.EllipsisCharacter,
             FormatFlags = StringFormatFlags.NoWrap,
+        };
+        g.DrawString(text, font, brush, bounds, format);
+    }
+
+    private static void DrawWrapped(Graphics g, string text, Font font, Color colour, RectangleF bounds)
+    {
+        using var brush = new SolidBrush(colour);
+        using var format = new StringFormat(StringFormat.GenericTypographic)
+        {
+            LineAlignment = StringAlignment.Center,
+            Trimming = StringTrimming.EllipsisWord,
         };
         g.DrawString(text, font, brush, bounds, format);
     }

@@ -29,6 +29,19 @@ Unit tests cover the logic only, with no windows or displays involved:
 - **Outputs (M5):** virtual displays named "Zoom screen", a real TV chosen before a virtual display, Ctrl+Alt+O cycling, the default and restored floating-window positions, settings round trip and repair; real output windows created on the desktop to check the styles Zoom and privacy rely on (floating: sizable, in the taskbar, not a tool window, not topmost, not excluded from capture; fullscreen: out of Alt+Tab, topmost); the ✕ on the floating window stops showing.
 - **Start with Windows:** enabling, disabling, Task Manager switching it off, repairing the entry after the exe moves (on a throwaway registry key, never the real Run key).
 - **Settings migration:** light became the default theme; version-1 files on the old default move to it once, real choices are kept.
+- **Easier to use (rev 3):**
+  - the tray menu in every state: short when idle, presenting and recording controls only when they apply, "Show again" after stopping, favourites only once there are some, one tick in Show on, every line runs a real command and has no jargon;
+  - message timing (5–15 s by length and buttons), text size steps and repair, help topics (plain questions, each runs something, found by everyday words like "projector" or "videos");
+  - no action name says "source", "output", "picker" or "palette"; screens are "Screen N"; no string in the app says "SCP" (a scan of the source);
+  - Zoom screen setup: winget's exit codes, the exact command, no winget;
+  - Start menu install in temporary folders and a throwaway registry key: paths with accents, Japanese and spaces, a locked installed copy, replacing a different build, start-with-Windows following the copy, uninstall keeping other files, a real shell shortcut;
+  - keeping the tray icon visible (a throwaway key): no entry, hidden, pinned, other apps' entries untouched;
+  - the confirmation dialog is hidden from capture, created cloaked and keyboard friendly.
+- **Modern look (rev 4):**
+  - the quick-actions panel in every state: what leads, toggles showing their state and keeping it open, red stop-recording tile, every tile runs a real command, has an icon, plain full words and fits;
+  - every tray-menu and panel command has an icon, and every icon exists in Windows' icon font (checked with GDI's glyph lookup);
+  - Windows accent colours from Windows blue to yellow, white, black and near-page colours stay readable on both themes (4.5:1 text, 3:1 against the page), a readable accent is used unchanged, and the outline stays yellow; the accent palette and DWM value are read correctly;
+  - the Windows 11 type ramp, semibold from the font family rather than synthetic bold.
 - **Session controller** (driven by fakes):
   - fades through black, blank and dim;
   - coalescing a thousand switches or blank presses;
@@ -86,3 +99,17 @@ For an 8-hour soak (SRS 8.1), run `StressHarness.exe soak --minutes 480`.
 ## 3. Manual checks (with the TV)
 
 These need a person: how things look, the physical TV, Zoom, sleep, and unplugging the cable. Each milestone's handover lists them, and the SRS acceptance table (section 8.1) is the reference.
+
+For revision 3 (easier to use), also:
+- First run on a fresh Windows 11 user: step 2's drawing matches where the icon really is; with "Keep the icon next to the clock" on, the icon is on the taskbar afterwards; "Show something now" opens the picker.
+- The published exe run from Downloads: "Add to the Start menu" adds Start and desktop shortcuts and a Settings › Apps entry; Settings › Apps › Uninstall closes the running copy (finishing a recording first) and removes the exe and shortcuts.
+- "Set up a Zoom screen" on a PC without the driver: Windows' permission prompt, then a Zoom screen appears and is chosen; saying No to the prompt reports "cancelled". Check what the new screen does to window placement and the mouse.
+- The share guide's steps against current Zoom and Teams.
+- Text size Larger: picker cards, palette, Settings, first run, tray menu and messages have nothing cut off.
+
+For revision 4 (modern look), also:
+- On Windows 11 22H2+: Mica behind the title bars and the Settings section list, acrylic behind the quick-actions panel, in light and dark, over a busy wallpaper; text on them crisp and readable. On Windows 10: solid colours, icons from Segoe MDL2 Assets.
+- High Contrast on and off while Settings and the panel are open: the backdrops come off and back.
+- Animation effects off (Settings › Accessibility › Visual effects): no slide or fade anywhere.
+- The quick-actions panel with the taskbar at the bottom, top, left and right; on a two-screen setup it opens on the screen you clicked, never on the TV; a second click on the icon closes it.
+- "My Windows colour" with a few accents, including a very light and a very dark one.

@@ -90,14 +90,28 @@ internal interface ISessionPlatform
     Task Fade(double from, double to, TimeSpan duration, Action<double> apply);
 }
 
+/// <summary>
+/// How something is shown. The light way (a DWM thumbnail) costs almost nothing but can't draw the
+/// mouse pointer, show a whole screen, or freeze; Windows Graphics Capture (in the helper process)
+/// can. So it's used for screens, freezing, the Advanced choice, and whenever the pointer should be
+/// on the TV: a switch that says "pointer on" must really show it.
+/// </summary>
+internal static class CaptureChoice
+{
+    public static bool DrawsPointerAndScreens(bool isScreen, bool startFrozen, bool preferWgc, bool showPointer) =>
+        isScreen || startFrozen || preferWgc || showPointer;
+}
+
 internal sealed class Win32SessionPlatform(Func<AppSettings> settings) : ISessionPlatform
 {
     public IOutputSurface CreateOutput(OutputPlacement placement) => new OutputWindow(placement);
 
     public ICaptureEngine CreateEngine(SourceWindow source, bool startFrozen = false)
     {
-        bool wgc = source.IsScreen || startFrozen || settings().PreferWgc;
-        return wgc ? new RemoteWgcEngine(settings().ShowCursor, startFrozen) : new DwmThumbnailEngine();
+        AppSettings s = settings();
+        return CaptureChoice.DrawsPointerAndScreens(source.IsScreen, startFrozen, s.PreferWgc, s.ShowCursor)
+            ? new RemoteWgcEngine(s.ShowCursor, startFrozen)
+            : new DwmThumbnailEngine();
     }
 
     public ICaptureEngine? CreateFallbackEngine(SourceWindow source, ICaptureEngine failed) => failed switch

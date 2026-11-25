@@ -262,7 +262,7 @@ internal sealed class SettingsForm : ThemedForm
     {
         bool wgc = _app.Settings.PreferWgc;
         string inUse = _app.Session.EngineName is { } e ? $" Now using: {e}." : "";
-        AddChoice("How windows are shown", "Automatic uses the least memory. “Always show the pointer” also keeps a minimised window's last picture on the TV." + inUse,
+        AddChoice("How windows are shown", "With the mouse pointer on the TV switched on (General), windows are always shown with it. Otherwise Automatic uses the least memory, and “Always show the pointer” keeps a minimised window's last picture on the TV." + inUse,
         [
             ("Automatic", !wgc, () => _app.SetCaptureEngine(false)),
             ("Always show the pointer", wgc, () => _app.SetCaptureEngine(true)),

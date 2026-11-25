@@ -994,19 +994,25 @@ internal sealed class ScpApp : IDisposable
     {
         Settings.CaptureEngine = preferWgc ? "WGC" : "Automatic";
         Save();
+        _ = GuardAsync(ReshowAsync);
         Message(preferWgc
-            ? "From the next window you show, the pointer shows and a minimised window keeps its last picture."
-            : "Back to automatic, which uses the least memory.");
+            ? "A minimised window now keeps its last picture on the TV."
+            : Settings.ShowCursor ? "Back to automatic." : "Back to automatic, which uses the least memory.");
     }
 
     public void SetShowCursor(bool show)
     {
         Settings.ShowCursor = show;
         Save();
-        if (!show) Message("The mouse pointer won't show on the TV.");
-        else if (Settings.PreferWgc) Message("The mouse pointer will show on the TV.");
-        else Message("The mouse pointer will show on the TV when you show a whole screen.", BadgeDot.Accent,
-            Button("Show it on windows too", () => SetCaptureEngine(true)));
+        _ = GuardAsync(ReshowAsync); // takes effect now, not from the next thing shown
+        Message(show ? "Your mouse pointer shows on the TV." : "Your mouse pointer no longer shows on the TV.");
+    }
+
+    /// <summary>Shows what's shown again (a quick fade), so a changed way of showing it applies at once.</summary>
+    private async Task ReshowAsync()
+    {
+        if (_session.State != SessionState.Presenting || _session.Source is not { } shown || _session.IsFrozen || ChosenPlacement is not { } placement) return;
+        await _session.PresentAsync(shown, placement);
     }
 
     private async Task PresentActiveWindowAsync()

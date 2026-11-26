@@ -173,8 +173,9 @@ internal static partial class Program
 
     /// <summary>
     /// Running the room (FR-86–FR-90) in the real app: a scene by its key and by the command line,
-    /// a playlist switching on its own and stopped, automatic hiding on and off (the helper reads
-    /// the screen), and next / previous slide. The privacy audit runs throughout.
+    /// a shuffled playlist switching on its own and stopped, automatic hiding on and off (the helper
+    /// reads the screen) with the presenter's own words, exact on/off from the command line, and
+    /// next / previous slide. The privacy audit runs throughout.
     /// </summary>
     private static void RoomRunning()
     {
@@ -201,6 +202,22 @@ internal static partial class Program
             Probe(scp, "automatic hiding on");
             Check(scp.RunCommandLine("--action", "auto-hide").ExitCode == 0, "room: auto-hide off failed");
 
+            // Exact states from the command line: on twice stays on, off turns it off; nonsense is a mistake.
+            string? Saved(string name) => JsonNode.Parse(File.ReadAllText(scp.SettingsPath))?[name]?.ToString();
+            Check(scp.RunCommandLine("--on", "auto-hide").ExitCode == 0, "room: --on auto-hide failed");
+            Check(scp.RunCommandLine("--on", "auto-hide").ExitCode == 0, "room: --on auto-hide again failed");
+            Check(WaitFor(() => Saved("AutoHide") is { } k && k != "None", 3000), "room: --on auto-hide didn't switch it on");
+            Wait(2000);
+            Probe(scp, "automatic hiding with own words");
+            Check(scp.RunCommandLine("--off", "auto-hide").ExitCode == 0, "room: --off auto-hide failed");
+            Check(WaitFor(() => Saved("AutoHide") == "None", 3000), "room: --off auto-hide didn't switch it off");
+            Check(scp.RunCommandLine("--on", "spotlight", "--off", "spotlight").ExitCode == 0, "room: --on/--off spotlight failed");
+            Check(scp.RunCommandLine("--off", "outline").ExitCode == 0, "room: --off outline failed");
+            Check(WaitFor(() => Saved("ShowOutline") == "false", 3000), "room: --off outline didn't turn the outline off");
+            Check(scp.RunCommandLine("--on", "outline").ExitCode == 0, "room: --on outline failed");
+            Check(WaitFor(() => Saved("ShowOutline") == "true", 3000), "room: --on outline didn't turn the outline back on");
+            Check(scp.RunCommandLine("--on", "rockets").ExitCode == 2, "room: --on rockets should be a mistake (exit 2)");
+
             // Next and previous slide go to the window shown, without taking the focus.
             Check(scp.RunCommandLine("--action", "next-slide").ExitCode == 0, "room: next-slide failed");
             Check(scp.RunCommandLine("--action", "previous-slide").ExitCode == 0, "room: previous-slide failed");
@@ -217,8 +234,10 @@ internal static partial class Program
             {
                 ["Name"] = "Lobby",
                 ["Items"] = new JsonArray(new JsonObject { ["Slot"] = 1, ["Seconds"] = 10 }, new JsonObject { ["Slot"] = 2, ["Seconds"] = 10 }),
+                ["Shuffle"] = true, // two items shuffled still take turns: never the same twice running
             });
             s["AutoHide"] = "None";
+            s["AutoHideWords"] = new JsonArray("SCP dark", "Project Falcon");
         });
     }
 

@@ -99,6 +99,9 @@ internal interface IEffectsEngine
     /// <summary>Automatic hiding (FR-88): what to look for and cover; <see cref="SensitiveKinds.None"/> stops it.</summary>
     void AutoHide(SensitiveKinds kinds, RedactStyle style) { }
 
+    /// <summary>The presenter's own words automatic hiding covers (when <see cref="SensitiveKinds.Custom"/> is on).</summary>
+    void AutoHideWords(IReadOnlyList<string> words) { }
+
     /// <summary>Automatic hiding covered something new: what, in words ("2 email addresses"), on the UI thread.</summary>
     event EventHandler<string>? AutoHidden { add { } remove { } }
 

@@ -6,6 +6,8 @@ Nov 25, 2026 · Revision 3: easier for non-technical users. A short tray menu th
 
 Nov 26, 2026 · Revision 5: more for presenters. Click a window to show it, a command line, a never-show list, a Do not disturb reminder, zooming in on the TV, click highlights and a ring around the pointer, a countdown on the blank screen, a talk timer, cameras as sources, a slideshow of favourites, an offer when a TV is plugged in, drawing and a laser pointer on the TV, a small picture in a corner, and an opt-in update check. Changed requirements are marked **(rev 5)**.
 
+Nov 26, 2026 · Revision 8: more from everything. Exact on/off for a dozen switches from the command line; automatic hiding of keys, passwords and your own list of names, in screenshots and recordings too; zoom, the name banner, live captions, a break countdown and playlists from the phone; a contact card as a QR code; shuffled playlists; web subtitles; scenes that switch live captions. It also finishes FR-16 (the idle screen's message and logo when what's shown closes), FR-51 (the preview after a screenshot) and FR-59 (stopping a recording at a set time). Changed requirements are marked **(rev 8)**.
+
 Nov 26, 2026 · Revision 7: running the room. Scenes on one key, playlists for lobby screens, hiding email addresses and numbers automatically, transcripts and readable captions, and a phone remote. Changed requirements are marked **(rev 7)**.
 
 Nov 26, 2026 · Revision 6: stage tools. Hide part of a window, see exactly what the audience sees, get the next thing ready and then switch, a spotlight, arrows, boxes and text on the TV, a name banner, your logo on the blank screen, a QR code made on the PC, room profiles, schedules, live captions worked out on the PC, and a second TV. Changed requirements are marked **(rev 6)**.
@@ -37,6 +39,7 @@ In scope for v1.0:
 - **(rev 5)** Presenting aids on the TV (zoom, click rings, pointer ring, laser, drawing, a small picture in a corner), cameras as sources, privacy aids (a never-show list, a Do not disturb reminder), a command line, and an opt-in update check (section 3.7).
 - **(rev 6)** Stage tools: hiding part of a window, the audience view, getting the next thing ready, a spotlight, arrows, boxes and text, a name banner, a logo, QR codes, room profiles, schedules, live captions and a second TV (section 3.8).
 - **(rev 7)** Running the room: scenes, playlists for lobby screens, automatic hiding of personal details, transcripts, and a phone remote (section 3.9).
+- **(rev 8)** More from each of these: exact switches from the command line, keys, passwords and your own words hidden automatically, a fuller phone remote, contact cards, shuffled playlists, web subtitles and scenes with captions (section 3.10).
 
 Out of scope for v1.0: streaming over the network, video editing, macOS and Linux builds. **(rev 2: recording and audio capture moved into scope; rev 5: annotation moved into scope as drawing on the TV, FR-71)**
 
@@ -230,6 +233,20 @@ The stage tools reach the helper as one-line commands like the marks before them
 
 How these stay light: nothing runs until it's used. Playlists run a timer only while playing; text recognition runs only while automatic hiding is on, in the capture helper; the remote runs only while switched on, in its own process; transcripts write a line at a time.
 
+### 3.10 More from everything (rev 8)
+
+| ID | Requirement | Priority |
+| --- | --- | --- |
+| FR-91 | Exact switches from the command line: `--on NAME` and `--off NAME` for the spotlight, the name banner (`caption`), live captions, automatic hiding, the laser, click highlights, the pointer ring, the phone remote, the audience view, the outline, the now-showing bar (`badge`) and the widget. Nothing happens when it already is so, so a button deck can't get out of step. Exit 1 with the reason when it couldn't be done (e.g. the spotlight with nothing shown); an unknown name is a mistake (exit 2) that lists the names | Should |
+| FR-92 | Hide automatically, two more kinds (Settings › Privacy, each chosen separately): **keys and passwords**, by their published shapes (AWS access keys, GitHub and Slack tokens, Stripe and "sk-" keys, JSON web tokens) and the value after "password", "passcode", "PIN", "secret", "API key", "access key" or "token" followed by ":" or "=" (only the value is covered; at least 3 characters); and **words from your list**: up to 40 names or words of up to 60 characters (client names, code names), found whole, in any capitals, with any spacing between words; a longer entry wins over a shorter one inside it. A line that can't be checked against the list within 250 ms is covered whole. Typing words switches the kind on. Like the other kinds, on the TV, in screenshots and in recordings | Should |
+| FR-93 | Phone remote, more buttons: zoom in and out, the name banner, live captions, the break countdown, and the saved playlists by name (sent by number). Still a fixed list, and still nothing that opens a window: the name banner without a name tells the phone to type it on the PC. What the PC says about a command (e.g. "Show something first") is shown on the phone | Could |
+| FR-94 | A contact card as a QR code: a name with a phone number, an email address or both, as a MECARD that phone cameras offer to save. Only the name is written under the code. The form opens on the kind made last and offers the last card again; a scene may keep a card (it holds no secret) | Could |
+| FR-95 | Shuffled playlists: a different order each time round, never the same item twice running (a lone item that can be shown stays). Chosen when a playlist is made, or with "Shuffle" / "In order" in Settings | Could |
+| FR-96 | Web subtitles: a transcript's subtitles are also written as WebVTT (.vtt), for web players and slide tools, with the same timing as the .srt | Could |
+| FR-97 | Scenes keep live captions on or off, and showing one switches them to match. A scene saved before scenes kept them leaves live captions as they are | Could |
+
+How these stay light: the new kinds of hiding are two more source-generated expressions over the line text already built for the other kinds, run only while chosen; the presenter's words are one expression made once when the list changes (never per frame); shuffling picks from the items that can be shown, with no list kept between turns.
+
 ## 4. Non-functional requirements
 
 ### 4.1 Performance and memory
@@ -252,6 +269,7 @@ How these stay light: nothing runs until it's used. Playlists run a timer only w
 | NFR-09e | A busy frame of marks on the GPU **(rev 6)**: 12 blurred hidden parts, 200 lines (pen, highlighter crossing itself, arrows, boxes), the spotlight, banner, QR code and live captions | ≤ 16 ms (one 60 Hz frame); measured on the real GPU by the tests |
 | NFR-09g | Memory a busy frame of marks allocates **(rev 7)** | ≤ 2 KB (it was about 160 KB before the frame lists were kept); measured by the tests |
 | NFR-09h | Running the room **(rev 7)** | A page of 300 dense lines checked for personal details ≤ 10 ms; a phone command's round trip ≤ 50 ms on the network; automatic hiding's buffers reused (no growth) |
+| NFR-09i | Hiding keys and your own words **(rev 8)** | 300 busy lines (addresses, labelled passwords, tokens, listed names) checked with every kind on and a full list of 40 words ≤ 15 ms |
 | NFR-09f | Work done while presenting **(rev 6)** | Never-show check on 300 windows ≤ 0.5 ms; a schedule check ≤ 0.2 ms; a caption line ≤ 0.02 ms; a hidden-parts line out and in ≤ 0.1 ms; replaying 500 marks to a new engine ≤ 20 ms; a QR code ≤ 10 ms; the tray menu ≤ 0.5 ms; a command-line round trip ≤ 150 ms; full settings save or load ≤ 60 ms |
 
 How memory stays low:
@@ -298,6 +316,7 @@ How memory stays low:
 - No network calls, no telemetry, no crash upload unless the user opts in. **(rev 3)** The one exception is user-initiated: "Set up a Zoom screen" runs Windows' winget, which downloads the driver. **(rev 5)** And the opt-in update check (FR-73), from a separate helper process.
 - **(rev 5)** Never-show apps never reach the audience (FR-62). Marks for the audience never reveal private work: no click rings, pointer ring or laser while frozen or over another window, and a countdown never brings the picture back on its own. A slideshow's switch never undoes a blank, freeze or hold that came meanwhile, and a hold is checked again just before it lifts. Every new overlay (the click layer, the drawing layer and its toolbar) is hidden from capture and kept off the TV.
 - **(rev 6)** Hidden parts (FR-74) are covered before anything is seen, on every engine, at every brightness, while frozen, and in screenshots and recordings of that window; something with hidden parts is never shown by an engine that can't cover them. The audience view, the text box for text marks and every form (a Wi-Fi password is typed in one) are hidden from capture. Live captions listen only while on, on the PC itself, and never show on a break screen or on black. A QR code's label never shows a Wi-Fi password, and the password is never saved.
+- **(rev 8)** Keys and passwords are covered by their shape or their label; your own words are kept in the settings file (they have to be read to be found) and never sent anywhere; a line that can't be checked in time is covered whole rather than shown. A contact card shows only the name under the code. The phone's new buttons open nothing on the PC.
 - **(rev 7)** The phone remote is off unless switched on and can't be reached from outside the local network; its pairing code is never on the TV; its key never crosses the network and is stored encrypted; commands are signed, can't be replayed, are limited in rate and limited to a fixed list (no settings, no quitting, no saving, nothing that opens a window). Automatic hiding reads the picture on the PC only, and a transcript is written only when switched on.
 - Signed executable to avoid SmartScreen warnings.
 
@@ -444,6 +463,7 @@ Estimated effort for one developer: about 6 weeks to v1.0.
 6. **M6 – Hardening and release.** Settings window, DPI, hot-plug, sleep/resume, start with Windows, 8-hour soak test, single-file publish, signed build. Exit: all Must requirements pass.
 7. **M7 – More for presenters (rev 5).** FR-05, FR-43 and FR-62–FR-73. Exit: unit tests for every rule above; the real engine draws every mark on the GPU; the helper takes every new command end to end; the stress harness's `cli`, `extras` and `nevershow` scenarios pass; the manual checks in docs/TESTING.md.
 9. **M9 – Running the room (rev 7).** FR-86–FR-90. Exit: unit tests for every rule above; real text recognition finds an address in a rendered picture, and the GPU scan covers it; the phone page's own SHA-256/HMAC agree with .NET and RFC 4231 (run in Node); the real remote helper serves, refuses replays and unlisted commands, and stops with the app; a busy frame within NFR-09g; the stress harness's `room` scenario passes; the manual checks in docs/TESTING.md.
+10. **M10 – More from everything (rev 8).** FR-91–FR-97, and the rest of FR-16, FR-51 and FR-59. Exit: unit tests for every rule above; real text recognition covering a labelled password and a listed name in a rendered picture; the words reaching the capture, screenshot and recording helpers through their own parsers; the phone page's script pressing the new buttons against the real remote helper (run in Node); NFR-09i met; the stress harness's `room` scenario (with `--on`/`--off`, own words and a shuffled playlist) passes.
 8. **M8 – Stage tools (rev 6).** FR-74–FR-85. Exit: unit tests for every rule above; QR codes decode with an independent decoder, including one read back from the GPU's own picture; hidden parts, the spotlight and highlighter overlaps checked pixel by pixel on the GPU; every new helper command round-trips through the helper's own parser; NFR-09e and NFR-09f met; the stress harness's `stage` and `speed` scenarios pass; the manual checks in docs/TESTING.md.
 
 ### 8.1 Acceptance tests
@@ -468,6 +488,8 @@ Estimated effort for one developer: about 6 weeks to v1.0.
 | Speed **(rev 6)** | `StressHarness speed`, and the GPU speed tests | Within NFR-09e and NFR-09f, and the harness budgets |
 | Phone remote **(rev 7)** | Pair an iPhone and an Android phone; capture the Wi-Fi traffic and resend a command; try from another network | Both pair and work; the resent command is refused; nothing answers from outside |
 | Automatic hiding **(rev 7)** | Scroll an inbox and a CRM page with it on; watch the TV | Addresses and numbers covered within half a second; dates and amounts left alone |
+| Keys and your words **(rev 8)** | Show a terminal with an `.env` file, a password manager's export and a CRM listing clients on your list; take a screenshot and record | Every key, labelled password and listed name covered on the TV and in both files; the labels and other text readable |
+| Contact card **(rev 8)** | Scan the TV's contact card with an iPhone and an Android phone | Both offer to save the contact with the name, phone and email |
 
 ## Appendix A. Open-source references
 

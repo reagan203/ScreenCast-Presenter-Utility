@@ -61,8 +61,9 @@ internal static class CaptureProtocol
     }
 
     /// <param name="autoHide">Automatic hiding from the first frame (FR-88): the picture is held until it's been scanned once.</param>
-    public static string Start(nint parent, SourceWindow source, bool cursor, bool frozen, Size output, SensitiveKinds autoHide = SensitiveKinds.None, RedactStyle style = RedactStyle.Solid) =>
-        string.Create(Inv, $"start {parent} {SourceSpec(source)} {(cursor ? 1 : 0)} {(frozen ? 1 : 0)} {Crop(source.Crop)} {output.Width} {output.Height} {(int)autoHide} {(int)style}");
+    public static string Start(nint parent, SourceWindow source, bool cursor, bool frozen, Size output, SensitiveKinds autoHide = SensitiveKinds.None, RedactStyle style = RedactStyle.Solid,
+        IReadOnlyList<string>? words = null) =>
+        string.Create(Inv, $"start {parent} {SourceSpec(source)} {(cursor ? 1 : 0)} {(frozen ? 1 : 0)} {Crop(source.Crop)} {output.Width} {output.Height} {(int)autoHide} {(int)style} {SensitiveText.WordsToken(words)}");
 
     public static string Opacity(double value) => string.Create(Inv, $"opacity {value:R}");
     public static string OutputSize(Size size) => string.Create(Inv, $"size {size.Width} {size.Height}");
@@ -146,6 +147,9 @@ internal static class CaptureProtocol
 
     /// <summary>Automatic hiding (FR-88): what to look for and how covered parts look.</summary>
     public static string AutoHide(SensitiveKinds kinds, RedactStyle style) => string.Create(Inv, $"autohide {(int)kinds} {(int)style}");
+
+    /// <summary>The presenter's own words for automatic hiding, as one escaped word.</summary>
+    public static string AutoHideWords(IReadOnlyList<string>? words) => "autohide-words " + SensitiveText.WordsToken(words);
 
     /// <summary>"autohide kinds style" back to its parts; nonsense is off.</summary>
     public static (SensitiveKinds Kinds, RedactStyle Style) ParseAutoHide(string kinds, string style)

@@ -50,6 +50,9 @@ internal sealed record TrayMenuState
     public TimeSpan RecordingElapsed { get; init; }
     public TimeSpan? StopAfter { get; init; }
 
+    /// <summary>FR-59: the recording stops when the clock reaches this; null for none.</summary>
+    public DateTime? StopAt { get; init; }
+
     /// <summary>When nothing is shown: the last thing shown, to bring back in one click.</summary>
     public string? ShowAgainTitle { get; init; }
 
@@ -111,7 +114,7 @@ internal static class TrayMenuPlan
     {
         "help", "settings", "settings:output", "settings:appearance", "settings:privacy", "quit", "record-output", "record-picker",
         "stop-recording", "pause-recording", "open-recordings", "output-window", "zoom", "stop-after:never", "show-again",
-        "settings:rooms", "stop-second-tv",
+        "settings:rooms", "stop-second-tv", "stop-at",
     };
 
     /// <summary>A command something will actually run (tests check every menu line and help topic).</summary>
@@ -174,12 +177,13 @@ internal static class TrayMenuPlan
             menu.Add(new(s.Recording == RecordingStatus.Paused ? "Resume recording" : "Pause recording", "pause-recording",
                 Enabled: s.Recording is RecordingStatus.Recording or RecordingStatus.Paused, Shortcut: "pause-recording"));
             menu.Add(new("Stop recording", "stop-recording", Enabled: s.Recording != RecordingStatus.Stopping, Shortcut: "record"));
-            var limits = new List<MenuEntry> { new("Only when the window closes or I stop it", "stop-after:never", Checked: s.StopAfter is null) };
+            var limits = new List<MenuEntry> { new("Only when the window closes or I stop it", "stop-after:never", Checked: s.StopAfter is null && s.StopAt is null) };
             foreach (int minutes in StopAfterMinutes)
             {
                 TimeSpan span = TimeSpan.FromMinutes(minutes);
                 limits.Add(new($"After {DurationWords(span)}", $"stop-after:{minutes}", Enabled: s.RecordingElapsed < span, Checked: s.StopAfter == span));
             }
+            limits.Add(new(s.StopAt is { } at ? $"At {at:HH:mm} (change…)" : "At a set time…", "stop-at", Checked: s.StopAt is not null));
             menu.Add(MenuEntry.Submenu("Stop automatically", limits));
             return;
         }
@@ -217,7 +221,7 @@ internal static class TrayMenuPlan
             new("Live captions", "live-captions", Checked: s.LiveCaptions, Shortcut: "live-captions"),
             MenuEntry.Separator,
             new("Hide part of it…", "hide-part", Shortcut: "hide-part"),
-            new("Hide email addresses and numbers automatically", "auto-hide", Checked: s.AutoHide, Shortcut: "auto-hide"),
+            new("Hide private details automatically", "auto-hide", Checked: s.AutoHide, Shortcut: "auto-hide"),
             new("Show the hidden parts", "show-hidden", Enabled: s.HasHiddenParts, Shortcut: "show-hidden"),
             MenuEntry.Separator,
             MenuEntry.Submenu("Blank with a countdown", countdown),

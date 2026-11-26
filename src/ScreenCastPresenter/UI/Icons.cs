@@ -119,6 +119,7 @@ internal static class Icons
         "toggle-theme" => Colour,
         _ when command.StartsWith("settings", StringComparison.Ordinal) => Settings,
         _ when command.StartsWith("output:", StringComparison.Ordinal) => Tv,
+        "stop-at" => Clock,
         _ when command.StartsWith("stop-after:", StringComparison.Ordinal) || command.StartsWith("countdown:", StringComparison.Ordinal) => Clock,
         _ when command.StartsWith("favourite-", StringComparison.Ordinal) || command.StartsWith("save-favourite-", StringComparison.Ordinal) => Star,
         _ => null,

@@ -62,7 +62,7 @@ internal sealed class RemoteWgcEngine : ICaptureEngine, IEffectsEngine
         StreamReader replies = _helper.StandardOutput;
         new Thread(() => ReadReplies(replies)) { IsBackground = true, Name = "SCP capture replies" }.Start();
 
-        Send(CaptureProtocol.Start(output, source, _showCursor, _startFrozen, outputClientSize, StartAutoHide, StartAutoStyle));
+        Send(CaptureProtocol.Start(output, source, _showCursor, _startFrozen, outputClientSize, StartAutoHide, StartAutoStyle, StartAutoWords));
         try
         {
             await _ready.Task.WaitAsync(StartTimeout);
@@ -170,6 +170,7 @@ internal sealed class RemoteWgcEngine : ICaptureEngine, IEffectsEngine
     public void LiveCaption(string? text) => Send(CaptureProtocol.Live(text));
     public void CaptionStyle(CaptionLook look) => Send(CaptureProtocol.CaptionStyle(look));
     public void AutoHide(SensitiveKinds kinds, RedactStyle style) => Send(CaptureProtocol.AutoHide(kinds, style));
+    public void AutoHideWords(IReadOnlyList<string> words) => Send(CaptureProtocol.AutoHideWords(words));
 
     /// <summary>Automatic hiding covered something (FR-88), in words.</summary>
     public event EventHandler<string>? AutoHidden;
@@ -177,6 +178,7 @@ internal sealed class RemoteWgcEngine : ICaptureEngine, IEffectsEngine
     /// <summary>Automatic hiding from the first frame (FR-88): set before starting.</summary>
     public SensitiveKinds StartAutoHide { get; init; }
     public RedactStyle StartAutoStyle { get; init; }
+    public IReadOnlyList<string>? StartAutoWords { get; init; }
     public void Inset(SourceWindow? source, InsetCorner corner, int percent) => Send(CaptureProtocol.Inset(source, corner, percent));
 
     public event EventHandler<string>? InsetFailed;

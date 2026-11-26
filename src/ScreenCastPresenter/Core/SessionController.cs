@@ -171,6 +171,12 @@ internal sealed class SessionController : IDisposable
         (_engine as IEffectsEngine)?.Logo(path);
     }
 
+    /// <summary>
+    /// What the idle screen says when what's shown closes (FR-16): with your logo above it; null
+    /// keeps it plain black.
+    /// </summary>
+    public Func<string?>? IdleText { get; set; }
+
     /// <summary>Text for "blank with a message" (FR-27).</summary>
     public string BlankMessage { get; set; } = "We'll be right back";
 
@@ -966,6 +972,7 @@ internal sealed class SessionController : IDisposable
             IsBlanked = false;
             SetState(SessionState.IdleScreen);
             SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
+            if (IdleText?.Invoke() is { Length: > 0 } text) await ShowIdleMessageAsync(text); // fades in, never a jump
             Message?.Invoke(this, $"“{title}” was closed. The TV is showing a blank screen.");
         }
         catch (Exception ex)

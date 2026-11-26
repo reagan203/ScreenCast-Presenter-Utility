@@ -476,27 +476,51 @@ internal sealed partial class ScpApp
         (Control nameRow, TextBox network) = form.AddField("Wi-Fi network", Settings.QrWifiName ?? "", 32, "Guest Wi-Fi");
         (Control passwordRow, TextBox password) = form.AddField("Password", "", 63, "", secret: true);
         CheckBox open = form.AddCheck("The network has no password", false);
-        bool wifi = false;
+        (Control contactRow, TextBox contactName) = form.AddField("Name", Settings.QrContactName ?? "", QrCode.MaxContactField, "Sam Taylor");
+        (Control phoneRow, TextBox phone) = form.AddField("Phone", Settings.QrContactPhone ?? "", QrCode.MaxContactField, "+44 20 7946 0958");
+        (Control emailRow, TextBox email) = form.AddField("Email", Settings.QrContactEmail ?? "", QrCode.MaxContactField, "sam@example.com");
+        QrKind kind = Enum.TryParse(Settings.QrKind, out QrKind last) && Enum.IsDefined(last) ? last : QrKind.Link;
         // Placed above the fields: the choice shows only the fields that apply.
-        form.AddChoice(["Link", "Wi-Fi"], Settings.QrLink is null && Settings.QrWifiName is not null ? 1 : 0, choice =>
+        form.AddChoice(["Link", "Wi-Fi", "Contact"], (int)kind, choice =>
         {
-            wifi = choice == 1;
-            linkRow.Visible = !wifi;
-            nameRow.Visible = passwordRow.Visible = open.Visible = wifi;
+            kind = (QrKind)choice;
+            linkRow.Visible = kind == QrKind.Link;
+            nameRow.Visible = passwordRow.Visible = open.Visible = kind == QrKind.WiFi;
+            contactRow.Visible = phoneRow.Visible = emailRow.Visible = kind == QrKind.Contact;
         });
         open.CheckedChanged += (_, _) => passwordRow.Enabled = !open.Checked;
-        form.Check = () => QrInputProblem(wifi, link.Text, network.Text, password.Text, open.Checked);
+        form.Check = () => kind == QrKind.Contact ? ContactInputProblem(contactName.Text, phone.Text, email.Text)
+            : QrInputProblem(kind == QrKind.WiFi, link.Text, network.Text, password.Text, open.Checked);
         if (!form.Ask()) return null;
-        if (wifi)
+        Settings.QrKind = kind.ToString();
+        switch (kind)
         {
-            Settings.QrWifiName = network.Text.Trim();
-            Settings.QrLink = null;
-            Save();
-            return QrCode.WiFi(network.Text.Trim(), open.Checked ? "" : password.Text, open.Checked);
+            case QrKind.WiFi:
+                Settings.QrWifiName = network.Text.Trim();
+                Save();
+                return QrCode.WiFi(network.Text.Trim(), open.Checked ? "" : password.Text, open.Checked);
+            case QrKind.Contact:
+                Settings.QrContactName = contactName.Text.Trim();
+                Settings.QrContactPhone = phone.Text.Trim() is { Length: > 0 } p ? p : null;
+                Settings.QrContactEmail = email.Text.Trim() is { Length: > 0 } e ? e : null;
+                Save();
+                return QrCode.Contact(contactName.Text, phone.Text, email.Text);
+            default:
+                Settings.QrLink = link.Text.Trim();
+                Save();
+                return link.Text.Trim();
         }
-        Settings.QrLink = link.Text.Trim();
-        Save();
-        return link.Text.Trim();
+    }
+
+    /// <summary>Why a contact card can't be made from what was typed, or null when it can.</summary>
+    internal static string? ContactInputProblem(string name, string phone, string email)
+    {
+        if (name.Trim().Length == 0) return "Type the name to save.";
+        if (phone.Trim().Length == 0 && email.Trim().Length == 0) return "Type a phone number or an email address (or both).";
+        if (email.Trim() is { Length: > 0 } e && (e.Contains(' ', StringComparison.Ordinal) || e.IndexOf('@') is <= 0 || e.IndexOf('@') == e.Length - 1))
+            return "That email address doesn't look right.";
+        if (phone.Trim() is { Length: > 0 } p && !p.Any(char.IsAsciiDigit)) return "That phone number has no digits.";
+        return QrCode.Encode(QrCode.Contact(name, phone, email)) is null ? "That's too long for a QR code on the TV." : null;
     }
 
     /// <summary>Why what was typed can't be a QR code, or null when it can.</summary>
@@ -670,6 +694,13 @@ internal sealed partial class ScpApp
                 break;
             case ScheduleAction.Scene:
                 await ShowSceneAsync(entry.Slot);
+                break;
+            case ScheduleAction.StopRecording:
+                if (_recording.IsActive && _recording.Status != ScreenCastPresenter.Recording.RecordingStatus.Stopping)
+                {
+                    _recordingEndNote = "Stopped by the schedule, recording saved";
+                    _recording.Stop();
+                }
                 break;
         }
     }
@@ -881,6 +912,7 @@ internal sealed partial class ScpApp
         if (_second is { } existing) return existing;
         var second = new SessionController(new Win32SessionPlatform(() => _store.Current)) { BlankMessage = Settings.BlankMessage };
         second.HiddenPartsFor = source => Redactions.PartsFor(Settings, source);
+        second.IdleText = () => Settings.IdleShowsMessage ? Settings.BlankMessage : null;
         second.HoldCheck = source => NeverShowAppOn(source) is not null ? HoldReason.PrivateApp : null;
         second.SetLogo(Settings.BlankLogo is { } logo && File.Exists(logo) ? logo : null);
         second.StateChanged += (_, _) => Guard(OnSecondChanged);
@@ -1004,6 +1036,7 @@ internal sealed partial class ScpApp
         _scheduleTimer.Tick += (_, _) => _ = GuardAsync(OnScheduleTickAsync);
         _captionsTimer.Tick += (_, _) => Guard(OnCaptionsTick);
         _session.HiddenPartsFor = source => Redactions.PartsFor(Settings, source);
+        _session.IdleText = () => Settings.IdleShowsMessage ? Settings.BlankMessage : null;
         ApplyLogo();
         UpdateSchedule();
         StartExtend();

@@ -93,16 +93,34 @@ internal static class RemoteCommands
 
     private static readonly HashSet<string> Fixed = new(StringComparer.Ordinal)
     {
-        Status, "next-slide", "previous-slide", "blank", "freeze", "spotlight", "stop", "previous-source", "next-window", "go",
+        Status, "next-slide", "previous-slide", "blank", "freeze", "spotlight", "stop", "previous-source", "next-window", "go", "stop-playlist",
+        "zoom-in", "caption", "live-captions", "blank-countdown",
     };
 
-    /// <summary>Only these, and favourites and scenes 1–9: nothing that opens a window or changes a setting.</summary>
-    public static bool IsAllowed(string? command) =>
-        command is not null && (Fixed.Contains(command) || SlotCommand(command, "favourite-") || SlotCommand(command, "scene-"));
+    public const string Favourite = "favourite-", Scene = "scene-", Playlist = "playlist-";
 
-    private static bool SlotCommand(string command, string prefix) =>
-        command.StartsWith(prefix, StringComparison.Ordinal) && command.Length == prefix.Length + 1
-        && command[^1] is >= '1' and <= '9' && command[^1] - '0' <= AppSettings.SlotCount;
+    /// <summary>
+    /// Only these, favourites and scenes 1–9, and playlists by number: nothing that opens a window
+    /// or changes a setting.
+    /// </summary>
+    public static bool IsAllowed(string? command) =>
+        command is not null && (Fixed.Contains(command) || Number(command, Favourite, AppSettings.SlotCount) is not null
+            || Number(command, Scene, Core.Scene.Slots) is not null || Number(command, Playlist, Core.Playlist.Max) is not null);
+
+    /// <summary>The number in "playlist-3" (1 to <paramref name="max"/>, no leading zero), or null.</summary>
+    public static int? Number(string command, string prefix, int max)
+    {
+        if (!command.StartsWith(prefix, StringComparison.Ordinal)) return null;
+        ReadOnlySpan<char> digits = command.AsSpan(prefix.Length);
+        if (digits.Length is 0 or > 2 || digits[0] == '0') return null;
+        int n = 0;
+        foreach (char c in digits)
+        {
+            if (c is < '0' or > '9') return null;
+            n = n * 10 + (c - '0');
+        }
+        return n <= max ? n : null;
+    }
 }
 
 /// <summary>Limits how often commands are taken (FR-90): a stuck button or a flood can't overwhelm the app.</summary>

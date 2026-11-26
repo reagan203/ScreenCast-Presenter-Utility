@@ -70,6 +70,23 @@ internal sealed class TranscriptWriter : IDisposable
     /// <summary>The subtitles' path, beside the text.</summary>
     public string SubtitlePath => System.IO.Path.ChangeExtension(Path, ".srt");
 
+    /// <summary>The web subtitles' path (WebVTT, for web players and slide tools), beside the text.</summary>
+    public string WebSubtitlePath => System.IO.Path.ChangeExtension(Path, ".vtt");
+
+    /// <summary>The lines as WebVTT: the same timing as the SubRip file, in the web's format.</summary>
+    public static string Vtt(IReadOnlyList<TranscriptLine> lines)
+    {
+        var vtt = new StringBuilder("WEBVTT\n\n");
+        string srt = Srt(lines);
+        foreach (string block in srt.Split("\n\n", StringSplitOptions.RemoveEmptyEntries))
+        {
+            string[] parts = block.Split('\n', 3);
+            if (parts.Length < 3) continue;
+            vtt.Append(parts[1].Replace(',', '.')).Append('\n').Append(parts[2]).Append("\n\n"); // the cue's time line uses a dot
+        }
+        return vtt.ToString();
+    }
+
     public IReadOnlyList<TranscriptLine> Lines => _lines;
 
     /// <summary>A new transcript in <paramref name="folder"/>, named like recordings; null (with why) when it can't be written.</summary>
@@ -134,7 +151,11 @@ internal sealed class TranscriptWriter : IDisposable
         try
         {
             _text.Dispose();
-            if (_lines.Count > 0) File.WriteAllText(SubtitlePath, Srt(_lines), new UTF8Encoding(false));
+            if (_lines.Count > 0)
+            {
+                File.WriteAllText(SubtitlePath, Srt(_lines), new UTF8Encoding(false));
+                File.WriteAllText(WebSubtitlePath, Vtt(_lines), new UTF8Encoding(false));
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

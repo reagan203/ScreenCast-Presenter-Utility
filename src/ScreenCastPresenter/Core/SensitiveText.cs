@@ -12,7 +12,14 @@ internal enum SensitiveKinds
     Cards = 4,
     Ibans = 8,
     IdNumbers = 16,
-    All = Emails | Phones | Cards | Ibans | IdNumbers,
+
+    /// <summary>Keys and passwords: API keys and access tokens by their known shapes, and what follows "password:", "PIN=" and the like.</summary>
+    Secrets = 32,
+
+    /// <summary>Words and names on the presenter's own list (Settings › Privacy › Hide automatically).</summary>
+    Custom = 64,
+
+    All = Emails | Phones | Cards | Ibans | IdNumbers | Secrets | Custom,
 }
 
 /// <summary>A word the on-device text recognizer read, and where it is in the picture it read.</summary>
@@ -54,11 +61,49 @@ internal static partial class SensitiveText
     [GeneratedRegex(@"^\d{4}[\-/.]\d{1,2}[\-/.]\d{1,2}$|^\d{1,2}[\-/.]\d{1,2}[\-/.]\d{2,4}$", RegexOptions.CultureInvariant)]
     private static partial Regex Date();
 
+    // Keys and tokens by their published shapes: AWS, GitHub, Slack, Stripe and similar "sk-" keys, and JSON web tokens.
+    [GeneratedRegex(@"\bAKIA[0-9A-Z]{16}\b|\bgh[pousr]_[A-Za-z0-9]{36,}|\bgithub_pat_[A-Za-z0-9_]{40,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bsk_(?:live|test)_[A-Za-z0-9]{16,}|\bsk-[A-Za-z0-9_-]{20,}|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", RegexOptions.CultureInvariant)]
+    private static partial Regex Token();
+
+    // A label people put before a secret, then the secret itself (only the value is covered).
+    [GeneratedRegex(@"\b(?:password|passwd|pwd|passcode|pin|secret|api[ _-]?key|access[ _-]?key|token)\s*[:=]\s*(?<value>\S+)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex Labelled();
+
+    /// <summary>Most words on the presenter's own list, and the longest a word may be.</summary>
+    public const int MaxCustomWords = 40, MaxCustomWordLength = 60;
+
+    /// <summary>The presenter's words made sensible: trimmed, no duplicates (ignoring case), within the limits.</summary>
+    public static List<string> NormalizeWords(IEnumerable<string?>? words) =>
+        [.. (words ?? []).OfType<string>().Select(w => InkStroke.TidyText(w, MaxCustomWordLength)).Where(w => w.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(MaxCustomWords)];
+
+    /// <summary>One pattern for the presenter's words: whole words, any case, longest first; null when there are none.</summary>
+    public static Regex? CustomPattern(IReadOnlyList<string>? words)
+    {
+        if (words is not { Count: > 0 }) return null;
+        string alternatives = string.Join('|', NormalizeWords(words).OrderByDescending(w => w.Length).Select(w => Regex.Escape(w).Replace(@"\ ", @"\s+")));
+        return alternatives.Length == 0 ? null : new Regex($@"(?<!\w)(?:{alternatives})(?!\w)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+    }
+
+    /// <summary>The words as one protocol word ("-" for none): each escaped, joined by commas.</summary>
+    public static string WordsToken(IReadOnlyList<string>? words) =>
+        words is not { Count: > 0 } ? "-" : string.Join(',', NormalizeWords(words).Select(Uri.EscapeDataString));
+
+    public static List<string> ParseWordsToken(string? token) =>
+        token is null or "-" or "" ? [] : NormalizeWords(token.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(w =>
+        {
+            try { return Uri.UnescapeDataString(w); }
+            catch (UriFormatException) { return null; }
+        }));
+
     /// <summary>Everything of <paramref name="kinds"/> in <paramref name="lines"/>, each as one box over its words.</summary>
-    public static List<SensitiveMatch> Find(IReadOnlyList<OcrLine> lines, SensitiveKinds kinds)
+    /// <param name="custom">The presenter's own words (<see cref="CustomPattern"/>), or null.</param>
+    public static List<SensitiveMatch> Find(IReadOnlyList<OcrLine> lines, SensitiveKinds kinds, Regex? custom = null)
     {
         var found = new List<SensitiveMatch>();
         if (kinds == SensitiveKinds.None) return found;
+        bool secrets = kinds.HasFlag(SensitiveKinds.Secrets);
+        if (!kinds.HasFlag(SensitiveKinds.Custom)) custom = null;
         // Kept across lines: a page of text makes no garbage per line.
         var text = new System.Text.StringBuilder();
         var spans = new List<(int Start, int End)>();
@@ -85,7 +130,7 @@ internal static partial class SensitiveText
                 }
             }
             // Most lines are words: only the checks a line could pass are run.
-            if (!at && digits < MinDigits) continue;
+            if (!at && digits < MinDigits && !secrets && custom is null) continue;
             string s = text.ToString();
 
             void Add(SensitiveKinds kind, int start, int length)
@@ -103,6 +148,20 @@ internal static partial class SensitiveText
                 if (box is { } r) found.Add(new SensitiveMatch(kind, Pad(r)));
             }
 
+            if (custom is not null)
+            {
+                MatchCollection? mine = custom.Matches(s);
+                try
+                {
+                    _ = mine.Count; // runs the search now, within its time limit
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    mine = null;
+                }
+                if (mine is null) Add(SensitiveKinds.Custom, 0, s.Length); // couldn't be checked in time: the whole line is covered
+                else foreach (Match m in mine) Add(SensitiveKinds.Custom, m.Index, m.Length);
+            }
             if (at && kinds.HasFlag(SensitiveKinds.Emails))
             {
                 // An address is one word to the recognizer: only words with an @ are looked at.
@@ -110,6 +169,15 @@ internal static partial class SensitiveText
                 {
                     string word = line.Words[i].Text;
                     if (word.Contains('@') && Email().Match(word) is { Success: true } m) Add(SensitiveKinds.Emails, spans[i].Start + m.Index, m.Length);
+                }
+            }
+            if (secrets)
+            {
+                foreach (Match m in Token().Matches(s)) Add(SensitiveKinds.Secrets, m.Index, m.Length);
+                foreach (Match m in Labelled().Matches(s))
+                {
+                    Group value = m.Groups["value"];
+                    if (value.Length >= 3) Add(SensitiveKinds.Secrets, value.Index, value.Length);
                 }
             }
             if (digits < MinDigits) continue;
@@ -210,6 +278,8 @@ internal static partial class SensitiveText
             (SensitiveKinds.Cards, "a card number", "card numbers"),
             (SensitiveKinds.Ibans, "a bank account number", "bank account numbers"),
             (SensitiveKinds.IdNumbers, "an ID number", "ID numbers"),
+            (SensitiveKinds.Secrets, "a key or password", "keys and passwords"),
+            (SensitiveKinds.Custom, "a word from your list", "words from your list"),
         })
         {
             int n = found.Count(f => f.Kind == kind);

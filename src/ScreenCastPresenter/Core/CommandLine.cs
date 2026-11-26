@@ -22,7 +22,8 @@ internal sealed record CliRequest
 
     /// <summary>
     /// Action ids from the shortcut catalogue, or these exact-state commands: "cli:blank-on",
-    /// "cli:blank-off", "cli:freeze-on", "cli:freeze-off", "cli:record-on", "stop-recording".
+    /// "cli:blank-off", "cli:freeze-on", "cli:freeze-off", "cli:record-on", "stop-recording",
+    /// "cli:on:NAME" and "cli:off:NAME" (NAME one of <see cref="CommandLine.Switches"/>).
     /// </summary>
     public IReadOnlyList<string> Actions { get; init; } = [];
 
@@ -50,6 +51,10 @@ internal static class CommandLine
         Capture.CaptureProtocol.HostSwitch, Capture.CaptureProtocol.StillSwitch, Recording.RecordingProtocol.RecordSwitch,
         Installer.UninstallSwitch, StartupRegistration.StartupSwitch, UpdateCheck.Switch, LiveCaptions.Switch, Remote.RemoteHost.Switch,
     };
+
+    /// <summary>What "--on NAME" and "--off NAME" switch: set exactly, so a button deck can't get out of step.</summary>
+    public static readonly IReadOnlyList<string> Switches =
+        ["spotlight", "caption", "live-captions", "auto-hide", "laser", "highlight-clicks", "pointer-ring", "phone-remote", "audience-view", "outline", "badge", "widget"];
 
     private static readonly Dictionary<string, string> Simple = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -94,6 +99,9 @@ internal static class CommandLine
           --qr "link"                  put a QR code for the link on the TV ("--qr off" takes it off)
           --scene N                    show scene 1 to 9
           --playlist "name"            play a playlist on its TV ("--playlist off" stops them)
+          --on NAME, --off NAME        switch one of these on or off (nothing happens if it already is):
+                                       spotlight, caption, live-captions, auto-hide, laser, highlight-clicks,
+                                       pointer-ring, phone-remote, audience-view, outline, badge, widget
           --action NAME                any action, by the name in Settings, e.g. dim, zoom, slideshow
           --help                       this text
 
@@ -198,6 +206,15 @@ internal static class CommandLine
                     if (v.Equals("off", StringComparison.OrdinalIgnoreCase)) actions.Add("cli:qr-off");
                     else if (System.Text.Encoding.UTF8.GetByteCount(v) > QrCode.MaxBytes) return (null, $"That's too long for a QR code on the TV (at most {QrCode.MaxBytes} letters).");
                     else actions.Add("cli:qr:" + v);
+                    break;
+                }
+                case "--on" or "--off":
+                {
+                    string? v = NextValue();
+                    string? what = v is null ? null : Switches.FirstOrDefault(s => s.Equals(v, StringComparison.OrdinalIgnoreCase));
+                    if (what is null)
+                        return (null, $"{name} needs one of: {string.Join(", ", Switches)}{(v is null ? "" : $" (got “{v}”)")}.");
+                    actions.Add((name.Equals("--on", StringComparison.OrdinalIgnoreCase) ? "cli:on:" : "cli:off:") + what);
                     break;
                 }
                 case "--action":

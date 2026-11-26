@@ -56,6 +56,7 @@ internal sealed partial class ScpApp
             QrLink = Scene.KeepableQr(_qrText),
             Spotlight = _spotlightOn,
             Dim = _session.Dim,
+            LiveCaptions = LiveCaptionsOn,
         };
         Save();
         _tray.Refresh();
@@ -86,6 +87,7 @@ internal sealed partial class ScpApp
         if (scene.QrLink != _qrText) SetQr(scene.QrLink);
         if (scene.Spotlight != _spotlightOn) SetSpotlight(scene.Spotlight);
         if (Math.Abs(scene.Dim - _session.Dim) > 0.001) await _session.SetDimAsync(scene.Dim);
+        if (scene.LiveCaptions is { } captions && captions != LiveCaptionsOn) ToggleLiveCaptions();
         Message($"Scene {slot}: {scene.Title(slot)}.", BadgeDot.Accent);
     }
 
@@ -126,6 +128,9 @@ internal sealed partial class ScpApp
     }
 
     private readonly Dictionary<PlaylistScreen, PlaylistRun> _playing = [];
+
+    /// <summary>The order of shuffled playlists (not for anything secret).</summary>
+    private readonly Random _shuffle = new();
 
     /// <summary>The playlist itself is choosing what to show (so that doesn't count as the presenter choosing).</summary>
     private bool _playlistSwitching;
@@ -172,7 +177,7 @@ internal sealed partial class ScpApp
         var resolved = new Dictionary<PlaylistItem, SourceWindow?>();
         foreach (PlaylistItem item in run.Playlist.Items.Distinct()) resolved[item] = await ResolveItemAsync(item, run.Screen);
         if (!_playing.TryGetValue(run.Screen, out PlaylistRun? still) || !ReferenceEquals(still, run)) return false; // stopped meanwhile
-        int? next = PlaylistPlayer.Next(run.Playlist.Items, run.Index, item => resolved[item] is not null);
+        int? next = PlaylistPlayer.Next(run.Playlist.Items, run.Index, item => resolved[item] is not null, run.Playlist.Shuffle, _shuffle);
         if (next is not { } index) return false;
         if (index == run.Index && run.Index is not null) return true; // only one can be shown: it stays
         PlaylistItem chosen = run.Playlist.Items[index];
@@ -279,6 +284,7 @@ internal sealed partial class ScpApp
         (_, TextBox name) = form.AddField("Name", "", Playlist.MaxNameLength, "Lobby");
         ComboBox where = form.AddList("Plays on", ["The TV", "The second TV"], 0);
         ComboBox seconds = form.AddList("Each shows for", [.. Slideshow.Seconds.Select(Slideshow.Words)], Math.Max(0, Slideshow.Seconds.ToList().IndexOf(Settings.SlideshowSeconds)));
+        CheckBox shuffle = form.AddCheck("Shuffle: a different order each time round", false);
         var ticks = new List<(CheckBox Box, PlaylistItem Item)>();
         foreach (int s in favourites)
             ticks.Add((form.AddCheck($"Favourite {s}: {TrayMenuPlan.Shorten(Settings.Favourites[s - 1]!.Title, 40)}", true), new PlaylistItem { Kind = "Favourite", Slot = s }));
@@ -295,10 +301,19 @@ internal sealed partial class ScpApp
             Name = RoomProfile.TidyName(name.Text),
             Screen = (where.SelectedIndex == 1 ? PlaylistScreen.Second : PlaylistScreen.Main).ToString(),
             Items = [.. ticks.Where(t => t.Box.Checked).Select(t => new PlaylistItem { Kind = t.Item.Kind, Slot = t.Item.Slot, Seconds = each })],
+            Shuffle = shuffle.Checked,
         });
         Save();
         _tray.Refresh();
         Message($"Made “{RoomProfile.TidyName(name.Text)}”. Play it from the tray menu, a schedule or --playlist.");
+    }
+
+    /// <summary>Settings: a playlist in order or shuffled (a playing one follows from its next item).</summary>
+    public void SetPlaylistShuffle(string name, bool on)
+    {
+        if (Playlist.Find(Settings.Playlists, name) is not { } playlist || playlist.Shuffle == on) return;
+        playlist.Shuffle = on;
+        Save();
     }
 
     public void DeletePlaylist(string name)
@@ -345,7 +360,19 @@ internal sealed partial class ScpApp
         }
         if (_second?.Effects is { } second) second.AutoHide(kinds, Settings.HiddenPartStyle);
         Message(kinds == SensitiveKinds.None ? "Automatic hiding is off."
-            : "Email addresses and the other details you chose are covered on the TV when they're seen. It's a moment behind, so hide parts you know about yourself.", BadgeDot.Accent);
+            : "The details you chose (in Settings › Privacy) are covered on the TV when they're seen. It's a moment behind, so hide parts you know about yourself.", BadgeDot.Accent);
+    }
+
+    /// <summary>Settings › Privacy › Hide automatically › Your own words: names and words always covered (with "Words from your list" ticked).</summary>
+    public void SetAutoHideWords(IEnumerable<string> words)
+    {
+        List<string> tidy = SensitiveText.NormalizeWords(words);
+        if (tidy.SequenceEqual(Settings.AutoHideWords, StringComparer.Ordinal)) return;
+        Settings.AutoHideWords = tidy;
+        Save();
+        _session.Effects?.AutoHideWords(tidy);
+        _second?.Effects?.AutoHideWords(tidy);
+        if (tidy.Count > 0 && !Settings.AutoHideKinds.HasFlag(SensitiveKinds.Custom)) SetAutoHide(Settings.AutoHideKinds | SensitiveKinds.Custom); // words given: they're wanted
     }
 
     /// <summary>"auto-hide": off, or back to what was chosen (everything when nothing was).</summary>
@@ -546,23 +573,81 @@ internal sealed partial class ScpApp
         remote?.Dispose();
     }
 
+    /// <summary>Whether a switch of "--on NAME" is on now; null for a name that isn't one.</summary>
+    internal bool? IsSwitchedOn(string what) => what switch
+    {
+        "spotlight" => _spotlightOn,
+        "caption" => _captionOn,
+        "live-captions" => LiveCaptionsOn,
+        "auto-hide" => Settings.AutoHideKinds != SensitiveKinds.None,
+        "laser" => _laserOn,
+        "highlight-clicks" => Settings.HighlightClicks,
+        "pointer-ring" => Settings.PointerRing,
+        "phone-remote" => Settings.PhoneRemote,
+        "audience-view" => AudienceViewOpen,
+        "outline" => Settings.ShowOutline,
+        "badge" => Settings.ShowBadge,
+        "widget" => Settings.ShowWidget,
+        _ => null,
+    };
+
+    /// <summary>"--on NAME" / "--off NAME": set as asked (nothing when it already is). Why it couldn't be, or null.</summary>
+    private async Task<string?> SwitchAsync(string what, bool on)
+    {
+        if (IsSwitchedOn(what) is not { } now) return $"“{what}” isn't something that can be switched on or off.";
+        if (now == on) return null;
+        switch (what)
+        {
+            case "caption" when on && Settings.CaptionName.Length == 0:
+                _ = RunCommandAsync("caption"); // asks for the name first: don't hold up the command line
+                return null;
+            case "phone-remote": SetPhoneRemote(on); break;
+            case "highlight-clicks": SetHighlightClicks(on); break;
+            case "pointer-ring": SetPointerRing(on); break;
+            case "outline": SetShowOutline(on); break;
+            case "badge": SetShowBadge(on); break;
+            case "widget": SetShowWidget(on); break;
+            default: await RunAsync(what); break; // the others are toggles of their own name
+        }
+        return IsSwitchedOn(what) == on ? null : LastCommandMessage($"Couldn't switch {what} {(on ? "on" : "off")}.");
+    }
+
     /// <summary>A command from the phone (checked by the helper and again here): run, then what's on goes back.</summary>
     private async Task RunRemoteCommandAsync(RemoteProcess remote, string command)
     {
         if (!ReferenceEquals(_remote, remote) || !RemoteCommands.IsAllowed(command)) return;
         Diag("remote: " + command);
-        switch (command)
+        List<string> said = _remoteMessages = [];
+        try
         {
-            case RemoteCommands.Status: break;
-            case "next-slide": SendSlide(forward: true); break;
-            case "previous-slide": SendSlide(forward: false); break;
-            default: await RunAsync(command); break;
+            switch (command)
+            {
+                case RemoteCommands.Status: break;
+                case "next-slide": SendSlide(forward: true); break;
+                case "previous-slide": SendSlide(forward: false); break;
+                case "caption" when Settings.CaptionName.Length == 0 && !_captionOn:
+                    Message("Type the name for the banner on the PC first (the tray menu's name banner): the phone can't type it."); // never a window from the phone
+                    break;
+                case string p when RemoteCommands.Number(p, RemoteCommands.Playlist, Playlist.Max) is { } n:
+                    if (n <= Settings.Playlists.Count) await StartPlaylistAsync(Settings.Playlists[n - 1].Name);
+                    else Message("That playlist isn't there any more.");
+                    break;
+                default: await RunAsync(command); break;
+            }
         }
-        PushRemoteStatus();
+        finally
+        {
+            if (ReferenceEquals(_remoteMessages, said)) _remoteMessages = null;
+        }
+        PushRemoteStatus(command == RemoteCommands.Status ? null : said.LastOrDefault());
     }
 
+    /// <summary>Messages shown while a phone's command runs: the last goes back to the phone.</summary>
+    private List<string>? _remoteMessages;
+
     /// <summary>What's on, and the favourites' and scenes' names, for the phone's page.</summary>
-    internal string RemoteStatusJson()
+    /// <param name="note">What the PC said about the command just run (shown on the phone), or null.</param>
+    internal string RemoteStatusJson(string? note = null)
     {
         var json = new JsonObject
         {
@@ -571,11 +656,14 @@ internal sealed partial class ScpApp
                 : _session.Source is { } s ? $"{(_session.IsFrozen ? "Frozen" : "Showing")}: {SourceName(s)}" : $"{OutputNameCapitalised()} shows a blank screen",
             ["favourites"] = new JsonArray([.. Settings.Favourites.Select(f => (JsonNode?)(f is null ? null : JsonValue.Create(TrayMenuPlan.Shorten(f.Title.Length > 0 ? f.Title : f.AppName, 40))))]),
             ["scenes"] = new JsonArray([.. Settings.Scenes.Select((sc, i) => (JsonNode?)(sc is null ? null : JsonValue.Create(TrayMenuPlan.Shorten(sc.Title(i + 1), 40))))]),
+            ["playlist"] = PlayingOn(PlaylistScreen.Main) ?? PlayingOn(PlaylistScreen.Second),
+            ["playlists"] = new JsonArray([.. Settings.Playlists.Select(p => (JsonNode?)JsonValue.Create(TrayMenuPlan.Shorten(p.Name, 40)))]),
         };
+        if (note is not null) json["note"] = TrayMenuPlan.Shorten(note, 200);
         return json.ToJsonString();
     }
 
-    private void PushRemoteStatus() => _remote?.SendStatus(RemoteStatusJson());
+    private void PushRemoteStatus(string? note = null) => _remote?.SendStatus(RemoteStatusJson(note));
 
     /// <summary>Next or previous slide in what's shown (Page Down / Page Up, like a clicker).</summary>
     private void SendSlide(bool forward)
@@ -586,6 +674,13 @@ internal sealed partial class ScpApp
             return;
         }
         if (!SlideKeys.Send(source.Handle, forward)) Message($"“{SourceName(source)}” didn't take the key.");
+    }
+
+    /// <summary>Settings: the idle screen shows the message and logo (FR-16).</summary>
+    public void SetIdleShowsMessage(bool on)
+    {
+        Settings.IdleShowsMessage = on;
+        Save();
     }
 
     // ───────────────────────────── shared ─────────────────────────────
@@ -612,8 +707,13 @@ internal sealed partial class ScpApp
         effects.CaptionStyle(Settings.CaptionLook);
         effects.AutoHidden -= OnAutoHidden;
         effects.AutoHidden += OnAutoHidden;
-        bool startedWithIt = effects is RemoteWgcEngine remote && remote.StartAutoHide == Settings.AutoHideKinds;
-        if (Settings.AutoHideKinds != SensitiveKinds.None && !startedWithIt) effects.AutoHide(Settings.AutoHideKinds, Settings.HiddenPartStyle);
+        bool startedWithIt = effects is RemoteWgcEngine remote && remote.StartAutoHide == Settings.AutoHideKinds
+            && (remote.StartAutoWords ?? []).SequenceEqual(Settings.AutoHideWords, StringComparer.Ordinal);
+        if (Settings.AutoHideKinds != SensitiveKinds.None && !startedWithIt)
+        {
+            effects.AutoHideWords(Settings.AutoHideWords);
+            effects.AutoHide(Settings.AutoHideKinds, Settings.HiddenPartStyle);
+        }
     }
 
     private void DisposeExtend()

@@ -186,10 +186,14 @@ internal sealed class RemoteServer : IDisposable
 
     private static byte[] Json(int status, string json) => RemoteHttp.Response(status, "application/json; charset=utf-8", json);
 
+    private bool _disposed;
+
+    /// <summary>Stops listening; connections still being served finish or time out. Safe to call twice.</summary>
     public void Dispose()
     {
-        _stop.Cancel();
+        if (_disposed) return;
+        _disposed = true;
+        _stop.Cancel(); // (not disposed: requests still finishing read its token; it holds no timer to release)
         _listener.Stop();
-        _stop.Dispose();
     }
 }

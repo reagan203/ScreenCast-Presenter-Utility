@@ -22,8 +22,16 @@ internal static class StillCapture
     /// in time. Parts hidden from the audience (FR-74) are covered with a solid box: a screenshot of
     /// what's shown never holds what the audience was kept from seeing.
     /// </summary>
-    public static Task<Bitmap?> CaptureAsync(SourceWindow source, bool includeCursor, TimeSpan timeout, IReadOnlyList<Core.CropRegion>? hidden = null) =>
-        Task.Run(() => Cover(Capture(source, includeCursor, timeout, out Rectangle client, out Rectangle shown), client, shown, hidden));
+    /// <param name="autoHide">Automatic hiding (FR-88): what it finds in the picture is covered too.</param>
+    /// <param name="words">The presenter's own words for automatic hiding.</param>
+    public static Task<Bitmap?> CaptureAsync(SourceWindow source, bool includeCursor, TimeSpan timeout, IReadOnlyList<Core.CropRegion>? hidden = null,
+        Core.SensitiveKinds autoHide = Core.SensitiveKinds.None, IReadOnlyList<string>? words = null) =>
+        Task.Run(() =>
+        {
+            Bitmap? image = Cover(Capture(source, includeCursor, timeout, out Rectangle client, out Rectangle shown), client, shown, hidden);
+            if (image is not null) AutoRedactor.CoverInStill(image, autoHide, Core.SensitiveText.CustomPattern(words));
+            return image;
+        });
 
     /// <summary>Where each hidden box falls in a picture of <paramref name="shown"/> (part of a client area <paramref name="client"/>).</summary>
     internal static List<Rectangle> Covers(Rectangle client, Rectangle shown, IReadOnlyList<Core.CropRegion> hidden)

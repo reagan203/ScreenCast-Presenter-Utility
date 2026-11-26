@@ -404,6 +404,7 @@ public class PhoneRemoteServerTests : IAsyncLifetime
             Assert.Equal(HttpStatusCode.Forbidden, (await http.PostAsync("/cmd", new StringContent($"s={session}&c=8&a=quit&m={RemoteAuth.Sign(key, session, 8, "quit")}", Encoding.UTF8, "application/x-www-form-urlencoded"))).StatusCode);
             helper.StandardInput.Close(); // the app going away stops it
             Assert.True(helper.WaitForExit(5000), "the helper stops when its input closes");
+            Assert.Equal(0, helper.ExitCode); // cleanly, not crashed
         }
         finally
         {

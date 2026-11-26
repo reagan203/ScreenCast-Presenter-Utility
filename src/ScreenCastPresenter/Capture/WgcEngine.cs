@@ -62,6 +62,7 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
     private AutoRedactor? _auto;
     private Rectangle _lastArea;
     private string _autoWords = "";
+    private System.Text.RegularExpressions.Regex? _autoPattern;
 
     // Marks over the picture (FR-65, FR-71): their own lock; a change wakes the render thread.
     private readonly EffectsLayer _effects;
@@ -114,9 +115,12 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
     /// <param name="showCursor">Include the mouse pointer in the picture (FR-24).</param>
     /// <param name="startFrozen">Freeze on the first frame (used to freeze a DWM-presented source seamlessly).</param>
     /// <param name="autoHide">Automatic hiding from the start (FR-88): the first picture waits for the first scan.</param>
-    public WgcEngine(bool showCursor, bool startFrozen = false, SensitiveKinds autoHide = SensitiveKinds.None, RedactStyle autoStyle = RedactStyle.Solid)
+    /// <param name="autoWords">The presenter's own words for automatic hiding.</param>
+    public WgcEngine(bool showCursor, bool startFrozen = false, SensitiveKinds autoHide = SensitiveKinds.None, RedactStyle autoStyle = RedactStyle.Solid,
+        IReadOnlyList<string>? autoWords = null)
     {
         _autoKinds = autoHide;
+        _autoPattern = SensitiveText.CustomPattern(autoWords);
         _autoStyle = autoStyle;
         _autoChanged = autoHide != SensitiveKinds.None;
         _showCursor = showCursor;
@@ -150,6 +154,16 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
         _autoStyle = style;
         _autoChanged = true;
     });
+
+    public void AutoHideWords(IReadOnlyList<string> words)
+    {
+        System.Text.RegularExpressions.Regex? pattern = SensitiveText.CustomPattern(words); // built here, not on the render thread
+        Update(() =>
+        {
+            _autoPattern = pattern;
+            _autoChanged = true;
+        });
+    }
 
     /// <summary>Automatic hiding covered something new (in words).</summary>
     public event EventHandler<string>? AutoHidden;
@@ -331,10 +345,12 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
         SensitiveKinds kinds;
         RedactStyle style;
         bool changed;
+        System.Text.RegularExpressions.Regex? pattern;
         lock (_sync)
         {
             kinds = _autoKinds;
             style = _autoStyle;
+            pattern = _autoPattern;
             changed = _autoChanged;
             _autoChanged = false;
         }
@@ -351,6 +367,7 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
             {
                 _auto ??= new AutoRedactor(kinds, (regions, found) => OnAutoFound(regions, found));
                 _auto.Kinds = kinds;
+                _auto.Words = pattern;
                 _effects.AutoRedact(_effects.AutoRegions, style);
                 newFrame = true; // what to look for changed: scan again now
             }

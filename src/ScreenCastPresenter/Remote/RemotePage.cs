@@ -108,8 +108,12 @@ internal static class RemotePage
         }
         function show(answer) {
           if (answer.status) say(answer.status, false);
+          if (answer.note) say(answer.note, true);
           fill("favourites", answer.favourites || [], "favourite-");
           fill("scenes", answer.scenes || [], "scene-");
+          fill("playlists", answer.playlists || [], "playlist-");
+          $("playlist-section").hidden = !answer.playlist;
+          if (answer.playlist) $("playlist-name").textContent = "Playing “" + answer.playlist + "”";
         }
         function fill(id, names, prefix) {
           const box = $(id), section = $(id + "-section");
@@ -152,8 +156,12 @@ internal static class RemotePage
         <div class="row"><button data-a="blank">Blank / show</button><button data-a="freeze">Freeze / live</button></div>
         <div class="row"><button data-a="spotlight">Spotlight</button><button data-a="go">Show what's ready</button></div>
         <div class="row"><button data-a="previous-source">Previous</button><button data-a="stop">Stop showing</button></div>
+        <div class="row"><button data-a="zoom-in">Zoom in / out</button><button data-a="caption">Name banner</button></div>
+        <div class="row"><button data-a="live-captions">Live captions</button><button data-a="blank-countdown">Break countdown</button></div>
+        <div id="playlist-section" hidden><h2 id="playlist-name">Playlist</h2><div class="row"><button data-a="stop-playlist">Stop the playlist</button></div></div>
         <div id="favourites-section" hidden><h2>Favourites</h2><div id="favourites" class="list"></div></div>
         <div id="scenes-section" hidden><h2>Scenes</h2><div id="scenes" class="list"></div></div>
+        <div id="playlists-section" hidden><h2>Playlists</h2><div id="playlists" class="list"></div></div>
         """;
 
     private static string Script => Crypto + "\n" + App;

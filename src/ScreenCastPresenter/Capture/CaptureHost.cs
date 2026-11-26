@@ -88,7 +88,7 @@ internal static class CaptureHost
 
         uint mainThread = PInvoke.GetCurrentThreadId();
         HWND child = CreateChild(parent, size);
-        using var engine = new WgcEngine(start[3] == "1", start[4] == "1", autoHide, autoStyle);
+        using var engine = new WgcEngine(start[3] == "1", start[4] == "1", autoHide, autoStyle, start.Length > 10 ? SensitiveText.ParseWordsToken(start[10]) : null);
         engine.InsetFailed += (_, reason) => Send("inset-failed " + reason);
         engine.AutoHidden += (_, words) => Send("autohid " + words);
         engine.Failed += (_, reason) =>
@@ -200,6 +200,7 @@ internal static class CaptureHost
                 (SensitiveKinds kinds, RedactStyle style) = CaptureProtocol.ParseAutoHide(p[1], p[2]);
                 engine.AutoHide(kinds, style);
                 return true;
+            case "autohide-words" when p.Length > 1: engine.AutoHideWords(SensitiveText.ParseWordsToken(p[1])); return true;
             case "ink-remove" when p.Length > 1: engine.InkRemove(CaptureProtocol.ParseInt(p[1])); return true;
             case CaptureProtocol.InkClear: engine.InkClear(); return true;
             case "inset" when p.Length > 1:
@@ -313,19 +314,27 @@ internal static class CaptureHost
         source = source with { Crop = CaptureProtocol.ParseCrop(args[3]) };
         IReadOnlyList<CropRegion> hidden = args.Length > 5 && args[5].StartsWith("redact ", StringComparison.Ordinal)
             ? CaptureProtocol.ParseRedact(args[5]["redact ".Length..])?.Regions ?? [] : [];
-        using Bitmap? image = StillCapture.CaptureAsync(source, args[2] == "1", TimeSpan.FromSeconds(3), hidden).GetAwaiter().GetResult();
+        SensitiveKinds autoHide = args.Length > 6 ? CaptureProtocol.ParseAutoHide(args[6], "0").Kinds : SensitiveKinds.None;
+        List<string> words = args.Length > 7 ? SensitiveText.ParseWordsToken(args[7]) : [];
+        using Bitmap? image = StillCapture.CaptureAsync(source, args[2] == "1", StillWait, hidden, autoHide, words).GetAwaiter().GetResult();
         if (image is null) return 4;
         image.Save(args[4], ImageFormat.Png);
         return 0;
     }
 
     /// <summary>Runs the still helper from SCP. True when the PNG was written.</summary>
+    /// <summary>How long a screenshot waits for a frame.</summary>
+    public static readonly TimeSpan StillWait = TimeSpan.FromSeconds(3);
+
     /// <param name="hidden">Parts hidden from the audience (FR-74): covered in the picture too.</param>
-    public static async Task<bool> CaptureStillToFileAsync(SourceWindow source, bool cursor, string path, IReadOnlyList<CropRegion>? hidden = null)
+    /// <param name="autoHide">Automatic hiding (FR-88): what it finds is covered in the picture too.</param>
+    /// <param name="words">The presenter's own words for automatic hiding.</param>
+    public static async Task<bool> CaptureStillToFileAsync(SourceWindow source, bool cursor, string path, IReadOnlyList<CropRegion>? hidden = null,
+        SensitiveKinds autoHide = SensitiveKinds.None, IReadOnlyList<string>? words = null)
     {
         var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
         foreach (string a in new[] { CaptureProtocol.StillSwitch, CaptureProtocol.SourceSpec(source), cursor ? "1" : "0", CaptureProtocol.Crop(source.Crop), path,
-                     CaptureProtocol.Redact(hidden ?? [], RedactStyle.Solid) })
+                     CaptureProtocol.Redact(hidden ?? [], RedactStyle.Solid), ((int)autoHide).ToString(System.Globalization.CultureInfo.InvariantCulture), SensitiveText.WordsToken(words) })
             info.ArgumentList.Add(a);
         using Process? helper = Process.Start(info);
         if (helper is null) return false;

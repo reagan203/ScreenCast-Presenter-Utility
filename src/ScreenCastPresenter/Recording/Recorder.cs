@@ -219,7 +219,9 @@ internal sealed class Recorder : IDisposable
             else if (!_pauseRequested && clock.IsPaused) clock.Resume(now);
             elapsed = clock.Elapsed(now);
 
-            if (TakeLatestFrame()) pacer.FrameArrived();
+            bool fresh = TakeLatestFrame();
+            if (fresh) pacer.FrameArrived();
+            ScanForAutoHide(fresh);
 
             if (clock.IsPaused)
             {
@@ -305,7 +307,9 @@ internal sealed class Recorder : IDisposable
         _dc.BeginDraw();
         System.Drawing.Color black = Theme.OutputBlack;
         _dc.Clear(new Color4(black.R / 255f, black.G / 255f, black.B / 255f, 1));
-        if (shown.Width > 0 && shown.Height > 0)
+        // With automatic hiding on, nothing is recorded until the first scan is done (a moment of black).
+        bool scanned = _request.AutoHide == Core.SensitiveKinds.None || _auto is { FirstScanDone: true };
+        if (shown.Width > 0 && shown.Height > 0 && scanned)
         {
             Rectangle dest = AspectFit.Fit(shown.Size, video);
             _dc.DrawBitmap(_heldBitmap!, ToRect(dest), 1f, InterpolationMode.HighQualityCubic, ToRect(shown), null);
@@ -507,10 +511,38 @@ internal sealed class Recorder : IDisposable
 
     private ID2D1SolidColorBrush? _hiddenBrush;
 
-    /// <summary>Parts hidden from the audience (FR-74) are covered with a solid box in the recording too.</summary>
+    // Automatic hiding (FR-88): scans on this thread's GPU context, read on a worker; what it found is kept here.
+    private AutoRedactor? _auto;
+    private readonly object _autoLock = new();
+    private List<Core.CropRegion> _autoRegions = [];
+
+    private Rectangle ClientArea() =>
+        _request.Source.IsScreen ? new Rectangle(Point.Empty, _heldSize) : Direct3D.ClientAreaInFrame(_request.Source.Handle, _heldSize);
+
+    /// <summary>After a frame is taken: a scan when one is due (only while automatic hiding is on).</summary>
+    private void ScanForAutoHide(bool fresh)
+    {
+        if (_request.AutoHide == Core.SensitiveKinds.None || _heldBitmap is null) return;
+        _auto ??= new AutoRedactor(_request.AutoHide, (regions, _) =>
+        {
+            lock (_autoLock) _autoRegions = regions;
+        }) { Words = Core.SensitiveText.CustomPattern(_request.AutoHideWords) };
+        _auto.MaybeScan(_dc!, _heldBitmap, ClientArea(), fresh, null);
+    }
+
+    /// <summary>Parts hidden from the audience (FR-74), and what automatic hiding found (FR-88), are covered with a solid box in the recording too.</summary>
     private void CoverHiddenParts(Rectangle area, Rectangle shown, Rectangle dest)
     {
-        if (_request.Hidden is not { Count: > 0 } hidden) return;
+        CoverParts(area, shown, dest, _request.Hidden);
+        if (_auto is null) return;
+        List<Core.CropRegion> found;
+        lock (_autoLock) found = _autoRegions;
+        CoverParts(area, shown, dest, found);
+    }
+
+    private void CoverParts(Rectangle area, Rectangle shown, Rectangle dest, IReadOnlyList<Core.CropRegion>? parts)
+    {
+        if (parts is not { Count: > 0 } hidden) return;
         System.Drawing.Color fill = Core.EffectStyle.RedactFill;
         _hiddenBrush ??= _dc!.CreateSolidColorBrush(new Color4(fill.R / 255f, fill.G / 255f, fill.B / 255f, 1));
         foreach (Rectangle r in StillCapture.Covers(area, shown, hidden))
@@ -535,6 +567,8 @@ internal sealed class Recorder : IDisposable
         if (_dc is not null) _dc.Target = null;
         foreach (ID2D1Bitmap1? b in _ringTargets) b?.Dispose();
         foreach (ID3D11Texture2D? t in _ring) t?.Dispose();
+        _auto?.Dispose();
+        _auto = null;
         _heldBitmap?.Dispose();
         _held?.Dispose();
         _hiddenBrush?.Dispose();

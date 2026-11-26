@@ -180,6 +180,14 @@ internal sealed class AppSettings
     /// <summary>The last Wi-Fi network put on the TV as a QR code; its password is never kept.</summary>
     public string? QrWifiName { get; set; }
 
+    /// <summary>The contact card last put on the TV as a QR code (name, phone, email), offered again next time.</summary>
+    public string? QrContactName { get; set; }
+    public string? QrContactPhone { get; set; }
+    public string? QrContactEmail { get; set; }
+
+    /// <summary>Which kind of QR code was made last (Link, WiFi or Contact): the form opens on it.</summary>
+    public string QrKind { get; set; } = nameof(Core.QrKind.Link);
+
     /// <summary>The QR code's corner: TopRight (the default), TopLeft, BottomRight or BottomLeft.</summary>
     public string QrCorner { get; set; } = nameof(Core.InsetCorner.TopRight);
 
@@ -195,6 +203,9 @@ internal sealed class AppSettings
     /// <summary>Where the "what the audience sees" window was (physical pixels); null = beside the bar.</summary>
     public WindowBounds? StudioWindow { get; set; }
 
+    /// <summary>When what's shown closes, the TV shows the blank screen's message and logo instead of plain black (FR-16).</summary>
+    public bool IdleShowsMessage { get; set; }
+
     /// <summary>Scenes 1–9 (FR-86): what's shown and everything around it, one key each.</summary>
     public Scene?[] Scenes { get; set; } = new Scene?[Scene.Slots];
 
@@ -206,6 +217,9 @@ internal sealed class AppSettings
 
     /// <summary>What automatic hiding covers (FR-88), e.g. "Emails, Phones"; "None" (the default) is off.</summary>
     public string AutoHide { get; set; } = nameof(SensitiveKinds.None);
+
+    /// <summary>Words and names automatic hiding always covers (client names, code names), whatever else is chosen.</summary>
+    public List<string> AutoHideWords { get; set; } = [];
 
     /// <summary>Live captions on the TV (FR-84); off still allows a transcript (FR-89).</summary>
     public bool CaptionsOnTv { get; set; } = true;
@@ -327,6 +341,10 @@ internal sealed class AppSettings
         if (string.IsNullOrWhiteSpace(BlankLogo)) BlankLogo = null;
         QrLink = string.IsNullOrWhiteSpace(QrLink) ? null : QrLink.Trim();
         QrWifiName = string.IsNullOrWhiteSpace(QrWifiName) ? null : QrWifiName.Trim();
+        QrContactName = string.IsNullOrWhiteSpace(QrContactName) ? null : InkStroke.TidyText(QrContactName, QrCode.MaxContactField);
+        QrContactPhone = string.IsNullOrWhiteSpace(QrContactPhone) ? null : InkStroke.TidyText(QrContactPhone, QrCode.MaxContactField);
+        QrContactEmail = string.IsNullOrWhiteSpace(QrContactEmail) ? null : InkStroke.TidyText(QrContactEmail, QrCode.MaxContactField);
+        QrKind = Enum.TryParse(QrKind, ignoreCase: true, out Core.QrKind kind) && Enum.IsDefined(kind) ? kind.ToString() : nameof(Core.QrKind.Link);
         QrCorner = QrPlace.ToString();
         Rooms = RoomProfile.NormalizeAll(Rooms);
         Schedule = ScheduleEntry.NormalizeAll(Schedule);
@@ -337,6 +355,7 @@ internal sealed class AppSettings
         if (Playlist.Find(Playlists, PlaylistAtStart) is not { } atStart) PlaylistAtStart = null;
         else PlaylistAtStart = atStart.Name;
         AutoHide = AutoHideKinds.ToString();
+        AutoHideWords = SensitiveText.NormalizeWords(AutoHideWords);
         if (string.IsNullOrWhiteSpace(TranscriptFolder)) TranscriptFolder = null;
         CaptionLook = CaptionLook;
         if (RemotePort is < 1024 or > 65535) RemotePort = Remote.RemoteServer.DefaultPort;

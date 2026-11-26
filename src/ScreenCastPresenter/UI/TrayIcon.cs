@@ -81,6 +81,7 @@ internal sealed class TrayIcon : IDisposable
             RecordingLine = RecordingLine(r),
             RecordingElapsed = r.Elapsed,
             StopAfter = _app.RecordingStopAfter,
+            StopAt = _app.RecordingStopAt,
             ShowAgainTitle = s.State == SessionState.Off ? _app.Settings.LastSource?.Title : null,
             Favourites = [.. _app.Settings.Favourites.Select((f, i) => f is null ? null : new TrayFavourite(i + 1, f.Title, f.AppName)).OfType<TrayFavourite>()],
             Screens = [.. _app.Monitors.Select(m => new TrayScreen(m.DeviceName, ScreenText(m), output.Screen is not null && m.IsSameScreen(output.Screen)))],

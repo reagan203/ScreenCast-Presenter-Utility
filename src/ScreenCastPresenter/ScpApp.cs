@@ -258,6 +258,12 @@ internal sealed partial class ScpApp : IDisposable
                 case "cli:qr-off":
                     if (_qrText is not null) SetQr(null);
                     break;
+                case string sw when sw.StartsWith("cli:on:", StringComparison.Ordinal) || sw.StartsWith("cli:off:", StringComparison.Ordinal):
+                {
+                    bool on = sw.StartsWith("cli:on:", StringComparison.Ordinal);
+                    if (await SwitchAsync(sw[(on ? "cli:on:" : "cli:off:").Length..], on) is { } problem) return new CliReply(false, problem);
+                    break;
+                }
                 case string qr when qr.StartsWith("cli:qr:", StringComparison.Ordinal):
                     if (_session.State != SessionState.Presenting) return new CliReply(false, "Show something first, then put a QR code on it.");
                     SetQr(qr["cli:qr:".Length..]);
@@ -771,7 +777,7 @@ internal sealed partial class ScpApp : IDisposable
         bool saved;
         try
         {
-            saved = await CaptureHost.CaptureStillToFileAsync(source, Settings.ShowCursor && source.IsScreen, path, Redactions.For(Settings, source));
+            saved = await CaptureHost.CaptureStillToFileAsync(source, Settings.ShowCursor && source.IsScreen, path, Redactions.For(Settings, source), Settings.AutoHideKinds, Settings.AutoHideWords);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
@@ -787,22 +793,63 @@ internal sealed partial class ScpApp : IDisposable
         // FR-51: also on the clipboard. This is the one place a picture is held in SCP's memory
         // (NFR-09d), and only for the moment it takes to copy it.
         bool copied;
+        Bitmap? thumbnail = null;
         try
         {
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using Image image = Image.FromStream(file);
             copied = TryCopyToClipboard(image);
+            thumbnail = ScreenshotPreview.Thumbnail(image, ScreenshotPreview.ThumbnailSide * 2); // sharp on a high-DPI screen, still small
         }
-        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException or OutOfMemoryException)
         {
             copied = false;
         }
-        _badge.ShowActions(copied ? "Screenshot saved and copied" : "Screenshot saved", Path.GetFileName(path),
-        [
-            new BadgeButton("Open", true, () => ShellOpen(path)),
-            new BadgeButton("Show in folder", false, () => ShellOpen("explorer.exe", $"/select,\"{path}\"")),
-        ]);
+        string title = copied ? "Screenshot saved and copied" : "Screenshot saved";
+        if (thumbnail is not null && PresenterScreen() is { } previewOn) ShowScreenshotPreview(thumbnail, title, path, previewOn);
+        else
+        {
+            thumbnail?.Dispose();
+            _badge.ShowActions(title, Path.GetFileName(path),
+            [
+                new BadgeButton("Open", true, () => ShellOpen(path)),
+                new BadgeButton("Show in folder", false, () => ShellOpen("explorer.exe", $"/select,\"{path}\"")),
+            ]);
+        }
         ScheduleTrim();
+    }
+
+    private ScreenshotPreview? _shotPreview;
+
+    /// <summary>FR-51: the preview with Open, Copy and Show in folder; a newer screenshot replaces it.</summary>
+    private void ShowScreenshotPreview(Bitmap thumbnail, string title, string path, DisplayMonitor screen)
+    {
+        _shotPreview?.Close();
+        var preview = new ScreenshotPreview(thumbnail, title, Path.GetFileName(path),
+            open: () => ShellOpen(path),
+            copy: () => CopyScreenshotAgain(path),
+            showInFolder: () => ShellOpen("explorer.exe", $"/select,\"{path}\""));
+        preview.FormClosed += (_, _) =>
+        {
+            if (ReferenceEquals(_shotPreview, preview)) _shotPreview = null;
+            ScheduleTrim();
+        };
+        _shotPreview = preview;
+        preview.ShowAt(screen.WorkArea);
+    }
+
+    private void CopyScreenshotAgain(string path)
+    {
+        try
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using Image image = Image.FromStream(file);
+            Message(TryCopyToClipboard(image) ? "Screenshot copied." : "The screenshot couldn't be copied.");
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            Message("The screenshot couldn't be copied: " + SavedFiles.Explain(ex), BadgeDot.Warning);
+        }
     }
 
     // ───────────────────────────── recording (FR-52–FR-61) ─────────────────────────────
@@ -916,7 +963,7 @@ internal sealed partial class ScpApp : IDisposable
         string folder = Settings.RecordingFolder ?? SavedFiles.DefaultRecordingFolder;
         string path = SavedFiles.NextPath(folder, "Screen Recording", DateTime.Now, ".mp4", File.Exists);
         // Hidden parts (FR-74) are covered in a recording of the window or screen too (the TV's own picture already has them).
-        var request = new RecordingRequest(source, Settings.ShowCursor, Settings.MeetingSound, Settings.RecordMicrophone, path, Redactions.For(Settings, source));
+        var request = new RecordingRequest(source, Settings.ShowCursor, Settings.MeetingSound, Settings.RecordMicrophone, path, Redactions.For(Settings, source), Settings.AutoHideKinds, Settings.AutoHideWords);
         if (_recording.Start(request, description, followsOutput) is { } problem)
         {
             Message("Recording didn't start: " + problem, BadgeDot.Warning);
@@ -958,9 +1005,37 @@ internal sealed partial class ScpApp : IDisposable
     /// <summary>FR-59: stop by itself after this much recording (null = only when stopped or the window closes).</summary>
     public TimeSpan? RecordingStopAfter { get; private set; }
 
+    /// <summary>FR-59: stop by itself when the clock reaches this (local time); null for none.</summary>
+    public DateTime? RecordingStopAt { get; private set; }
+
+    /// <summary>"Stop automatically › At a set time…": asks for the time, then stops then.</summary>
+    private void AskRecordingStopAt()
+    {
+        if (!_recording.IsActive)
+        {
+            Message("Nothing is being recorded.");
+            return;
+        }
+        DateTime suggestion = DateTime.Now.AddHours(1);
+        using var form = new FieldsForm("Stop recording at a set time", "The recording stops and is saved when this PC's clock reaches the time (today, or tomorrow if it's passed).", "Set it");
+        (_, TextBox time) = form.AddField("Time (24-hour clock)", suggestion.ToString("HH:00", System.Globalization.CultureInfo.InvariantCulture), 5, "17:30");
+        form.Check = () => ScheduleEntry.ParseTime(time.Text) is null ? "Type the time like 17:30." : null;
+        if (!form.Ask()) return;
+        SetRecordingStopAt(RecordingStop.Next(ScheduleEntry.ParseTime(time.Text)!.Value, DateTime.Now));
+    }
+
+    public void SetRecordingStopAt(DateTime? at)
+    {
+        RecordingStopAt = at;
+        if (at is { } t && _recording.IsActive) Message($"The recording stops by itself {RecordingStop.Words(t, DateTime.Now)}.", BadgeDot.Recording);
+        StopRecordingIfDue();
+        _tray.Refresh();
+    }
+
     public void SetRecordingStopAfter(TimeSpan? limit)
     {
         RecordingStopAfter = limit;
+        if (limit is null) RecordingStopAt = null; // "only when I stop it" clears both
         if (limit is { } l && _recording.IsActive)
             Message($"The recording stops by itself after {DurationWords(l)}.", BadgeDot.Recording);
         StopRecordingIfDue();
@@ -968,8 +1043,14 @@ internal sealed partial class ScpApp : IDisposable
 
     private void StopRecordingIfDue()
     {
-        if (RecordingStopAfter is not { } limit || !_recording.IsActive || _recording.Status == RecordingStatus.Stopping) return;
-        if (_recording.Elapsed < limit) return;
+        if (!_recording.IsActive || _recording.Status == RecordingStatus.Stopping) return;
+        if (RecordingStopAt is { } at && DateTime.Now >= at)
+        {
+            _recordingEndNote = $"Stopped at {at.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)} as planned, recording saved";
+            _recording.Stop();
+            return;
+        }
+        if (RecordingStopAfter is not { } limit || _recording.Elapsed < limit) return;
         _recordingEndNote = $"Stopped after {DurationWords(limit)} as planned, recording saved";
         _recording.Stop();
     }
@@ -993,6 +1074,7 @@ internal sealed partial class ScpApp : IDisposable
             _recordingEndNote = null;
             _recordedOutput = null;
             RecordingStopAfter = null;
+            RecordingStopAt = null;
             Message(result.Detail.Length > 0 ? "Recording not saved: " + result.Detail : "The recording didn't start.", BadgeDot.Warning);
             ScheduleTrim();
             return;
@@ -1002,6 +1084,7 @@ internal sealed partial class ScpApp : IDisposable
         _recordingEndNote = null;
         _recordedOutput = null;
         RecordingStopAfter = null; // a time limit is for one recording
+        RecordingStopAt = null;
         string title = result.End switch
         {
             RecordingEnd.Stopped when note is not null => note,
@@ -1923,6 +2006,7 @@ internal sealed partial class ScpApp : IDisposable
                     if (!await PresentLastShownAsync()) Message($"“{Shorten(Settings.LastSource?.Title ?? "", 40)}” isn't open any more.");
                     return;
                 case "stop-after:never": SetRecordingStopAfter(null); return;
+                case "stop-at": AskRecordingStopAt(); return;
             }
             if (command.StartsWith("countdown:", StringComparison.Ordinal)
                 && int.TryParse(command.AsSpan("countdown:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int countdown))
@@ -3585,6 +3669,7 @@ internal sealed partial class ScpApp : IDisposable
     {
         Diag("app: " + text);
         _commandMessages?.Add(text);
+        _remoteMessages?.Add(text);
         _badge.ShowMessage(text, dot, buttons);
     }
 
@@ -3794,6 +3879,7 @@ internal sealed partial class ScpApp : IDisposable
         Theme.Changed -= OnThemeChanged;
         _commands.Dispose();
         _commandGate.Dispose();
+        _shotPreview?.Dispose();
         DisposeStage();
         _trimTimer.Dispose();
         _drawingOverlay?.Dispose();

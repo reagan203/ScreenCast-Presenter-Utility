@@ -135,6 +135,7 @@ internal sealed class SettingsForm : ThemedForm
         ["Next scheduled"] = Icons.Calendar,
         ["Rooms"] = Icons.People,
         ["Phone remote"] = Icons.Phone,
+        ["When what's shown closes"] = Icons.Hide,
         ["Remote's port"] = Icons.Phone,
         ["Live captions on the TV"] = Icons.Captions,
         ["Save a transcript"] = Icons.Captions,
@@ -289,6 +290,7 @@ internal sealed class SettingsForm : ThemedForm
         AddChoice("Countdown", $"Blank with a countdown{Key("blank-countdown")} shows the message above and the time left. When it ends the TV stays blank until you show it again.",
             [.. BlankCountdown.Minutes.Select(m => ($"{m} min", s.CountdownMinutes == m, (Action)(() => _app.SetCountdownMinutes(m))))]);
         AddLogo(s.BlankLogo);
+        AddToggle("When what's shown closes", "The TV shows the blank screen's message (and your logo) instead of plain black until you show something else.", s.IdleShowsMessage, _app.SetIdleShowsMessage);
         AddGroup("Live captions and transcripts");
         AddToggle("Live captions on the TV", $"Live captions{Key("live-captions")} show what you say on the TV. Off: they only write the transcript.", s.CaptionsOnTv, _app.SetCaptionsOnTv);
         AddToggle("Save a transcript", "Everything live captions hear is written to a text file as it's said, with subtitles (.srt) beside it when they stop. On this PC only.", s.SaveTranscript, _app.SetSaveTranscript);
@@ -385,11 +387,16 @@ internal sealed class SettingsForm : ThemedForm
             (SensitiveKinds.Cards, "Card numbers", "Payment card numbers (checked, so ordinary long numbers aren't covered)."),
             (SensitiveKinds.Ibans, "Bank account numbers", "IBANs (checked the same way)."),
             (SensitiveKinds.IdNumbers, "ID numbers", "US Social Security and UK National Insurance numbers."),
+            (SensitiveKinds.Secrets, "Keys and passwords", "API keys and access tokens (AWS, GitHub, Slack, Stripe, web tokens), and what follows \"password:\", \"PIN:\" or \"API key:\"."),
+            (SensitiveKinds.Custom, "Words from your list", "Client names, code names, anything else you list below."),
         })
         {
             SensitiveKinds k = kind;
             AddToggle(title, description, auto.HasFlag(k), on => _app.SetAutoHide(on ? _app.Settings.AutoHideKinds | k : _app.Settings.AutoHideKinds & ~k));
         }
+        AddText("Your own words", $"Covered wherever they're seen, in any capitals. Separate them with commas (at most {SensitiveText.MaxCustomWords}).",
+            string.Join(", ", _app.Settings.AutoHideWords), SensitiveText.MaxCustomWords * (SensitiveText.MaxCustomWordLength + 2),
+            text => _app.SetAutoHideWords(text.Split(',')));
         AddGroup("Notifications");
         AddToggle("Remind me about notifications", "Windows' pop-up notifications appear on your main screen. When you show or record all of it, you're reminded to turn on Do not disturb.",
             _app.Settings.RemindDoNotDisturb, _app.SetRemindDoNotDisturb);
@@ -477,8 +484,14 @@ internal sealed class SettingsForm : ThemedForm
         foreach (Playlist playlist in s.Playlists)
         {
             string name = playlist.Name;
-            Row row = NewRow(name, $"{(playlist.Where == PlaylistScreen.Second ? "Second TV" : "TV")} · " + string.Join(", ", playlist.Items.Select(item => item.Words())));
+            Row row = NewRow(name, $"{(playlist.Where == PlaylistScreen.Second ? "Second TV" : "TV")}{(playlist.Shuffle ? " · shuffled" : "")} · " + string.Join(", ", playlist.Items.Select(item => item.Words())));
             row.AddControl(Pill("Play", () => _ = _app.StartPlaylistAsync(name)));
+            bool shuffled = playlist.Shuffle;
+            row.AddControl(Pill(shuffled ? "In order" : "Shuffle", () =>
+            {
+                _app.SetPlaylistShuffle(name, !shuffled);
+                Rebuild();
+            }, PillKind.Ghost));
             row.AddControl(Pill("Remove", () =>
             {
                 _app.DeletePlaylist(name);

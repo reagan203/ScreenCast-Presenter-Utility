@@ -80,6 +80,15 @@ Unit tests cover the logic only, with no windows or displays involved:
   - next and previous slide reaching a real window as Page Down and Page Up;
   - every new setting saved and loaded (the key never readable in the file), nonsense made safe;
   - **memory**: a busy frame allocates under 2 KB (measured); **speed**: a page of 300 dense lines checked under 10 ms, a phone command's round trip under 50 ms. Timing tests run in their own collection so other tests can't skew them; the real capture engine's window test runs first (see GpuEngineCollection).
+- **More from everything (rev 8):**
+  - `--on` / `--off`: every switch read in any capitals and with `=`, in order with other actions, unknown names refused with the list, every toggle a real action; in the real app (stress harness `room`): on twice stays on, off turns it off, the outline off and back on in the saved settings, nonsense exit 2;
+  - keys and passwords: every published key shape found; the value after a label covered and the label left readable; ordinary sentences about passwords and tokens left alone; only when chosen;
+  - your own words: whole words in any capitals and spacing, special characters taken literally, the longer entry winning, only when chosen and listed, the list tidied and capped, carried as one protocol word and back (commas, spaces, percent signs, accents), a line that can't be checked in time covered whole; reaching the capture helper live and the recording helper at its start; **real text recognition** covering a labelled password and a listed name in a rendered picture, and not the title; **speed**: 300 busy lines with every kind and 40 words under 15 ms;
+  - the phone remote: the new buttons allowed and lookalikes refused (`playlist-0`, `playlist-01`, `playlist-13`, other scripts' digits), every button on the page a listed command; **the page's script in Node against the real helper** pressing zoom, a playlist from the list, the break countdown and the name banner, and showing the PC's note;
+  - contact cards: the MECARD text and its escaping, scanned back by the independent decoder, only the name under the code, the form's checks, too big refused, kept in a scene, settings made safe;
+  - shuffle: never the same item twice running over 200 turns and reaching them all, skipping what can't be shown, a lone item staying, in order unchanged, saved and loaded;
+  - web subtitles: the same cues with dots for milliseconds, commas in the words kept, both files written at the end and only when something was said;
+  - scenes and live captions: described, saved and loaded as on, off, or (older scenes) left alone.
 - **Session controller** (driven by fakes):
   - fades through black, blank and dim;
   - coalescing a thousand switches or blank presses;

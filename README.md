@@ -15,13 +15,13 @@ When you share a whole screen on Zoom or a TV, the audience sees everything: not
 - **Hide what's private:** drag a box over part of a window (an inbox, a customer's details) and the audience sees a solid box or a blur there, even as you scroll. Screenshots and recordings of that window cover it too.
 - **Stay in control:** a small private window shows exactly what the audience sees. Get the next thing ready where only you can see it, then show it with one key.
 - **Point people at things:** a spotlight that dims everything but the area round your mouse, and arrows, boxes and text drawn on the TV.
-- **Look the part:** your name and title along the bottom of the TV, your logo on the blank screen, and a QR code for a link or the Wi-Fi, made on your PC with no internet.
+- **Look the part:** your name and title along the bottom of the TV, your logo on the blank screen, and a QR code for a link, the Wi-Fi or your contact card, made on your PC with no internet.
 - **Live captions:** what you say appears on the TV, worked out by Windows on your PC. Nothing is recorded or sent anywhere.
-- **Scenes on one key:** save what's shown with everything around it (small picture, name, QR code, spotlight) and switch to it with Ctrl+Alt+F1 to F9 or a Stream Deck button.
-- **Lobby screens:** playlists of favourites and scenes that take turns on a TV, started by a schedule or when the PC starts, carrying on after the TV is unplugged and back.
-- **Hide personal details automatically:** email addresses, phone and card numbers, IBANs and ID numbers are found on your PC as they appear and covered on the TV.
-- **Transcripts:** live captions can write down everything said, with subtitles to put under a recording. Captions come in three sizes, at the bottom or the top.
-- **Phone remote:** pair your phone with a code only you see and use it as a clicker: next and previous slide, blank, freeze, favourites and scenes. Off unless you switch it on; every command is signed, so others on the Wi-Fi can't take control.
+- **Scenes on one key:** save what's shown with everything around it (small picture, name, QR code, spotlight, live captions) and switch to it with Ctrl+Alt+F1 to F9 or a Stream Deck button.
+- **Lobby screens:** playlists of favourites and scenes that take turns on a TV, in order or shuffled, started by a schedule or when the PC starts, carrying on after the TV is unplugged and back.
+- **Hide personal details automatically:** email addresses, phone and card numbers, IBANs, ID numbers, API keys and passwords, and your own list of names (clients, code names) are found on your PC as they appear and covered on the TV, in screenshots and in recordings.
+- **Transcripts:** live captions can write down everything said, with subtitles (.srt and .vtt) to put under a recording. Captions come in three sizes, at the bottom or the top.
+- **Phone remote:** pair your phone with a code only you see and use it as a clicker: next and previous slide, blank, freeze, zoom, your name banner, live captions, a break countdown, favourites, scenes and playlists. Off unless you switch it on; every command is signed, so others on the Wi-Fi can't take control.
 - **Set up once:** save a room's setup (its TV, dimming, extras, favourites) and switch to it in one click. Schedule things, like starting the lobby slideshow at 8:00 and stopping it at 18:00. With three screens, show something different on a second TV.
 - **Screenshots and recordings:** save what you present, with optional meeting and microphone audio.
 - **Small and fast:** about 15 MB of memory when idle and a few percent CPU while presenting.
@@ -38,6 +38,7 @@ ScreenCastPresenter.exe --qr "https://example.com/agenda"
 ScreenCastPresenter.exe --action spotlight
 ScreenCastPresenter.exe --scene 2
 ScreenCastPresenter.exe --playlist "Lobby"
+ScreenCastPresenter.exe --on spotlight --off auto-hide
 ScreenCastPresenter.exe --help
 ```
 

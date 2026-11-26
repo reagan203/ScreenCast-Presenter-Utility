@@ -32,8 +32,11 @@ internal sealed class AutoRedactor : IDisposable
     /// <summary>The first scan of something new may hold the picture black this long at most.</summary>
     public static readonly TimeSpan FirstScanLimit = TimeSpan.FromSeconds(2);
 
-    /// <summary>Frames are scanned at up to this size: enough for small print on a large screen, bounded in memory.</summary>
+    /// <summary>Frames are scanned at up to this size: enough for small print on a large screen, bounded in memory (and within what the recognizer takes).</summary>
     public const int MaxScanSide = 2560;
+
+    /// <summary>The largest side the recognizer is given: ours, or Windows' own limit if that's smaller.</summary>
+    public static int ScanLimit => (int)Math.Min(MaxScanSide, OcrEngine.MaxImageDimension);
 
     private readonly OcrEngine? _ocr;
     private readonly Action<List<CropRegion>, List<SensitiveMatch>> _found;
@@ -61,6 +64,9 @@ internal sealed class AutoRedactor : IDisposable
 
     public SensitiveKinds Kinds { get; set; }
 
+    /// <summary>The presenter's own words (<see cref="SensitiveText.CustomPattern"/>), or null.</summary>
+    public System.Text.RegularExpressions.Regex? Words { get; set; }
+
     /// <summary>Windows has a text recognizer for one of the user's languages.</summary>
     public bool Available => _ocr is not null;
 
@@ -74,7 +80,7 @@ internal sealed class AutoRedactor : IDisposable
     public static Size ScanSize(Size area)
     {
         if (area.Width <= 0 || area.Height <= 0) return Size.Empty;
-        double scale = Math.Min(1, (double)MaxScanSide / Math.Max(area.Width, area.Height));
+        double scale = Math.Min(1, (double)ScanLimit / Math.Max(area.Width, area.Height));
         return new Size(Math.Max(1, (int)(area.Width * scale)), Math.Max(1, (int)(area.Height * scale)));
     }
 
@@ -82,7 +88,7 @@ internal sealed class AutoRedactor : IDisposable
     /// On the render thread, after a frame is drawn: starts a scan of <paramref name="area"/> of
     /// <paramref name="picture"/> when one is due. <paramref name="restore"/> is put back as the target.
     /// </summary>
-    public void MaybeScan(ID2D1DeviceContext dc, ID2D1Bitmap1 picture, Rectangle area, bool changed, ID2D1Image restore)
+    public void MaybeScan(ID2D1DeviceContext dc, ID2D1Bitmap1 picture, Rectangle area, bool changed, ID2D1Image? restore)
     {
         if (_ocr is null || Kinds == SensitiveKinds.None || Busy || area.Width <= 0 || area.Height <= 0) return;
         if (_scannedOnce && (!changed || _since.Elapsed < ScanEvery)) return;
@@ -112,8 +118,9 @@ internal sealed class AutoRedactor : IDisposable
         }
         _since.Restart();
         SensitiveKinds kinds = Kinds;
+        System.Text.RegularExpressions.Regex? words = Words;
         byte[] pixels = _pixels!;
-        _running = Task.Run(() => Recognize(pixels, size, kinds));
+        _running = Task.Run(() => Recognize(pixels, size, kinds, words));
     }
 
     private void EnsureBuffers(ID2D1DeviceContext dc, Size size)
@@ -128,14 +135,14 @@ internal sealed class AutoRedactor : IDisposable
         _scanSize = size;
     }
 
-    private void Recognize(byte[] pixels, Size size, SensitiveKinds kinds)
+    private void Recognize(byte[] pixels, Size size, SensitiveKinds kinds, System.Text.RegularExpressions.Regex? words)
     {
         try
         {
             using SoftwareBitmap bitmap = SoftwareBitmap.CreateCopyFromBuffer(pixels.AsBuffer(0, size.Width * size.Height * 4), BitmapPixelFormat.Bgra8, size.Width, size.Height, BitmapAlphaMode.Premultiplied);
             OcrResult result = _ocr!.RecognizeAsync(bitmap).AsTask().GetAwaiter().GetResult();
             List<OcrLine> lines = Lines(result);
-            List<SensitiveMatch> found = SensitiveText.Find(lines, kinds);
+            List<SensitiveMatch> found = SensitiveText.Find(lines, kinds, words);
             List<CropRegion> regions = SensitiveText.ToRegions(found, new SizeF(size.Width, size.Height));
             _scannedOnce = true; // before telling anyone: what's covered is in place when they look
             _found(regions, found);
@@ -161,6 +168,42 @@ internal sealed class AutoRedactor : IDisposable
         if (ocr is null) return null;
         using SoftwareBitmap bitmap = SoftwareBitmap.CreateCopyFromBuffer(bgra.AsBuffer(0, width * height * 4), BitmapPixelFormat.Bgra8, width, height, BitmapAlphaMode.Premultiplied);
         return Lines(await ocr.RecognizeAsync(bitmap));
+    }
+
+    /// <summary>
+    /// A still picture (a screenshot, FR-51): what <paramref name="kinds"/> finds in it is covered
+    /// with solid boxes. Scaled down first when it's bigger than the recognizer takes. Returns how
+    /// many were covered (0 when nothing was, or there's no recognizer).
+    /// </summary>
+    internal static int CoverInStill(Bitmap image, SensitiveKinds kinds, System.Text.RegularExpressions.Regex? words = null)
+    {
+        if (kinds == SensitiveKinds.None) return 0;
+        double scale = Math.Min(1, (double)ScanLimit / Math.Max(image.Width, image.Height));
+        int w = Math.Max(1, (int)(image.Width * scale)), h = Math.Max(1, (int)(image.Height * scale));
+        using var scan = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using (Graphics g = Graphics.FromImage(scan))
+        {
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.DrawImage(image, new Rectangle(0, 0, w, h));
+        }
+        System.Drawing.Imaging.BitmapData data = scan.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        var bgra = new byte[w * h * 4];
+        try
+        {
+            for (int y = 0; y < h; y++) Marshal.Copy(data.Scan0 + y * data.Stride, bgra, y * w * 4, w * 4);
+        }
+        finally
+        {
+            scan.UnlockBits(data);
+        }
+        List<OcrLine>? lines = ReadAsync(bgra, w, h).GetAwaiter().GetResult();
+        if (lines is null) return 0;
+        List<SensitiveMatch> found = SensitiveText.Find(lines, kinds, words);
+        using Graphics cover = Graphics.FromImage(image);
+        using var brush = new SolidBrush(EffectStyle.RedactFill);
+        foreach (SensitiveMatch m in found)
+            cover.FillRectangle(brush, RectangleF.FromLTRB(m.Box.Left / (float)scale, m.Box.Top / (float)scale, m.Box.Right / (float)scale, m.Box.Bottom / (float)scale));
+        return found.Count;
     }
 
     /// <summary>On the render thread: waits for a running scan, then lets go of the buffers.</summary>

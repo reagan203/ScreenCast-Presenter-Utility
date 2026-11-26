@@ -116,7 +116,7 @@ internal sealed class Win32SessionPlatform(Func<AppSettings> settings, Func<bool
         // A camera has no window for the light way to show: always the helper (FR-68). So does
         // anything with parts hidden from the audience: the light way can't cover them (FR-74).
         return CaptureChoice.DrawsPointerAndScreens(!source.IsWindow, startFrozen, s.PreferWgc, s.ShowCursor || marksWanted?.Invoke() == true || HidesParts(s, source) || s.AutoHideKinds != SensitiveKinds.None)
-            ? new RemoteWgcEngine(s.ShowCursor, startFrozen) { StartAutoHide = s.AutoHideKinds, StartAutoStyle = s.HiddenPartStyle }
+            ? new RemoteWgcEngine(s.ShowCursor, startFrozen) { StartAutoHide = s.AutoHideKinds, StartAutoStyle = s.HiddenPartStyle, StartAutoWords = s.AutoHideWords }
             : new DwmThumbnailEngine();
     }
 
@@ -126,7 +126,7 @@ internal sealed class Win32SessionPlatform(Func<AppSettings> settings, Func<bool
     {
         // Never the light way for something with hidden parts: it would show them.
         RemoteWgcEngine when source.IsWindow && !HidesParts(settings(), source) && settings().AutoHideKinds == SensitiveKinds.None => new DwmThumbnailEngine(),
-        DwmThumbnailEngine when Direct3D.IsCaptureSupported => new RemoteWgcEngine(settings().ShowCursor, false) { StartAutoHide = settings().AutoHideKinds, StartAutoStyle = settings().HiddenPartStyle },
+        DwmThumbnailEngine when Direct3D.IsCaptureSupported => new RemoteWgcEngine(settings().ShowCursor, false) { StartAutoHide = settings().AutoHideKinds, StartAutoStyle = settings().HiddenPartStyle, StartAutoWords = settings().AutoHideWords },
         _ => null,
     };
 

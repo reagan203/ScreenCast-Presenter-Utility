@@ -2,6 +2,9 @@ using System.Text;
 
 namespace ScreenCastPresenter.Core;
 
+/// <summary>What a QR code on the TV holds (FR-81).</summary>
+internal enum QrKind { Link, WiFi, Contact }
+
 /// <summary>
 /// A QR code made on the PC (FR-81), no internet and no third-party code: ISO/IEC 18004 byte mode
 /// (UTF-8), error correction level M (about 15% of the code can be damaged or covered), versions 1
@@ -389,6 +392,22 @@ internal static class QrCode
         int percent = dark * 100 / (size * size);
         penalty += Math.Abs(percent - 50) / 5 * 10;
         return penalty;
+    }
+
+    /// <summary>The longest a contact card's name, phone or email may be.</summary>
+    public const int MaxContactField = 80;
+
+    /// <summary>
+    /// A contact card in the form phone cameras offer to save (MECARD): name, phone, email; parts
+    /// left empty are left out. Special characters escaped.
+    /// </summary>
+    public static string Contact(string name, string? phone, string? email)
+    {
+        static string Escape(string s) => new([.. s.SelectMany(c => c is '\\' or ';' or ',' or ':' or '"' ? new[] { '\\', c } : [c])]);
+        var card = new StringBuilder("MECARD:N:").Append(Escape(name.Trim())).Append(';');
+        if (phone?.Trim() is { Length: > 0 } p) card.Append("TEL:").Append(Escape(p)).Append(';');
+        if (email?.Trim() is { Length: > 0 } e) card.Append("EMAIL:").Append(Escape(e)).Append(';');
+        return card.Append(';').ToString();
     }
 
     /// <summary>Wi-Fi details in the form phones read: WIFI:T:WPA;S:name;P:password;; (special characters escaped).</summary>

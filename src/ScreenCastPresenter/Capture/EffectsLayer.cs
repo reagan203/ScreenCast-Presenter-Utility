@@ -502,19 +502,26 @@ internal sealed class EffectsLayer : IDisposable
         return _qrBitmap;
     }
 
-    /// <summary>What's written under a QR code: the link, or the Wi-Fi network's name (never its password).</summary>
+    /// <summary>What's written under a QR code: the link, the Wi-Fi network's name (never its password), or the contact's name.</summary>
     internal static string QrLabel(string text)
     {
+        if (text.StartsWith("MECARD:N:", StringComparison.Ordinal))
+            return Field(text, "MECARD:N:".Length) is { Length: > 0 } person ? "Contact: " + person : "Contact";
         if (!text.StartsWith("WIFI:", StringComparison.Ordinal)) return text;
         int s = text.IndexOf("S:", StringComparison.Ordinal);
-        if (s < 0) return "Wi-Fi";
-        var name = new System.Text.StringBuilder();
-        for (int i = s + 2; i < text.Length && text[i] != ';'; i++)
+        return s < 0 ? "Wi-Fi" : "Wi-Fi: " + Field(text, s + 2);
+
+        // Up to the next unescaped ";", escaped characters as themselves.
+        static string Field(string text, int start)
         {
-            if (text[i] == '\\' && i + 1 < text.Length) i++;
-            name.Append(text[i]);
+            var field = new System.Text.StringBuilder();
+            for (int i = start; i < text.Length && text[i] != ';'; i++)
+            {
+                if (text[i] == '\\' && i + 1 < text.Length) i++;
+                field.Append(text[i]);
+            }
+            return field.ToString();
         }
-        return "Wi-Fi: " + name;
     }
 
     /// <summary>How wide words are in a format (remembered: the banner is measured every frame it shows).</summary>

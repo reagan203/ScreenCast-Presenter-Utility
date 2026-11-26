@@ -34,6 +34,24 @@ internal enum ScheduleAction
 
     /// <summary>Show a scene (<see cref="ScheduleEntry.Slot"/>, FR-86).</summary>
     Scene,
+
+    /// <summary>Stop and save a recording (FR-59), if one is running.</summary>
+    StopRecording,
+}
+
+/// <summary>FR-59: when "stop at a set time" means, from now.</summary>
+internal static class RecordingStop
+{
+    /// <summary>The next time the clock shows <paramref name="timeOfDay"/>: later today, or tomorrow when that's passed.</summary>
+    public static DateTime Next(TimeSpan timeOfDay, DateTime now)
+    {
+        DateTime today = now.Date + timeOfDay;
+        return today > now ? today : today.AddDays(1);
+    }
+
+    /// <summary>"at 17:30" or "at 08:00 tomorrow".</summary>
+    public static string Words(DateTime at, DateTime now) =>
+        $"at {at.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)}{(at.Date > now.Date ? " tomorrow" : "")}";
 }
 
 /// <summary>
@@ -114,6 +132,7 @@ internal sealed class ScheduleEntry
         ScheduleAction.StartPlaylist => $"play “{Playlist}”",
         ScheduleAction.StopPlaylist => "stop the playlists",
         ScheduleAction.Scene => $"show scene {Slot}",
+        ScheduleAction.StopRecording => "stop the recording",
         _ => "",
     };
 
@@ -214,6 +233,7 @@ internal static class ScheduleChoices
             ("Blank the TV (with its message)", ScheduleAction.Blank, 1, null),
             ("Show the picture again", ScheduleAction.ShowAgain, 1, null),
             ("Stop showing", ScheduleAction.Stop, 1, null),
+            ("Stop the recording (it's saved)", ScheduleAction.StopRecording, 1, null),
         };
         for (int i = 0; i < favourites.Count; i++)
         {

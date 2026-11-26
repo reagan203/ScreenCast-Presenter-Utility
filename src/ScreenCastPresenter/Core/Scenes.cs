@@ -3,7 +3,7 @@ namespace ScreenCastPresenter.Core;
 /// <summary>
 /// A scene (FR-86): what's shown and everything around it, recalled with one key or a button deck.
 /// The source (with its crop), the small picture and its place, the name banner, a QR code for a
-/// link, the spotlight and dimming. Hidden parts aren't stored: they belong to the app and always
+/// link, the spotlight, dimming and live captions. Hidden parts aren't stored: they belong to the app and always
 /// apply (FR-74). A Wi-Fi QR code is never stored (it holds the password).
 /// </summary>
 internal sealed class Scene
@@ -23,6 +23,9 @@ internal sealed class Scene
     public string? QrLink { get; set; }
     public bool Spotlight { get; set; }
     public double Dim { get; set; }
+
+    /// <summary>Live captions on or off with this scene; null (a scene saved before scenes kept them) leaves them as they are.</summary>
+    public bool? LiveCaptions { get; set; }
 
     /// <summary>"Demo" or "Scene 3" when it has no name.</summary>
     public string Title(int slot) => Name.Length > 0 ? Name : $"Scene {slot}";
@@ -60,6 +63,7 @@ internal sealed class Scene
         if (Caption) parts.Add("name");
         if (QrLink is not null) parts.Add("QR code");
         if (Spotlight) parts.Add("spotlight");
+        if (LiveCaptions == true) parts.Add("live captions");
         if (Dim > 0) parts.Add($"dimmed {Dim:P0}");
         return string.Join(" · ", parts.Where(p => p.Length > 0));
     }
@@ -95,6 +99,9 @@ internal sealed class Playlist
     public string Screen { get; set; } = nameof(PlaylistScreen.Main);
     public List<PlaylistItem> Items { get; set; } = [];
 
+    /// <summary>Items in a random order each time round, never the same one twice running.</summary>
+    public bool Shuffle { get; set; }
+
     public PlaylistScreen Where => Enum.TryParse(Screen, ignoreCase: true, out PlaylistScreen s) && Enum.IsDefined(s) ? s : PlaylistScreen.Main;
 
     public static List<Playlist> NormalizeAll(List<Playlist>? playlists)
@@ -124,6 +131,19 @@ internal sealed class Playlist
 /// <summary>What a playlist shows next (FR-87): pure, so every rule is tested.</summary>
 internal static class PlaylistPlayer
 {
+    /// <summary>
+    /// Shuffled: a random item that can be shown, never <paramref name="current"/> again when
+    /// another can be (from <paramref name="random"/>, so tests can fix it). In order when not.
+    /// </summary>
+    public static int? Next(IReadOnlyList<PlaylistItem> items, int? current, Func<PlaylistItem, bool> available, bool shuffle, Random random)
+    {
+        if (!shuffle) return Next(items, current, available);
+        var can = Enumerable.Range(0, items.Count).Where(i => available(items[i])).ToList();
+        if (can.Count == 0) return null;
+        if (can.Count > 1 && current is { } c) can.Remove(c);
+        return can[random.Next(can.Count)];
+    }
+
     /// <summary>
     /// The item after <paramref name="current"/> (from the start when null), going round and
     /// skipping items <paramref name="available"/> says can't be shown now; null when none can.

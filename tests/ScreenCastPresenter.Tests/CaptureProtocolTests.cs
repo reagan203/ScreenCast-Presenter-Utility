@@ -52,10 +52,13 @@ public class CaptureProtocolTests
     {
         string start = CaptureProtocol.Start(4242, TestData.Window(77, "x") with { Crop = new CropRegion(0, 0, 0.5, 0.5) }, true, false, new Size(1920, 1080));
         string[] p = start.Split(' ');
-        Assert.Equal(["start", "4242", "window:77", "1", "0", "0,0,0.5,0.5", "1920", "1080", "0", "0"], p); // automatic hiding off, solid
-        string withAutoHide = CaptureProtocol.Start(4242, TestData.Window(77, "x"), true, false, new Size(1920, 1080), SensitiveKinds.Emails | SensitiveKinds.Cards, RedactStyle.Blurred);
+        Assert.Equal(["start", "4242", "window:77", "1", "0", "0,0,0.5,0.5", "1920", "1080", "0", "0", "-"], p); // automatic hiding off, solid, no own words
+        string withAutoHide = CaptureProtocol.Start(4242, TestData.Window(77, "x"), true, false, new Size(1920, 1080), SensitiveKinds.Emails | SensitiveKinds.Cards, RedactStyle.Blurred,
+            ["Project Falcon", "Acme, Inc"]);
         string[] q = withAutoHide.Split(' ');
+        Assert.Equal(11, q.Length); // the words travel as one word
         Assert.Equal((SensitiveKinds.Emails | SensitiveKinds.Cards, RedactStyle.Blurred), CaptureProtocol.ParseAutoHide(q[8], q[9]));
+        Assert.Equal(["Project Falcon", "Acme, Inc"], SensitiveText.ParseWordsToken(q[10]));
     }
 
     [Fact]

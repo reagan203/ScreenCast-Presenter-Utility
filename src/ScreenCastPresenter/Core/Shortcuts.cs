@@ -83,7 +83,7 @@ internal static class ShortcutCatalog
         list.Add(new("next-slide", "Next slide", ShortcutGroup.Presenting, null, Keywords: "next slide clicker page down forward advance"));
         list.Add(new("previous-slide", "Previous slide", ShortcutGroup.Presenting, null, Keywords: "previous slide clicker page up back"));
         list.Add(new("phone-remote", "Use my phone as a remote", ShortcutGroup.OnMyScreen, null, Keywords: "phone remote clicker mobile control pair wifi"));
-        list.Add(new("auto-hide", "Hide email addresses and numbers automatically on / off", ShortcutGroup.OnTheTv, null, Keywords: "automatic hide redact email phone card iban ocr privacy personal details"));
+        list.Add(new("auto-hide", "Hide private details automatically on / off", ShortcutGroup.OnTheTv, null, Keywords: "automatic hide redact email phone card iban ocr privacy personal details password key token secret words names"));
 
         list.AddRange(
         [

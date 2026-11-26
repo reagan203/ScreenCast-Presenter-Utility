@@ -66,7 +66,7 @@ internal static class RemoteHost
                     Monitor.PulseAll(StatusLock);
                 }
             }
-            server.Dispose();
+            server.Dispose(); // stop listening now; the using block's second Dispose does nothing
             serving.Wait(StatusWait);
         }
         return 0;

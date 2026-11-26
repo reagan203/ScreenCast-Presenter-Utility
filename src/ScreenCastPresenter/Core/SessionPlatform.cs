@@ -133,7 +133,7 @@ internal sealed class Win32SessionPlatform(Func<AppSettings> settings, Func<bool
     /// <summary>A window is watched for closing and moving; a screen or a camera reports trouble through its engine.</summary>
     public ISourceWatcher Watch(SourceWindow source) => source.IsWindow ? new WindowWatcher(source.Handle) : new ScreenWatcher();
 
-    public Size? ContentSize(SourceWindow source) => source.IsCamera ? null // its picture size isn't known here: the window keeps its shape
+    public Size? ContentSize(SourceWindow source) => source.IsOffScreen ? null // its picture size isn't known here: the window keeps its shape
         : ContentSizeOf(source, WindowEnumerator.IsMinimized(source.Handle), WindowEnumerator.ClientSize(source.Handle));
 
     /// <summary>

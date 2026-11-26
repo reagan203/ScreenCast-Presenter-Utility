@@ -234,12 +234,18 @@ internal sealed class SettingsForm : ThemedForm
         AddGroup("Phone remote");
         AddToggle("Phone remote", "Use your phone as a clicker on the same Wi-Fi: next and previous slide, blank, freeze, favourites and scenes. Off unless you switch it on. Pairing happens with a code only you see, and every command is signed, so others on the network can't take control.",
             s.PhoneRemote, on => _app.SetPhoneRemote(on), ("Pair a phone…", () => _ = _app.RunAsync("phone-remote")));
+        AddToggle("Notes on the phone", "Your notes for what's shown appear on the paired phone, encrypted with its pairing key: others on the Wi-Fi can't read them.",
+            s.NotesOnPhone, on => _app.SetNotesOnPhone(on));
         AddText("Remote's port", $"The network port the remote listens on (1024–65535; {Remote.RemoteServer.DefaultPort} unless changed). If it's in use, any free one is used.",
             s.RemotePort.ToString(System.Globalization.CultureInfo.InvariantCulture), 5, text =>
             {
                 if (int.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int port)) _app.SetRemotePort(port);
             });
+        AddGroup("Voice commands");
+        AddToggle("Voice commands", $"Say “Presenter, next slide” and it's done{Key("voice-commands")}. Windows' own speech recognition listens on this PC, only while something is shown; nothing is recorded or sent anywhere. Try: {string.Join(", ", VoiceCommands.Examples.Take(6).Select(e => "“Presenter, " + e + "”"))}.",
+            s.VoiceCommands, _app.SetVoiceCommands);
         AddGroup("On your screen while you present");
+        AddButton("My notes", $"A small window on your screen with the notes for what's on the TV{Key("notes")}. Notes belong to favourites and scenes.", "Open…", () => _ = _app.RunAsync("notes"));
         AddToggle("Yellow outline", "Marks on your screen what the audience sees. Never on the TV.", s.ShowOutline, on => _app.SetShowOutline(on));
         AddToggle("Now-showing bar", "A small bar on top while you present or record, like Teams' sharing bar. Click it to go to what's shown.", s.ShowWidget, on => _app.SetShowWidget(on));
         AddToggle("Status pill", "When the now-showing bar is hidden, a pill at the top of your screen says what's on the TV. Messages always appear there.", s.ShowBadge, on => _app.SetShowBadge(on));
@@ -251,6 +257,9 @@ internal sealed class SettingsForm : ThemedForm
 
     private void BuildOutput()
     {
+        AddGroup("The TV over the cable");
+        AddToggle("Turn the TV on when showing starts", "The TV wakes and switches to this PC when you show something. Works with screens that take commands over the cable (DDC/CI): most monitors, some TVs.",
+            _app.Settings.TvWakeOnShow, _app.SetTvWakeOnShow, ("Test the TV", () => _ = _app.TestTvAsync()));
         AppSettings s = _app.Settings;
         OutputOption current = _app.CurrentOutputOption;
         var choices = _app.Monitors.Select(m => (m.IsVirtual ? $"Zoom screen ({m.Name})" : m.IsTv ? $"TV ({m.Name})" : m.Name,
@@ -276,7 +285,10 @@ internal sealed class SettingsForm : ThemedForm
             [.. new[] { 0, 10, 20, 30, 40 }.Select(p => (p == 0 ? "Off" : $"{p}%", Math.Abs(s.Dim - p / 100.0) < 0.001, (Action)(() => _app.SetDim(p / 100.0))))]);
         AddChoice("Zoom", $"How much closer zooming in brings the TV{Key("zoom-in")}. It follows your mouse over what you show.",
             [.. ZoomView.Levels.Select(l => ($"{l:0.#}×", Math.Abs(s.ZoomLevel - l) < 0.001, (Action)(() => _app.SetZoomLevel(l))))]);
+        AddChoice("Zoom follows", $"Where the zoomed-in view goes{Key("zoom-follows")}. Following where you type keeps a form or code readable as you fill it in.",
+            [.. Enum.GetValues<ZoomFollows>().Select(f => (char.ToUpperInvariant(ZoomFollow.Words(f)[0]) + ZoomFollow.Words(f)[1..], s.ZoomFollowsMode == f, (Action)(() => _app.SetZoomFollows(f))))]);
         AddToggle("Show my clicks", $"A ring appears on the TV wherever you click on what you show{Key("highlight-clicks")}.", s.HighlightClicks, _app.SetHighlightClicks);
+        AddToggle("Show my shortcuts", $"Key combinations you press in what's shown appear on the TV for a moment, like Ctrl + C{Key("show-keys")}. Only combinations with Ctrl, Alt or the Windows key, the F-keys and Esc: what you type never shows.", s.ShowKeys, _app.SetShowKeys);
         AddToggle("Ring around the mouse", $"A soft yellow ring follows your mouse on the TV, so a room can see it{Key("pointer-ring")}.", s.PointerRing, _app.SetPointerRing);
         string key = _app.ActiveShortcut("blank-message") is { } k ? $" ({k})" : "";
         AddText("Blank screen message", $"Shown on the TV when you blank it with a message{key}.", s.BlankMessage, AppSettings.MaxMessageLength, _app.SetBlankMessage);
@@ -293,7 +305,8 @@ internal sealed class SettingsForm : ThemedForm
         AddToggle("When what's shown closes", "The TV shows the blank screen's message (and your logo) instead of plain black until you show something else.", s.IdleShowsMessage, _app.SetIdleShowsMessage);
         AddGroup("Live captions and transcripts");
         AddToggle("Live captions on the TV", $"Live captions{Key("live-captions")} show what you say on the TV. Off: they only write the transcript.", s.CaptionsOnTv, _app.SetCaptionsOnTv);
-        AddToggle("Save a transcript", "Everything live captions hear is written to a text file as it's said, with subtitles (.srt) beside it when they stop. On this PC only.", s.SaveTranscript, _app.SetSaveTranscript);
+        AddToggle("Save a transcript", "Everything live captions hear is written to a text file as it's said, with subtitles (.srt and .vtt) beside it when they stop. On this PC only.", s.SaveTranscript, _app.SetSaveTranscript);
+        AddToggle("Save a timeline", "What was shown when (“09:31 Showing Q3 results”), written as it happens to a text file in the transcripts folder. Names only.", s.SaveTimeline, _app.SetSaveTimeline);
         AddFolder("Transcripts folder", s.TranscriptFolder ?? SavedFiles.DefaultTranscriptFolder, s.TranscriptFolder is null, _app.SetTranscriptFolder);
         CaptionLook look = s.CaptionLook;
         AddChoice("Caption size", "Bigger captions are easier to read from the back of the room, and fit fewer words.",
@@ -355,10 +368,19 @@ internal sealed class SettingsForm : ThemedForm
             ("None", sound == MeetingSound.None, () => _app.SetRecordSound(MeetingSound.None)),
         ]);
         AddToggle("Microphone", "Also record people in the room.", s.RecordMicrophone, on => _app.SetRecordMicrophone(on));
+        AddToggle("Keep the last minute", $"While something is shown full screen, the last part of what the audience sees is kept on this PC (the oldest deleted as it goes), so you can save it when something goes well{Key("save-replay")}. Uses a little more of the computer while on.", s.ReplayOn, _app.SetReplay);
+        AddChoice("How much is kept", "Saved as one video in your recordings folder.",
+            [.. Recording.ReplayBuffer.Choices.Select(c => (Slideshow.Words(c), s.ReplaySeconds == c, (Action)(() => _app.SetReplaySeconds(c))))]);
+        AddToggle("Chapters", "Each time what's shown changes while recording, a chapter starts. Saved beside the video for web players (.chapters.vtt), video sites (.chapters.txt) and FFmpeg (.ffmetadata.txt).", s.RecordingChapters, _app.SetRecordingChapters);
     }
 
     private void BuildPrivacy()
     {
+        if (_app.Policy.Any)
+        {
+            AddGroup("Set by your organisation");
+            AddInfo("Set by your organisation", string.Join(" ", _app.Policy.Words()) + " These can't be changed here.");
+        }
         AddGroup("Never show");
         AddAppList("Never show these apps",
             "Their windows can't be chosen, and when you show a whole screen it turns black while one of them is open on it. Password managers inside a browser are part of the browser window, so they can't be told apart.",
@@ -378,6 +400,7 @@ internal sealed class SettingsForm : ThemedForm
         ]);
         AddHiddenParts(_app.Settings.HiddenParts);
         AddGroup("Hide automatically");
+        AddToggle("Check before showing", $"The first time each window or screen is shown, it's read for private details first. If something is found that wouldn't be covered, you see it and choose{Key("check-before-showing")}.", _app.Settings.CheckBeforeShowing, _app.SetCheckBeforeShowing);
         SensitiveKinds auto = _app.Settings.AutoHideKinds;
         AddInfo("Hide automatically", "Windows reads the text in what you show, on this PC, and what you tick is covered on the TV as soon as it's found. It's a moment behind what's shown, so hide parts you know about yourself, and keep private apps on the never-show list.");
         foreach ((SensitiveKinds kind, string title, string description) in new[]
@@ -389,11 +412,21 @@ internal sealed class SettingsForm : ThemedForm
             (SensitiveKinds.IdNumbers, "ID numbers", "US Social Security and UK National Insurance numbers."),
             (SensitiveKinds.Secrets, "Keys and passwords", "API keys and access tokens (AWS, GitHub, Slack, Stripe, web tokens), and what follows \"password:\", \"PIN:\" or \"API key:\"."),
             (SensitiveKinds.Custom, "Words from your list", "Client names, code names, anything else you list below."),
+            (SensitiveKinds.PasswordFields, "Password boxes", "Found exactly by Windows, not by reading the picture: covered whatever they show, even a revealed password."),
         })
         {
             SensitiveKinds k = kind;
             AddToggle(title, description, auto.HasFlag(k), on => _app.SetAutoHide(on ? _app.Settings.AutoHideKinds | k : _app.Settings.AutoHideKinds & ~k));
         }
+        bool faces = auto.HasFlag(SensitiveKinds.Faces), keepMine = auto.HasFlag(SensitiveKinds.KeepLargestFace);
+        AddChoice("Blur faces", ScreenCastPresenter.Capture.FaceFinder.IsSupported
+                ? "Faces in what's shown (a camera, a video call) are blurred on the TV, in screenshots and recordings. Windows finds them on this PC; nobody is recognised. “Everyone but me” keeps the largest face (you, at your own camera) clear."
+                : "Windows can't find faces on this PC, so this does nothing here.",
+        [
+            ("Off", !faces, () => _app.SetAutoHide(_app.Settings.AutoHideKinds & ~(SensitiveKinds.Faces | SensitiveKinds.KeepLargestFace))),
+            ("Everyone", faces && !keepMine, () => _app.SetAutoHide((_app.Settings.AutoHideKinds | SensitiveKinds.Faces) & ~SensitiveKinds.KeepLargestFace)),
+            ("Everyone but me", faces && keepMine, () => _app.SetAutoHide(_app.Settings.AutoHideKinds | SensitiveKinds.Faces | SensitiveKinds.KeepLargestFace)),
+        ]);
         AddText("Your own words", $"Covered wherever they're seen, in any capitals. Separate them with commas (at most {SensitiveText.MaxCustomWords}).",
             string.Join(", ", _app.Settings.AutoHideWords), SensitiveText.MaxCustomWords * (SensitiveText.MaxCustomWordLength + 2),
             text => _app.SetAutoHideWords(text.Split(',')));
@@ -467,6 +500,11 @@ internal sealed class SettingsForm : ThemedForm
             int slot = i + 1;
             Row row = NewRow($"{slot}   {scene.Title(slot)}", scene.Words() + Key(ShortcutCatalog.SceneId(slot)));
             row.AddControl(Pill("Show it", () => _ = _app.RunAsync(ShortcutCatalog.SceneId(slot))));
+            row.AddControl(Pill("Notes…", () =>
+            {
+                _app.EditSceneNotes(slot);
+                Rebuild();
+            }, PillKind.Ghost));
             row.AddControl(Pill("Remove", () =>
             {
                 _app.DeleteScene(slot);
@@ -502,6 +540,36 @@ internal sealed class SettingsForm : ThemedForm
         else
             AddChoice("Play when ScreenCast Presenter starts", "For a screen that runs itself: with “Start with Windows” on, the PC starting up starts the playlist.",
                 [("None", s.PlaylistAtStart is null, () => _app.SetPlaylistAtStart(null)), .. s.Playlists.Select(p => (p.Name, string.Equals(p.Name, s.PlaylistAtStart, StringComparison.OrdinalIgnoreCase), (Action)(() => _app.SetPlaylistAtStart(p.Name))))]);
+
+        AddGroup("Calendar");
+        CalendarLink link = s.Calendar ?? new CalendarLink();
+        string nextBooking = _app.NextBooking() is { } booking ? $" Next: “{booking.Summary}” at {booking.Start:ddd HH:mm}." : "";
+        AddButton("Room calendar", (link.File is { } file ? $"{Path.GetFileName(file)}.{nextBooking}" : "None.") + " An .ics file of this room's bookings (export it from Outlook or Google, or keep a synced copy): bookings set the room up and tidy it away. Read on this PC; nothing is fetched.",
+            link.File is null ? "Choose a file…" : "Change…", () =>
+            {
+                using var dialog = new OpenFileDialog { Title = "Choose the room's calendar", Filter = "Calendar (*.ics)|*.ics" };
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                link.File = dialog.FileName;
+                link.AtStart ??= new ScheduleEntry { Action = nameof(ScheduleAction.TvOn) };
+                link.AtEnd ??= new ScheduleEntry { Action = nameof(ScheduleAction.Stop) };
+                _app.SetCalendar(link);
+                Rebuild();
+            });
+        if (link.File is not null)
+        {
+            var choices = ScheduleChoices.Actions(s.Favourites, s.Rooms, s.Scenes, s.Playlists);
+            (string, bool, Action)[] Options(ScheduleEntry? current, Action<ScheduleEntry?> set) =>
+            [
+                ("Nothing", current is null, () => set(null)),
+                .. choices.Select(c => (c.Words, current is { } e && e.What == c.Action && e.Slot == c.Slot && (e.Room ?? e.Playlist) == c.Room,
+                    (Action)(() => set(new ScheduleEntry { Action = c.Action.ToString(), Slot = c.Slot, Room = c.Action == ScheduleAction.Room ? c.Room : null, Playlist = c.Action == ScheduleAction.StartPlaylist ? c.Room : null })))),
+            ];
+            AddChoice("When a booking starts", "Done this many minutes before it starts (below).", Options(link.AtStart, e => { link.AtStart = e; _app.SetCalendar(link); Rebuild(); }));
+            AddChoice("Start it early", "", [.. new[] { 0, 5, 10, 15 }.Select(m => (m == 0 ? "On time" : $"{m} min before", link.LeadMinutes == m, (Action)(() => { link.LeadMinutes = m; _app.SetCalendar(link); Rebuild(); })))]);
+            AddChoice("When a booking ends", "", Options(link.AtEnd, e => { link.AtEnd = e; _app.SetCalendar(link); Rebuild(); }));
+            AddText("Only bookings named", "Only bookings whose title contains these words (empty for all). Press Enter to keep it.", link.Match, 60, text => { link.Match = text; _app.SetCalendar(link); });
+            AddToggle("Use the calendar", "", link.Enabled, on => { link.Enabled = on; _app.SetCalendar(link); }, ("Forget it", () => { _app.SetCalendar(null); Rebuild(); }));
+        }
 
         AddGroup("Schedule");
         AddButton("Add a scheduled action", "Start the lobby slideshow at 8:00, stop it at 18:00, switch rooms… Uses this PC's clock; ScreenCast Presenter must be running (it can start with Windows).",
@@ -665,6 +733,9 @@ internal sealed class SettingsForm : ThemedForm
         AddToggle("Check for updates", "Once a day, ask GitHub whether a newer version is out, and say so here. Only that question is sent: nothing about you or this PC. Nothing is downloaded or installed for you.",
             _app.Settings.CheckForUpdates, _app.SetCheckForUpdates, ("Check now", () => _ = _app.CheckForUpdatesAsync(manual: true)));
         AddButton("Settings file", _app.SettingsFilePath, "Show in folder", () => _app.ShowInFolder(_app.SettingsFilePath));
+        AddButton("Copy settings to another PC", "Save these settings to a file, then load it on another PC (or with --import-settings in a setup script). The phone remote's pairing stays on each PC.",
+            "Save to a file…", _app.ExportSettings);
+        AddButton("Load settings from a file", "They replace these settings, and ScreenCast Presenter starts again to use them.", "Load…", _app.ImportSettings);
         AddInfo("Version", _app.VersionText);
     }
 

@@ -21,7 +21,7 @@ internal static class Redactions
     /// <summary>Where a source's boxes are kept: the app's name, or "screen:" and the screen's device; null for a camera.</summary>
     public static string? Key(SourceWindow source) =>
         source.Screen is { } screen ? "screen:" + screen.DeviceName
-        : source.IsCamera ? null
+        : source.IsOffScreen ? null
         : source.AppName.Length > 0 ? source.AppName : null;
 
     /// <summary>Tidies a source's boxes from a settings file: valid, not the whole thing, at most <see cref="MaxPerSource"/>.</summary>

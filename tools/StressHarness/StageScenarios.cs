@@ -218,6 +218,45 @@ internal static partial class Program
             Check(WaitFor(() => Saved("ShowOutline") == "true", 3000), "room: --on outline didn't turn the outline back on");
             Check(scp.RunCommandLine("--on", "rockets").ExitCode == 2, "room: --on rockets should be a mistake (exit 2)");
 
+            // More from everything (rev 9): a picture and a card on the TV, split screen in every
+            // layout, shortcuts on the TV, notes, settings to a file, and saving the last minute.
+            string picture = Path.Combine(Path.GetTempPath(), $"scp-harness-picture-{Guid.NewGuid():N}.png");
+            File.WriteAllBytes(picture, SolidPng(640, 360, 0x22, 0x66, 0xAA));
+            string exported = Path.Combine(Path.GetTempPath(), $"scp-harness-settings-{Guid.NewGuid():N}.json");
+            try
+            {
+                Check(scp.RunCommandLine("--picture", picture).ExitCode == 0, "room: --picture failed");
+                Check(scp.OutputWindows().Count == 1, "room: --picture showed nothing");
+                Probe(scp, "a picture");
+                Check(scp.RunCommandLine("--card", @"Welcome\nHarness test").ExitCode == 0, "room: --card failed");
+                Probe(scp, "a card");
+                Check(scp.RunCommandLine("--favourite", "1").ExitCode == 0, "room: --favourite 1 failed");
+                Check(scp.RunCommandLine("--split", "SCP dark B").ExitCode == 0, "room: --split failed");
+                foreach (string layout in new[] { "stacked", "grid", "focus", "side-by-side" })
+                    Check(scp.RunCommandLine("--layout", layout).ExitCode == 0, $"room: --layout {layout} failed");
+                Wait(800);
+                Probe(scp, "split screen");
+                Check(scp.RunCommandLine("--split", "off").ExitCode == 0, "room: --split off failed");
+                Check(scp.RunCommandLine("--split", "No such window anywhere").ExitCode == 1, "room: --split of a missing window should exit 1");
+                Check(scp.RunCommandLine("--on", "show-keys", "--off", "show-keys").ExitCode == 0, "room: --on/--off show-keys failed");
+                Check(scp.RunCommandLine("--on", "notes").ExitCode == 0 && scp.RunCommandLine("--off", "notes").ExitCode == 0, "room: notes window failed");
+                Check(scp.RunCommandLine("--export-settings", exported).ExitCode == 0 && File.Exists(exported) && File.ReadAllText(exported).Contains("\"Favourites\"", StringComparison.Ordinal),
+                    "room: --export-settings wrote no settings");
+                // The last minute: kept in parts while shown, then saved into the recordings folder.
+                Check(scp.RunCommandLine("--on", "replay").ExitCode == 0, "room: --on replay failed");
+                Wait(17_500); // one part of 15 s finished
+                Check(scp.RunCommandLine("--action", "save-replay").ExitCode == 0, "room: save-replay failed");
+                Check(WaitFor(() => Directory.Exists(scp.RecordingDir) && Directory.GetFiles(scp.RecordingDir, "Replay*.mp4").Any(f => new FileInfo(f).Length > 10_000), 30_000),
+                    "room: the last minute wasn't saved to the recordings folder");
+                Check(scp.RunCommandLine("--off", "replay").ExitCode == 0, "room: --off replay failed");
+                Check(WaitFor(() => scp.HelperCount <= 2, 10_000), "room: the replay helper kept running after it was switched off");
+            }
+            finally
+            {
+                File.Delete(picture);
+                File.Delete(exported);
+            }
+
             // Next and previous slide go to the window shown, without taking the focus.
             Check(scp.RunCommandLine("--action", "next-slide").ExitCode == 0, "room: next-slide failed");
             Check(scp.RunCommandLine("--action", "previous-slide").ExitCode == 0, "room: previous-slide failed");

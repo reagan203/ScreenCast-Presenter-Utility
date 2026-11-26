@@ -25,6 +25,11 @@ internal sealed partial class ScpApp
             Message("Show something first, then hide part of it from the audience.");
             return;
         }
+        if (source.IsPicture)
+        {
+            Message("A picture isn't on your screen to hide part of. Edit the picture, or choose another.");
+            return;
+        }
         if (source.IsCamera)
         {
             Message("A camera's picture isn't on your screen to hide part of. Point the camera away from it instead.");
@@ -86,6 +91,7 @@ internal sealed partial class ScpApp
     private async Task ApplyHiddenPartsAsync()
     {
         if (!_session.UpdateHiddenParts()) await ReshowAsync();
+        SendOtherHiddenParts();
         if (_second is { } second && !second.UpdateHiddenParts()) await second.RestartEngineAsync();
         _tray.Refresh();
     }
@@ -640,7 +646,7 @@ internal sealed partial class ScpApp
     /// <summary>The timer runs only while some entry is switched on (NFR-04: no work for nothing).</summary>
     private void UpdateSchedule()
     {
-        bool want = !_quitting && Settings.Schedule.Any(e => e.Enabled);
+        bool want = !_quitting && (Settings.Schedule.Any(e => e.Enabled) || Settings.Calendar is { Enabled: true, File: not null });
         if (want == _scheduleTimer.Enabled) return;
         if (want)
         {
@@ -656,6 +662,7 @@ internal sealed partial class ScpApp
         List<ScheduleEntry> due = Scheduler.Due(Settings.Schedule, _scheduleChecked, now);
         _scheduleChecked = now;
         foreach (ScheduleEntry entry in due) await RunScheduledAsync(entry);
+        await CheckCalendarAsync(now);
     }
 
     /// <summary>Does one scheduled thing. Each is harmless to repeat (starting a running slideshow does nothing).</summary>
@@ -694,6 +701,12 @@ internal sealed partial class ScpApp
                 break;
             case ScheduleAction.Scene:
                 await ShowSceneAsync(entry.Slot);
+                break;
+            case ScheduleAction.TvOn:
+                await SetTvPowerAsync(on: true, quiet: true);
+                break;
+            case ScheduleAction.TvOff:
+                await SetTvPowerAsync(on: false, quiet: true);
                 break;
             case ScheduleAction.StopRecording:
                 if (_recording.IsActive && _recording.Status != ScreenCastPresenter.Recording.RecordingStatus.Stopping)
@@ -996,7 +1009,7 @@ internal sealed partial class ScpApp
     // ───────────────────────────── shared ─────────────────────────────
 
     /// <summary>The extras that need the helper to draw them on the TV.</summary>
-    private bool StageWantsHelper => _captionOn || _qrText is not null || _captions is not null && Settings.CaptionsOnTv || AudienceViewOpen || Settings.AutoHideKinds != SensitiveKinds.None;
+    private bool StageWantsHelper => _split.Count > 0 || Settings.ShowKeys || _captionOn || _qrText is not null || _captions is not null && Settings.CaptionsOnTv || AudienceViewOpen || Settings.AutoHideKinds != SensitiveKinds.None;
 
     /// <summary>A new engine took over: it starts without the stage extras, so they're sent again.</summary>
     private void ReplayStage(IEffectsEngine effects)

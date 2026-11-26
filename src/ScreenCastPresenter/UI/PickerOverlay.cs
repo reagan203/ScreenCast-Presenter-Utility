@@ -10,7 +10,7 @@ namespace ScreenCastPresenter.UI;
 /// What the picker chooses for: what to show, what to record, the small picture (FR-72), what's
 /// next (FR-76: made ready privately, shown with one key) or what the second TV shows (FR-85).
 /// </summary>
-internal enum PickerMode { Show, Record, Inset, Next, SecondTv }
+internal enum PickerMode { Show, Record, Inset, Next, SecondTv, Split, Check }
 
 /// <summary>
 /// The picker (Ctrl+Alt+P, SRS 6.1): a centred panel over a dimmed screen with search, live
@@ -338,18 +338,19 @@ internal sealed class PickerOverlay : ThemedForm
         var clock = System.Diagnostics.Stopwatch.StartNew();
         RefreshWindows();
         ScpApp.Diag($"picker: enumerated {_all.Count} windows in {clock.ElapsedMilliseconds} ms");
-        bool record = _mode == PickerMode.Record, inset = _mode == PickerMode.Inset, next = _mode == PickerMode.Next, second = _mode == PickerMode.SecondTv;
+        bool record = _mode == PickerMode.Record, inset = _mode == PickerMode.Inset, next = _mode == PickerMode.Next, second = _mode == PickerMode.SecondTv, split = _mode == PickerMode.Split, check = _mode == PickerMode.Check;
         _title.Text = record ? "Choose what to record" : inset ? "Choose the small picture" : next ? "Choose what's next"
-            : second ? "Choose what the second TV shows" : "Choose what to show";
+            : second ? "Choose what the second TV shows" : split ? "Choose what to show beside it" : check ? "Choose what to check before showing" : "Choose what to show";
         Text = record ? "ScreenCast Presenter: record" : "ScreenCast Presenter picker";
-        _footerLabel.Text = record ? "Sound" : inset ? "Corner" : second ? "Second TV" : "Show on";
+        _footerLabel.Text = record ? "Sound" : inset ? "Corner" : second ? "Second TV" : split ? "Layout" : "Show on";
         _crop.Text = record ? "Part of it…" : "Crop…";
         _crop.AccessibleName = record ? "Record part of the selected window" : "Crop the selected window, then show it";
         _crop.Size = _crop.Measure();
         _clickPick.Visible = _mode == PickerMode.Show;
-        _crop.Visible = !inset && !next && !second;
+        _crop.Visible = !inset && !next && !second && !split && !check;
         if (record) BuildSoundOptions();
         else if (inset) BuildCornerOptions();
+        else if (split) BuildLayoutOptions();
         else if (second) BuildSecondTvOptions();
         else BuildOutputs();
         BuildScreens();
@@ -617,6 +618,31 @@ internal sealed class PickerOverlay : ThemedForm
         ApplyPalette(Theme.Current);
     }
 
+    /// <summary>Split screen's layouts (FR-104), the chosen one marked.</summary>
+    private void BuildLayoutOptions()
+    {
+        foreach (Control old in _outputs.Controls.Cast<Control>().ToList()) old.Dispose();
+        SplitLayout chosen = _app.SplitLayoutNow;
+        foreach (SplitLayout l in SplitScreen.All)
+        {
+            SplitLayout layout = l;
+            string words = SplitScreen.Words(layout);
+            var pill = new PillButton(char.ToUpperInvariant(words[0]) + words[1..], layout == chosen ? PillKind.Selected : PillKind.Secondary)
+            {
+                AccessibleName = $"Show the pictures {words}",
+                Margin = new Padding(0, 0, LogicalToDeviceUnits(6), 0),
+            };
+            pill.Size = pill.Measure();
+            pill.Click += (_, _) =>
+            {
+                _app.SetSplitLayout(layout);
+                BuildLayoutOptions();
+            };
+            _outputs.Controls.Add(pill);
+        }
+        ApplyPalette(Theme.Current);
+    }
+
     /// <summary>The screens the second TV can be (FR-85): not the main TV, not the only screen you work on.</summary>
     private void BuildSecondTvOptions()
     {
@@ -653,6 +679,8 @@ internal sealed class PickerOverlay : ThemedForm
     private Task RouteAsync(SourceWindow source) => _mode switch
     {
         PickerMode.Inset => _app.SetInsetAsync(source),
+        PickerMode.Split => _app.AddSplitAsync(source),
+        PickerMode.Check => _app.CheckThenShowAsync(source),
         PickerMode.Next => _app.GetReadyAsync(source),
         PickerMode.SecondTv => _app.ShowOnSecondTvAsync(source),
         _ => _app.PresentAsync(source),
@@ -667,6 +695,8 @@ internal sealed class PickerOverlay : ThemedForm
         DisplayMonitor? output = current.Screen;
         string target = _mode == PickerMode.Record ? "● Start recording"
             : _mode == PickerMode.Inset ? "Show it small"
+            : _mode == PickerMode.Split ? "Show it beside"
+            : _mode == PickerMode.Check ? "Check it"
             : _mode == PickerMode.Next ? "Get it ready"
             : _mode == PickerMode.SecondTv ? (_app.SecondTvScreen is { } second ? $"Show on {second.Name}" : "Show on the second TV")
             : current.IsWindow ? "Show in a window"

@@ -233,3 +233,17 @@ INPUT
 KEYBDINPUT
 VIRTUAL_KEY
 MapVirtualKey
+
+// FR-99: zoom following the text cursor
+GetGUIThreadInfo
+GUITHREADINFO
+
+// FR-107: TV power and input over the cable (DDC/CI)
+GetNumberOfPhysicalMonitorsFromHMONITOR
+GetPhysicalMonitorsFromHMONITOR
+DestroyPhysicalMonitors
+SetVCPFeature
+GetVCPFeatureAndVCPFeatureReply
+GetCapabilitiesStringLength
+CapabilitiesRequestAndCapabilitiesReply
+PHYSICAL_MONITOR

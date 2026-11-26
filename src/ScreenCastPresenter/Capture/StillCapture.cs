@@ -29,8 +29,19 @@ internal static class StillCapture
         Task.Run(() =>
         {
             Bitmap? image = Cover(Capture(source, includeCursor, timeout, out Rectangle client, out Rectangle shown), client, shown, hidden);
-            if (image is not null) AutoRedactor.CoverInStill(image, autoHide, Core.SensitiveText.CustomPattern(words));
+            if (image is null) return null;
+            if (autoHide.HasFlag(Core.SensitiveKinds.PasswordFields) && !source.IsOffScreen)
+                Cover(image, client, shown, PasswordFieldFinder.FindOnce(source)); // exactly where Windows says they are
+            AutoRedactor.CoverInStill(image, autoHide, Core.SensitiveText.CustomPattern(words));
             return image;
+        });
+
+    /// <summary>The source as it is, nothing covered, with where its client area and the part shown are (the check before sharing, FR-102).</summary>
+    internal static Task<(Bitmap? Image, Rectangle Client, Rectangle Shown)> CaptureUncoveredAsync(SourceWindow source, TimeSpan timeout) =>
+        Task.Run(() =>
+        {
+            Bitmap? image = Capture(source, false, timeout, out Rectangle client, out Rectangle shown);
+            return (image, client, shown);
         });
 
     /// <summary>Where each hidden box falls in a picture of <paramref name="shown"/> (part of a client area <paramref name="client"/>).</summary>

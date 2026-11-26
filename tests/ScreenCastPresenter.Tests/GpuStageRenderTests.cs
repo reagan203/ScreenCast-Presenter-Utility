@@ -342,6 +342,23 @@ public sealed class GpuStageRenderTests : IDisposable
     }
 
     /// <summary>A white picture with black words drawn by GDI+, as the GPU's bitmap.</summary>
+    /// <summary>A W × H picture onto the GPU.</summary>
+    private ID2D1Bitmap1 FromBitmap(Bitmap source)
+    {
+        using var bitmap = new Bitmap(W, H, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using (Graphics g = Graphics.FromImage(bitmap)) g.DrawImage(source, 0, 0, W, H);
+        var data = bitmap.LockBits(new Rectangle(0, 0, W, H), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        try
+        {
+            return _dc!.CreateBitmap(new SizeI(W, H), data.Scan0, (uint)data.Stride,
+                new BitmapProperties1(new D2DPixelFormat(Format.B8G8R8A8_UNorm, D2DAlphaMode.Ignore), 96, 96, BitmapOptions.None));
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
+    }
+
     private ID2D1Bitmap1 PictureWithText(string text, Point at, int size, out Rectangle textAt)
     {
         using var bitmap = new Bitmap(W, H, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
@@ -398,6 +415,86 @@ public sealed class GpuStageRenderTests : IDisposable
         layer.AutoRedact([], RedactStyle.Solid);
         (double mean, _) = Stats(Frame(layer, picture), Rectangle.Round(onPicture));
         Assert.True(mean > 150, "and shows again when uncovered");
+        layer.Dispose();
+    }
+
+    [Fact]
+    public void Covers_over_another_picture_land_on_it_and_stay_inside_it()
+    {
+        if (!HasGpu) return;
+        var layer = new EffectsLayer(() => { });
+        using ID2D1Bitmap1 white = Picture(Color.White);
+        // The other picture drawn small on the right half, as split screen draws a pane.
+        var pane = new System.Drawing.RectangleF(W / 2f, 0, W / 2f, H / 2f);
+        _dc!.BeginDraw();
+        _dc.Clear(new Color4(0, 0, 0, 1));
+        _dc.DrawBitmap(white, new Rect(pane.X, pane.Y, pane.Width, pane.Height), 1, InterpolationMode.NearestNeighbor, new Rect(0, 0, W, H), null);
+        layer.RenderCovers(_dc, _factory!, white, Whole, Whole, pane, [(Box, RedactStyle.Solid), (CropRegion.Create(0, 0, 0.2, 0.2)!, RedactStyle.Blurred)], 1);
+        _dc.EndDraw().CheckError();
+        byte[] frame = ReadBack();
+        Near(Color.FromArgb(255, EffectStyle.RedactFill), At(frame, (int)(pane.X + pane.Width / 2), (int)(pane.Y + pane.Height / 2)), 2, "the box is in the middle of the pane");
+        Near(Color.White, At(frame, (int)pane.Right - 4, (int)pane.Bottom - 4), 1, "the rest of the pane shows");
+        Near(Color.Black, At(frame, 10, 10), 1, "nothing outside the pane");
+        Assert.True(At(frame, (int)pane.X + 5, 5).R < 255, "the blurred corner is darkened");
+        // Nothing to cover, or a fully faded picture: nothing drawn.
+        _dc.BeginDraw();
+        _dc.Clear(new Color4(0, 0, 0, 1));
+        layer.RenderCovers(_dc, _factory!, white, Whole, Whole, pane, [], 1);
+        layer.RenderCovers(_dc, _factory!, white, Whole, Whole, pane, [(Box, RedactStyle.Solid)], 0);
+        _dc.EndDraw().CheckError();
+        Near(Color.Black, At(ReadBack(), (int)(pane.X + pane.Width / 2), (int)(pane.Y + pane.Height / 2)), 1, "nothing drawn");
+        layer.Dispose();
+    }
+
+    [Fact]
+    public void Faces_are_found_on_the_gpu_and_blurred()
+    {
+        if (!HasGpu || !FaceFinder.IsSupported) return;
+        using var painting = new Bitmap(Path.Combine(AppContext.BaseDirectory, "Assets", "face-painting.jpg"));
+        using var scaled = new Bitmap(W, H);
+        using (Graphics g = Graphics.FromImage(scaled))
+        {
+            g.Clear(Color.Gray);
+            g.DrawImage(painting, (W - H * painting.Width / painting.Height) / 2, 0, H * painting.Width / painting.Height, H);
+        }
+        using ID2D1Bitmap1 picture = FromBitmap(scaled);
+        List<CropRegion>? found = null;
+        using var done = new ManualResetEventSlim();
+        using var faces = new FaceFinder(keepLargest: false, regions =>
+        {
+            found = regions;
+            done.Set();
+        });
+        Assert.False(faces.FirstScanDone);
+        faces.MaybeScan(_dc!, picture, new Rectangle(0, 0, W, H), changed: true, _target!);
+        Assert.True(done.Wait(TimeSpan.FromSeconds(10)), "the scan finished");
+        CropRegion face = Assert.Single(found!);
+        Assert.True(faces.FirstScanDone);
+        Assert.InRange(face.X + face.Width / 2, 0.4, 0.6);
+        var layer = new EffectsLayer(() => { });
+        layer.AutoCovers([(face, RedactStyle.Blurred)]);
+        var onPicture = Rectangle.Round(new System.Drawing.RectangleF((float)face.X * W, (float)face.Y * H, (float)face.Width * W, (float)face.Height * H));
+        (_, double before) = Stats(Frame(new EffectsLayer(() => { }), picture), onPicture);
+        (_, double after) = Stats(Frame(layer, picture), onPicture);
+        Assert.True(after < before * 0.6, $"blurred: detail {before:F1} became {after:F1}");
+        layer.Dispose();
+    }
+
+    [Fact]
+    public void A_shortcut_shows_as_a_chip_with_the_picture_and_never_on_a_break()
+    {
+        if (!HasGpu) return;
+        var layer = new EffectsLayer(() => { });
+        using ID2D1Bitmap1 white = Picture(Color.White);
+        layer.KeyCombo("Ctrl + Shift + S");
+        System.Drawing.RectangleF chip = Layouts.KeyChip(new System.Drawing.SizeF(W, H), 10, H);
+        byte[] frame = Frame(layer, white);
+        Assert.True(At(frame, W / 2, (int)(chip.Y + 3)).R < 120, "a dark chip in the middle at the bottom");
+        Near(Color.White, At(frame, 10, 10), 1, "the rest of the picture is clear");
+        byte[] onBreak = Frame(layer, white, visibility: 1, pictureShows: 0);
+        Assert.True(At(onBreak, W / 2, (int)(chip.Y + 3)).R > 200 || At(onBreak, W / 2, (int)(chip.Y + 3)) == At(Frame(new EffectsLayer(() => { }), white, visibility: 1, pictureShows: 0), W / 2, (int)(chip.Y + 3)), "not on a break screen");
+        layer.KeyCombo(null);
+        Near(Color.White, At(Frame(layer, white), W / 2, (int)(chip.Y + 3)), 1, "gone when taken off");
         layer.Dispose();
     }
 

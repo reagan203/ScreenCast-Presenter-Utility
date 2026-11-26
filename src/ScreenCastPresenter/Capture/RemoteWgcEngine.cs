@@ -171,6 +171,9 @@ internal sealed class RemoteWgcEngine : ICaptureEngine, IEffectsEngine
     public void CaptionStyle(CaptionLook look) => Send(CaptureProtocol.CaptionStyle(look));
     public void AutoHide(SensitiveKinds kinds, RedactStyle style) => Send(CaptureProtocol.AutoHide(kinds, style));
     public void AutoHideWords(IReadOnlyList<string> words) => Send(CaptureProtocol.AutoHideWords(words));
+    public void Split(SplitLayout layout, IReadOnlyList<SourceWindow> others) => Send(CaptureProtocol.Split(layout, others));
+    public void KeyCombo(string? text) => Send(CaptureProtocol.Keys(text));
+    public void HiddenFor(SourceWindow source, IReadOnlyList<CropRegion> regions, RedactStyle style) => Send(CaptureProtocol.HiddenFor(source, regions, style));
 
     /// <summary>Automatic hiding covered something (FR-88), in words.</summary>
     public event EventHandler<string>? AutoHidden;

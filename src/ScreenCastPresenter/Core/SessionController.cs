@@ -337,7 +337,7 @@ internal sealed class SessionController : IDisposable
             ScpApp.Diag("present failed: " + ex);
             // A camera says why in plain words (no access, in use by another app, unplugged).
             RecoverToIdle(ex is HiddenPartsException ? ex.Message
-                : source.IsCamera && ex is InvalidOperationException { Message.Length: > 0 }
+                : source.IsOffScreen && ex is InvalidOperationException { Message.Length: > 0 }
                 ? $"Couldn't show “{source.Title}”. {ex.Message}"
                 : $"Couldn't show “{source.Title}”. It may have closed.");
         }

@@ -447,7 +447,7 @@ public class TranscriptTests
         Assert.True(CaptureHost.ApplyMark(helper, CaptureProtocol.CaptionStyle(new CaptionLook(CaptionSize.ExtraLarge, CaptionPlace.Top))));
         Assert.True(CaptureHost.ApplyMark(helper, CaptureProtocol.AutoHide(SensitiveKinds.Emails | SensitiveKinds.Ibans, RedactStyle.Blurred)));
         Assert.True(CaptureHost.ApplyMark(helper, "autohide 9999 7")); // nonsense: only real kinds, a safe look
-        Assert.Equal(["style ExtraLarge Top", "autohide Emails, Ibans Blurred", "autohide Emails, Phones, Cards, Ibans Solid"], helper.Calls); // 9999 keeps its known bits only
+        Assert.Equal(["style ExtraLarge Top", "autohide Emails, Ibans Blurred", "autohide Emails, Phones, Cards, Ibans, Faces, KeepLargestFace Solid"], helper.Calls); // 9999 keeps its known bits only
     }
 
     private sealed class TextEffectsWithStyle : IEffectsEngine

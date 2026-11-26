@@ -156,6 +156,50 @@ public class GpuMarksTests
         await Task.Delay(300);
         Assert.Empty(problems);
 
+        // Split screen (FR-104): another window beside the screen, with its hidden parts, and the new
+        // kinds of automatic hiding (password boxes, faces) on every picture; every layout, a
+        // second pane, the small picture with its covers, then back to one picture.
+        using (var beside = new PasswordForm())
+        {
+            SourceWindow other = beside.Source;
+            engine.HiddenFor(other, [CropRegion.Create(0.1, 0.1, 0.3, 0.3)!], RedactStyle.Blurred);
+            engine.AutoHide(SensitiveKinds.PasswordFields | SensitiveKinds.Faces | SensitiveKinds.Emails, RedactStyle.Solid);
+            engine.Split(SplitLayout.SideBySide, [other]);
+            for (int i = 0; i < 30 && engine.PanesShown != 1; i++) await Task.Delay(100);
+            Assert.Equal(1, engine.PanesShown);
+            foreach (SplitLayout layout in SplitScreen.All)
+            {
+                engine.Split(layout, [other, SourceWindow.ForScreen(screen)]);
+                await Task.Delay(300);
+            }
+            Assert.Equal(2, engine.PanesShown);
+            // A picture file beside it (FR-103), and a shortcut on the TV (FR-101).
+            string card = TextCard.Render(Path.Combine(Path.GetTempPath(), "scp-gpu-cards"), "Welcome" + Environment.NewLine + "To the test")!;
+            engine.Split(SplitLayout.Focus, [other, SourceWindow.ForPicture(card)]);
+            engine.KeyCombo("Ctrl + C");
+            await Task.Delay(500);
+            Assert.Equal(2, engine.PanesShown);
+            engine.KeyCombo(null);
+            engine.Split(SplitLayout.Grid, [SourceWindow.ForPicture(Path.Combine(Path.GetTempPath(), "no-such-picture.png"))]); // can't be read: says so
+            for (int i = 0; i < 30 && problems.Count == 0; i++) await Task.Delay(100);
+            Assert.Contains("can't be shown", Assert.Single(problems));
+            problems.Clear();
+            engine.Split(SplitLayout.SideBySide, [other, SourceWindow.ForScreen(screen)]);
+            await Task.Delay(300);
+            engine.SetFrozen(true); // panes hold still too
+            await Task.Delay(200);
+            engine.SetFrozen(false);
+            engine.Split(SplitLayout.Grid, []);
+            engine.Inset(other, InsetCorner.BottomLeft, 28);
+            await Task.Delay(800);
+            Assert.Equal(0, engine.PanesShown);
+            engine.Inset(null, InsetCorner.BottomLeft, 28);
+            engine.HiddenFor(other, [], RedactStyle.Solid);
+            engine.AutoHide(SensitiveKinds.None, RedactStyle.Solid);
+            await Task.Delay(300);
+        }
+        Assert.Empty(problems);
+
         // A small picture that can't start (its window is gone) says so; the main picture carries on.
         engine.Inset(TestData.Window(unchecked((nint)0x7FFF_FFF0), "Gone"), InsetCorner.BottomRight, 28);
         for (int i = 0; i < 30 && problems.Count == 0; i++) await Task.Delay(100);

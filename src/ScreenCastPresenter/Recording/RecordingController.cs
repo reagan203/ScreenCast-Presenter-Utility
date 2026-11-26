@@ -138,6 +138,19 @@ internal sealed class RecordingController : IDisposable
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>The replay buffer (FR-106): joins what it kept into <paramref name="path"/>. <see cref="ReplaySaved"/> or <see cref="ReplayFailed"/> follows.</summary>
+    public void SaveReplay(string path)
+    {
+        if (Status is not (RecordingStatus.Recording or RecordingStatus.Paused)) return;
+        _process?.Send("save-replay " + path);
+    }
+
+    /// <summary>The replay was saved: the file and how long it is.</summary>
+    public event EventHandler<(string Path, TimeSpan Length)>? ReplaySaved;
+
+    /// <summary>The replay couldn't be saved, and why.</summary>
+    public event EventHandler<string>? ReplayFailed;
+
     /// <summary>Asks the helper to finish the file. <see cref="Finished"/> follows.</summary>
     public void Stop()
     {
@@ -190,6 +203,12 @@ internal sealed class RecordingController : IDisposable
                 _detail = reply.Text;
                 Elapsed = TimeSpan.FromSeconds(reply.A);
                 Bytes = reply.B;
+                break;
+            case "replay-saved":
+                ReplaySaved?.Invoke(this, (reply.Text, TimeSpan.FromSeconds(reply.A)));
+                break;
+            case "replay-failed":
+                ReplayFailed?.Invoke(this, reply.Text.Length > 0 ? reply.Text : "The last minute couldn't be saved.");
                 break;
             case "failed":
                 _gotFinished = true;

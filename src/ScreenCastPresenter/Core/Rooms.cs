@@ -111,7 +111,7 @@ internal sealed class RoomProfile
         return result;
     }
 
-    private static Favourite? Copy(Favourite? f) => f is null ? null : new Favourite { AppName = f.AppName, Title = f.Title, ScreenDevice = f.ScreenDevice, CameraId = f.CameraId };
+    private static Favourite? Copy(Favourite? f) => f is null ? null : new Favourite { AppName = f.AppName, Title = f.Title, ScreenDevice = f.ScreenDevice, CameraId = f.CameraId, PicturePath = f.PicturePath };
 
     /// <summary>Finds a room by name, ignoring case.</summary>
     public static RoomProfile? Find(IEnumerable<RoomProfile> rooms, string? name) =>

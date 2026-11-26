@@ -17,9 +17,16 @@ internal sealed class Favourite
     /// <summary>Set when the favourite is a camera (FR-68): Windows' id for it; <see cref="Title"/> is its name.</summary>
     public string? CameraId { get; set; }
 
-    /// <summary>The same source: the same screen, the same camera, or the same app with the same or a similar title.</summary>
+    /// <summary>Speaker notes (FR-111): for the presenter's eyes only.</summary>
+    public string Notes { get; set; } = "";
+
+    /// <summary>Set when the favourite is a picture file (FR-103): its full path; <see cref="Title"/> is its name.</summary>
+    public string? PicturePath { get; set; }
+
+    /// <summary>The same source: the same screen, the same camera, the same picture, or the same app with the same or a similar title.</summary>
     public bool Matches(Favourite other) =>
-        ScreenDevice is not null || other.ScreenDevice is not null ? ScreenDevice == other.ScreenDevice
+        PicturePath is not null || other.PicturePath is not null ? string.Equals(PicturePath, other.PicturePath, StringComparison.OrdinalIgnoreCase)
+        : ScreenDevice is not null || other.ScreenDevice is not null ? ScreenDevice == other.ScreenDevice
         : CameraId is not null || other.CameraId is not null ? CameraId == other.CameraId
         : string.Equals(AppName, other.AppName, StringComparison.OrdinalIgnoreCase) && (Title == other.Title || FavouriteMatcher.IsSimilar(Title, other.Title));
 }
@@ -149,6 +156,51 @@ internal sealed class AppSettings
     /// <summary>The small picture's corner (FR-72): BottomRight, BottomLeft, TopRight or TopLeft.</summary>
     public string InsetCorner { get; set; } = nameof(Core.InsetCorner.BottomRight);
 
+    /// <summary>Each window or screen is checked the first time it's shown (FR-102); something automatic hiding wouldn't cover is asked about.</summary>
+    public bool CheckBeforeShowing { get; set; }
+
+    /// <summary>The paired phone shows the speaker notes, encrypted with its key (FR-111).</summary>
+    public bool NotesOnPhone { get; set; } = true;
+
+    /// <summary>Voice commands ("Presenter, next slide") listen to the microphone (FR-110).</summary>
+    public bool VoiceCommands { get; set; }
+
+    /// <summary>The TV is turned on and switched to this PC when showing starts (FR-107).</summary>
+    public bool TvWakeOnShow { get; set; }
+
+    /// <summary>The TV's input this PC is on (MCCS code, e.g. 0x11 for HDMI 1); 0 when not chosen.</summary>
+    public int TvInput { get; set; }
+
+    /// <summary>Schedules from a calendar file (FR-108).</summary>
+    public CalendarLink? Calendar { get; set; }
+
+    /// <summary>The last minute of what's shown full screen is kept, ready to save (FR-106).</summary>
+    public bool ReplayOn { get; set; }
+
+    /// <summary>How much "the last minute" keeps: 30, 60 or 120 seconds.</summary>
+    public int ReplaySeconds { get; set; } = Recording.ReplayBuffer.DefaultSeconds;
+
+    /// <summary>Chapters beside each recording (FR-105).</summary>
+    public bool RecordingChapters { get; set; } = true;
+
+    /// <summary>A timeline of what was shown when, in the transcripts folder (FR-105).</summary>
+    public bool SaveTimeline { get; set; }
+
+    /// <summary>Shortcuts pressed in what's shown appear on the TV (FR-101).</summary>
+    public bool ShowKeys { get; set; }
+
+    /// <summary>What zooming in follows (FR-99): Pointer, Typing or Both.</summary>
+    public string ZoomFollows { get; set; } = nameof(Core.ZoomFollows.Pointer);
+
+    public ZoomFollows ZoomFollowsMode
+    {
+        get => ZoomFollow.Parse(ZoomFollows);
+        set => ZoomFollows = value.ToString();
+    }
+
+    /// <summary>How split screen arranges its pictures (FR-104): SideBySide, Stacked, Grid or Focus.</summary>
+    public string SplitLayout { get; set; } = nameof(Core.SplitLayout.SideBySide);
+
     /// <summary>The small picture's width, in percent of the TV's width: 20, 28 or 36.</summary>
     public int InsetSize { get; set; } = InsetLayout.DefaultSize;
 
@@ -179,6 +231,12 @@ internal sealed class AppSettings
 
     /// <summary>The last Wi-Fi network put on the TV as a QR code; its password is never kept.</summary>
     public string? QrWifiName { get; set; }
+
+    /// <summary>The folder a picture was last shown from (FR-103), offered again.</summary>
+    public string? LastPictureFolder { get; set; }
+
+    /// <summary>The words of the card last shown, offered again.</summary>
+    public string? LastCard { get; set; }
 
     /// <summary>The contact card last put on the TV as a QR code (name, phone, email), offered again next time.</summary>
     public string? QrContactName { get; set; }
@@ -246,8 +304,8 @@ internal sealed class AppSettings
     [JsonIgnore]
     public SensitiveKinds AutoHideKinds
     {
-        get => Enum.TryParse(AutoHide, ignoreCase: true, out SensitiveKinds k) ? k & SensitiveKinds.All : SensitiveKinds.None;
-        set => AutoHide = (value & SensitiveKinds.All).ToString();
+        get => Enum.TryParse(AutoHide, ignoreCase: true, out SensitiveKinds k) ? k & SensitiveKinds.Known : SensitiveKinds.None;
+        set => AutoHide = (value & SensitiveKinds.Known).ToString();
     }
 
     [JsonIgnore]
@@ -356,6 +414,19 @@ internal sealed class AppSettings
         else PlaylistAtStart = atStart.Name;
         AutoHide = AutoHideKinds.ToString();
         AutoHideWords = SensitiveText.NormalizeWords(AutoHideWords);
+        foreach (Favourite? f in Favourites) if (f is not null) f.Notes = NotesCipher.Tidy(f.Notes);
+        SplitLayout = SplitScreen.Parse(SplitLayout).ToString();
+        ZoomFollows = ZoomFollowsMode.ToString();
+        ReplaySeconds = Recording.ReplayBuffer.Normalize(ReplaySeconds);
+        TvInput = TvInput is > 0 and < 0x100 ? TvInput : 0;
+        Calendar = Calendar?.Normalized();
+        if (Calendar is { } link)
+        {
+            link.AtStart = link.AtStart is { } s ? ScheduleEntry.NormalizeAll([s]).FirstOrDefault() : null;
+            link.AtEnd = link.AtEnd is { } e ? ScheduleEntry.NormalizeAll([e]).FirstOrDefault() : null;
+        }
+        LastPictureFolder = string.IsNullOrWhiteSpace(LastPictureFolder) ? null : LastPictureFolder.Trim();
+        LastCard = TextCard.Tidy(LastCard) is { Length: > 0 } card ? card : null;
         if (string.IsNullOrWhiteSpace(TranscriptFolder)) TranscriptFolder = null;
         CaptionLook = CaptionLook;
         if (RemotePort is < 1024 or > 65535) RemotePort = Remote.RemoteServer.DefaultPort;
@@ -415,6 +486,13 @@ internal sealed class SettingsStore(string path)
             LoadProblem = "ScreenCast Presenter couldn't read its settings file, so it started with default settings.";
         }
         return Current = new AppSettings();
+    }
+
+    /// <summary>Settings loaded from a file (FR-109) take the place of these, and are saved.</summary>
+    public bool Replace(AppSettings settings)
+    {
+        Current = settings.Normalize();
+        return Save();
     }
 
     /// <summary>

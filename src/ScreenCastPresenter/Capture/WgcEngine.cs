@@ -30,7 +30,7 @@ namespace ScreenCastPresenter.Capture;
 /// aspect fit, letterbox and fade happen in one draw. Frames never touch CPU memory (rule 1).
 /// UI-thread calls just update a few fields and wake the thread.
 /// </summary>
-internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
+internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
 {
     private static readonly TimeSpan FirstFrameTimeout = TimeSpan.FromMilliseconds(1500);
 
@@ -59,7 +59,8 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
     private SensitiveKinds _autoKinds;
     private RedactStyle _autoStyle;
     private bool _autoChanged;
-    private AutoRedactor? _auto;
+    private AutoCover? _cover;
+    private bool _pictureFresh;
     private Rectangle _lastArea;
     private string _autoWords = "";
     private System.Text.RegularExpressions.Regex? _autoPattern;
@@ -147,6 +148,7 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
     public void Qr(string? text, InsetCorner corner) => _effects.Qr(text, corner);
     public void LiveCaption(string? text) => _effects.LiveCaption(text);
     public void CaptionStyle(CaptionLook look) => _effects.CaptionStyle(look);
+    public void KeyCombo(string? text) => _effects.KeyCombo(text);
 
     public void AutoHide(SensitiveKinds kinds, RedactStyle style) => Update(() =>
     {
@@ -248,6 +250,7 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
 
                 bool newFrame = TakeLatestFrame();
                 newFrame |= PullInset();
+                newFrame |= PullSplit();
                 bool dirty;
                 lock (_sync)
                 {
@@ -260,8 +263,8 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
                 // First frame reached the compositor (or the source has nothing to show, e.g.
                 // it's minimised): the output may be revealed. It's drawn at opacity 0 = black.
                 // With automatic hiding on, the first frame waits for its first scan (FR-88).
-                bool scanned = _auto?.FirstScanDone ?? true;
-                TimeSpan limit = FirstFrameTimeout + (_auto is not null ? AutoRedactor.FirstScanLimit : TimeSpan.Zero);
+                bool scanned = (_cover?.FirstScanDone ?? true) && PanesScanned();
+                TimeSpan limit = FirstFrameTimeout + (_cover is not null ? AutoRedactor.FirstScanLimit : TimeSpan.Zero);
                 if (!_firstFrame.Task.IsCompleted && (_heldBitmap is not null && scanned || clock.Elapsed > limit))
                     _firstFrame.TrySetResult();
             }
@@ -313,6 +316,24 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
         _dwrite = DWrite.DWriteCreateFactory<IDWriteFactory>();
         _textBrush = _dc.CreateSolidColorBrush(new Color4(0x9A / 255f, 0x9A / 255f, 0xA2 / 255f, 1));
 
+        if (_source.Picture is { } file)
+        {
+            // A picture (FR-103): read once, held like a frozen frame.
+            using Bitmap picture = PictureSource.Load(file) ?? throw new InvalidOperationException($"“{PictureSource.Name(file)}” can't be shown: it isn't a picture this PC can read.");
+            CreateHeldTexture(picture.Size);
+            System.Drawing.Imaging.BitmapData data = picture.LockBits(new Rectangle(Point.Empty, picture.Size), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            try
+            {
+                _context.UpdateSubresource(_held!, 0, null, data.Scan0, (uint)data.Stride, 0);
+            }
+            finally
+            {
+                picture.UnlockBits(data);
+            }
+            _pictureFresh = true;
+            ClearToBlack();
+            return;
+        }
         if (_source.Camera is { } camera)
         {
             // A camera: frames come from Windows' camera pipeline instead of screen capture.
@@ -358,34 +379,37 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
         {
             if (kinds == SensitiveKinds.None)
             {
-                _auto?.Dispose();
-                _auto = null;
-                _effects.AutoRedact([], style);
+                _cover?.Dispose();
+                _cover = null;
+                _effects.AutoCovers([]);
                 _autoWords = "";
             }
             else
             {
-                _auto ??= new AutoRedactor(kinds, (regions, found) => OnAutoFound(regions, found));
-                _auto.Kinds = kinds;
-                _auto.Words = pattern;
-                _effects.AutoRedact(_effects.AutoRegions, style);
+                if (_cover is null)
+                {
+                    AutoCover? made = null;
+                    made = new AutoCover(_source, () =>
+                    {
+                        if (made is { } c && ReferenceEquals(_cover, c)) _effects.AutoCovers(c.Covers());
+                    }, OnAutoFound);
+                    _cover = made;
+                }
+                _cover.Configure(kinds, pattern, style);
                 newFrame = true; // what to look for changed: scan again now
             }
+            ConfigurePaneCovers(kinds, pattern, style);
         }
-        if (_auto is { } auto && _heldBitmap is not null && _target is not null && !IsFrozen)
-            auto.MaybeScan(_dc!, _heldBitmap, _lastArea, newFrame, _target);
+        if (_cover is { } cover && _heldBitmap is not null && _target is not null && !IsFrozen)
+            cover.MaybeScan(_dc!, _heldBitmap, _lastArea, newFrame, _target);
+        ScanPanes();
     }
 
-    /// <summary>On the scan's worker: what was found is covered on the next frame; something new is reported once.</summary>
-    private void OnAutoFound(List<CropRegion> regions, List<SensitiveMatch> found)
+    /// <summary>Something new was covered (in words): reported once, on the UI thread when there is one.</summary>
+    private void OnAutoFound(string words)
     {
-        RedactStyle style;
-        lock (_sync) style = _autoStyle;
-        _effects.AutoRedact(regions, style);
-        string words = found.Count == 0 ? "" : SensitiveText.Words(found);
         if (words == _autoWords) return;
         _autoWords = words;
-        if (words.Length == 0) return;
         if (_ui is { } ui) ui.Post(_ => AutoHidden?.Invoke(this, words), null);
         else AutoHidden?.Invoke(this, words); // the capture helper: no UI thread
     }
@@ -406,6 +430,12 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
     private bool TakeLatestFrame()
     {
         if (_camera is not null) return TakeCameraFrame();
+        if (_source.IsPicture)
+        {
+            bool fresh = _pictureFresh;
+            _pictureFresh = false;
+            return fresh;
+        }
         Direct3D11CaptureFrame? latest = null;
         while (_pool!.TryGetNextFrame() is { } frame)
         {
@@ -512,11 +542,13 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
     private void DrawInset(Size canvas, double opacity)
     {
         if (_inset?.Bitmap is not { } bitmap || opacity <= 0.001) return;
+        if (_insetCover is { FirstScanDone: false } || _insetSource is not null && !_insetSource.IsSameSource(_insetCoverSource) && _paneKinds != SensitiveKinds.None) return; // not looked at yet
         Rectangle part = _inset.ContentArea;
         System.Drawing.RectangleF place = InsetLayout.Place(canvas, part.Size, _insetCorner, _insetPercent);
         if (place.IsEmpty) return;
         var dest = new Rect(place.X, place.Y, place.Width, place.Height);
         _dc!.DrawBitmap(bitmap, dest, (float)opacity, InterpolationMode.HighQualityCubic, ToRect(part), null);
+        if (_insetSource is not null) DrawCoversOn(_insetSource, _insetCover, bitmap, part, place, opacity);
         _insetBorder ??= _dc.CreateSolidColorBrush(new Color4(1, 1, 1, 0.35f));
         _insetBorder.Opacity = (float)opacity;
         _dc.DrawRectangle(dest, _insetBorder, Math.Max(1.5f, canvas.Height / 540f));
@@ -616,7 +648,7 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
         // A small window on a big TV then costs a few MB instead of two full-screen buffers (NFR-03).
         // Words, a code or a logo on top need enough pixels to stay sharp on the TV.
         bool showsMessage = message is { Length: > 0 } && messageBrightness > 0.001;
-        Size canvas = CanvasSize(output, shown?.Size, _effects.HasOverlay || (showsMessage && _logo is not null) ? 0.5 : 0.25);
+        Size canvas = CanvasSize(output, shown?.Size, _panes.Count > 0 ? 0.75 : _effects.HasOverlay || (showsMessage && _logo is not null) ? 0.5 : 0.25);
         if (Math.Abs(canvas.Width - _targetSize.Width) > 4 || Math.Abs(canvas.Height - _targetSize.Height) > 4) ResizeTarget(canvas);
         canvas = _targetSize;
 
@@ -626,10 +658,12 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
 
         if (shown is { } part && opacity > 0.001)
         {
-            Rectangle dest = AspectFit.Fit(part.Size, canvas);
+            List<System.Drawing.RectangleF>? cells = SplitCells(canvas);
+            Rectangle dest = cells is null ? AspectFit.Fit(part.Size, canvas) : Rectangle.Round(SplitScreen.Fit(part.Size, cells[0]));
             _dc.DrawBitmap(_heldBitmap!, ToRect(dest), (float)opacity, InterpolationMode.HighQualityCubic, ToRect(part), null);
             _effects.Render(_dc, _d2dFactory!, _dwrite!, _heldBitmap!, area, part, dest, (float)opacity, frozen);
-            DrawInset(canvas, opacity);
+            if (cells is not null) DrawPanes(cells, opacity);
+            else DrawInset(canvas, opacity);
         }
         if (showsMessage) DrawMessage(message!, messageBrightness, canvas);
         // Words and codes on top show with the picture or the black screen's message, never on plain black.
@@ -744,8 +778,9 @@ internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
 
     private void Release()
     {
-        _auto?.Dispose();
-        _auto = null;
+        _cover?.Dispose();
+        _cover = null;
+        DisposePanes();
         _camera?.Dispose(); // the camera's light goes off with the picture
         _inset?.Dispose();
         _inset = null;

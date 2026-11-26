@@ -34,8 +34,8 @@ internal sealed class EffectsLayer : IDisposable
     private PointF? _laser;
     private PointF? _spotlight;
     private List<CropRegion> _redactions = [];
-    private List<CropRegion> _autoRedactions = [];
-    private RedactStyle _autoStyle;
+    private List<(CropRegion Region, RedactStyle Style)> _autoCovers = [];
+    private string? _keys;
 
     // What a frame draws, taken under the lock into lists kept between frames (render thread only),
     // so a frame allocates nothing new. A line's points are copied only when it changed.
@@ -148,21 +148,26 @@ internal sealed class EffectsLayer : IDisposable
     /// <summary>Live captions' size and place (FR-89).</summary>
     public void CaptionStyle(CaptionLook look) => Change(() => _look = look);
 
-    /// <summary>What automatic hiding found (FR-88), covered like hidden parts; an empty list uncovers.</summary>
+    /// <summary>A shortcut the presenter pressed (FR-101), shown along the bottom; null takes it off.</summary>
+    public void KeyCombo(string? text) => Change(() => _keys = text is { Length: > 0 } ? text : null);
+
+    /// <summary>Most automatic covers at once: text found, password boxes and faces.</summary>
+    public const int MaxAutoCovers = Redactions.MaxAutomatic + Interop.UiAutomation.MaxBoxes + FaceFinder.MaxFaces;
+
     /// <summary>What automatic hiding covers now.</summary>
     public IReadOnlyList<CropRegion> AutoRegions
     {
         get
         {
-            lock (_sync) return [.. _autoRedactions];
+            lock (_sync) return [.. _autoCovers.Select(c => c.Region)];
         }
     }
 
-    public void AutoRedact(IReadOnlyList<CropRegion> regions, RedactStyle style) => Change(() =>
-    {
-        _autoRedactions = [.. regions.Take(Redactions.MaxAutomatic)];
-        _autoStyle = style;
-    });
+    /// <summary>What automatic hiding found (FR-88), covered like hidden parts, all in one look; an empty list uncovers.</summary>
+    public void AutoRedact(IReadOnlyList<CropRegion> regions, RedactStyle style) => AutoCovers([.. regions.Select(r => (r, style))]);
+
+    /// <summary>What automatic hiding covers (FR-88, FR-98, FR-100), each with its own look; an empty list uncovers.</summary>
+    public void AutoCovers(IReadOnlyList<(CropRegion Region, RedactStyle Style)> covers) => Change(() => _autoCovers = [.. covers.Take(MaxAutoCovers)]);
 
     public void InkStart(InkStroke stroke) => Change(() =>
     {
@@ -218,7 +223,7 @@ internal sealed class EffectsLayer : IDisposable
     {
         get
         {
-            lock (_sync) return _redactions.Count > 0 || _autoRedactions.Count > 0;
+            lock (_sync) return _redactions.Count > 0 || _autoCovers.Count > 0;
         }
     }
 
@@ -257,7 +262,7 @@ internal sealed class EffectsLayer : IDisposable
             trail.AddRange(_trail);
             foreach (InkStroke s in _strokes) strokes.Add((s, PointsOf(s)));
             foreach (CropRegion r in _redactions) redactions.Add((r, _redactStyle));
-            foreach (CropRegion r in _autoRedactions) redactions.Add((r, _autoStyle));
+            redactions.AddRange(_autoCovers);
             pointer = _pointer;
             laser = _laser;
             spotlight = _spotlight;
@@ -287,26 +292,8 @@ internal sealed class EffectsLayer : IDisposable
         dc.PushAxisAlignedClip(new Vortice.RawRectF(dest.Left, dest.Top, dest.Right, dest.Bottom), AntialiasMode.PerPrimitive);
         try
         {
-            // Hidden parts first, so nothing else is drawn on top of what's under them. During a fade
-            // they're solid: a blurred copy would be brighter than the fading picture for a moment.
-            foreach ((CropRegion r, RedactStyle style) in redactions)
-            {
-                Vector2 a = Map(new PointF((float)r.X, (float)r.Y)), b = Map(new PointF((float)(r.X + r.Width), (float)(r.Y + r.Height)));
-                var box = new Vortice.RawRectF(a.X, a.Y, b.X, b.Y);
-                if (style == RedactStyle.Blurred && opacity >= 0.999f)
-                {
-                    DrawBlurred(dc, picture, area, shown, dest, r);
-                    SetColour(Color.Black, 0.35f);
-                    dc.FillRectangle(box, _brush!);
-                }
-                else
-                {
-                    // Fully opaque, in the colour the box has at this brightness: during a fade
-                    // nothing of the picture under it shows through, not even faintly.
-                    SetColour(EffectStyle.SolidOver(UI.Theme.OutputBlack, EffectStyle.RedactFill, opacity), 1);
-                    dc.FillRectangle(box, _brush!);
-                }
-            }
+            // Hidden parts first, so nothing else is drawn on top of what's under them.
+            DrawRedactions(dc, picture, area, shown, dest, redactions, opacity);
 
             int newest = strokes.Count > 0 ? strokes[^1].Stroke.Id : -1; // the line being drawn, most likely
             Func<PointF, Vector2> map = Map; // one delegate a frame, not one per line
@@ -390,7 +377,7 @@ internal sealed class EffectsLayer : IDisposable
         (string Name, string Second) captionShown;
         long changed, now = Now;
         (string Text, InsetCorner Corner, bool[,] Modules)? qr;
-        string? live;
+        string? live, keys;
         CaptionLook look;
         lock (_sync)
         {
@@ -400,11 +387,12 @@ internal sealed class EffectsLayer : IDisposable
             qr = _qr;
             live = _live;
             look = _look;
+            keys = _keys;
         }
-        if (liveAlpha <= 0.001f) live = null;
+        if (liveAlpha <= 0.001f) live = keys = null; // with the picture only, never on a break screen
         float fade = Math.Clamp((float)(Age(changed, now) / BannerFade), 0, 1);
         float bannerAlpha = caption is not null ? fade : 1 - fade;
-        if (bannerAlpha <= 0.001f && qr is null && live is null) return;
+        if (bannerAlpha <= 0.001f && qr is null && live is null && keys is null) return;
         EnsureResources(dc, factory);
         float h = canvas.Height, w = canvas.Width;
 
@@ -443,6 +431,18 @@ internal sealed class EffectsLayer : IDisposable
             IDWriteTextFormat format = Format(dwrite, h * look.TextHeight, bold: false, centred: true);
             SetColour(Color.White, liveAlpha);
             dc.DrawText(live, format, new Rect(strip.X + h * 0.02f, strip.Y + h * 0.012f, strip.Width - h * 0.04f, strip.Height - h * 0.024f), _brush!);
+        }
+
+        if (keys is not null)
+        {
+            IDWriteTextFormat format = Format(dwrite, h * 0.04f, bold: true, centred: true);
+            RectangleF chip = Layouts.KeyChip(canvas, Measure(dwrite, keys, format, w), bottomLimit);
+            SetColour(Color.Black, 0.72f * liveAlpha);
+            dc.FillRoundedRectangle(new RoundedRectangle(new System.Drawing.RectangleF(chip.X, chip.Y, chip.Width, chip.Height), h * 0.012f, h * 0.012f), _brush!);
+            SetColour(EffectStyle.ClickPrimary, liveAlpha);
+            dc.DrawRoundedRectangle(new RoundedRectangle(new System.Drawing.RectangleF(chip.X, chip.Y, chip.Width, chip.Height), h * 0.012f, h * 0.012f), _brush!, Math.Max(1.5f, h * 0.003f));
+            SetColour(Color.White, liveAlpha);
+            dc.DrawText(keys, format, new Rect(chip.X, chip.Y + (chip.Height - h * 0.052f) / 2, chip.Width, h * 0.056f), _brush!);
         }
 
         if (qr is { } code)
@@ -690,6 +690,54 @@ internal sealed class EffectsLayer : IDisposable
         _spotBrush.RadiusX = _spotBrush.RadiusY = radius;
         _spotBrush.Opacity = opacity;
         dc.FillRectangle(new Vortice.RawRectF(dest.Left, dest.Top, dest.Right, dest.Bottom), _spotBrush);
+    }
+
+    /// <summary>
+    /// Covers over another picture on the canvas (a small picture, a split-screen pane): its hidden
+    /// parts and what automatic hiding found in it, exactly as over the main picture.
+    /// </summary>
+    public void RenderCovers(ID2D1DeviceContext dc, ID2D1Factory1 factory, ID2D1Bitmap1 picture, RectangleF area, RectangleF shown, RectangleF dest,
+        IReadOnlyList<(CropRegion Region, RedactStyle Style)> covers, float opacity)
+    {
+        if (covers.Count == 0 || opacity <= 0.001f || dest.Width <= 0 || dest.Height <= 0 || shown.Width <= 0 || shown.Height <= 0) return;
+        EnsureResources(dc, factory);
+        dc.PushAxisAlignedClip(new Vortice.RawRectF(dest.Left, dest.Top, dest.Right, dest.Bottom), AntialiasMode.PerPrimitive);
+        try
+        {
+            DrawRedactions(dc, picture, area, shown, dest, covers, opacity);
+        }
+        finally
+        {
+            dc.PopAxisAlignedClip();
+        }
+    }
+
+    /// <summary>
+    /// The boxes: blurred ones from the picture itself, solid ones fully opaque. During a fade
+    /// they're solid: a blurred copy would be brighter than the fading picture for a moment.
+    /// </summary>
+    private void DrawRedactions(ID2D1DeviceContext dc, ID2D1Bitmap1 picture, RectangleF area, RectangleF shown, RectangleF dest,
+        IReadOnlyList<(CropRegion Region, RedactStyle Style)> redactions, float opacity)
+    {
+        foreach ((CropRegion r, RedactStyle style) in redactions)
+        {
+            PointF a = EffectStyle.Map(new PointF((float)r.X, (float)r.Y), area, shown, dest);
+            PointF b = EffectStyle.Map(new PointF((float)(r.X + r.Width), (float)(r.Y + r.Height)), area, shown, dest);
+            var box = new Vortice.RawRectF(a.X, a.Y, b.X, b.Y);
+            if (style == RedactStyle.Blurred && opacity >= 0.999f)
+            {
+                DrawBlurred(dc, picture, area, shown, dest, r);
+                SetColour(Color.Black, 0.35f);
+                dc.FillRectangle(box, _brush!);
+            }
+            else
+            {
+                // Fully opaque, in the colour the box has at this brightness: during a fade
+                // nothing of the picture under it shows through, not even faintly.
+                SetColour(EffectStyle.SolidOver(UI.Theme.OutputBlack, EffectStyle.RedactFill, opacity), 1);
+                dc.FillRectangle(box, _brush!);
+            }
+        }
     }
 
     /// <summary>A hidden part, heavily blurred: drawn from the picture itself through a blur, scaled like the picture.</summary>

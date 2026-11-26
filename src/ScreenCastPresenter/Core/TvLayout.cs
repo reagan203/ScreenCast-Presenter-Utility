@@ -31,6 +31,18 @@ internal static class Layouts
     /// Live captions (FR-84): a band of two lines, centred, along the bottom kept above whatever
     /// starts at <paramref name="above"/> (the name banner), or along the top (FR-89).
     /// </summary>
+    /// <summary>
+    /// A shortcut shown on the TV (FR-101): a chip as wide as its words, centred, just above
+    /// <paramref name="above"/> (the banner or bottom captions), never off the top.
+    /// </summary>
+    public static RectangleF KeyChip(SizeF canvas, float textWidth, float above)
+    {
+        float h = canvas.Height, pad = h * 0.025f, height = h * 0.075f;
+        float width = Math.Min(canvas.Width - 2 * h * Margin, textWidth + 2 * pad);
+        float bottom = Math.Max(height + h * Margin, above - h * 0.03f);
+        return new RectangleF((canvas.Width - width) / 2, bottom - height, width, height);
+    }
+
     public static RectangleF LiveStrip(SizeF canvas, float above, CaptionLook? look = null)
     {
         look ??= CaptionLook.Default;

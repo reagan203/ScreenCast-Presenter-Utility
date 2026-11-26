@@ -46,6 +46,7 @@ internal static class CaptureHost
             return args[0] switch
             {
                 CaptureProtocol.StillSwitch => RunStill(args),
+                CaptureProtocol.CheckSwitch => RunCheck(args),
                 Recording.RecordingProtocol.RecordSwitch => RunRecorder(),
                 _ => RunPresenter(),
             };
@@ -201,6 +202,19 @@ internal static class CaptureHost
                 engine.AutoHide(kinds, style);
                 return true;
             case "autohide-words" when p.Length > 1: engine.AutoHideWords(SensitiveText.ParseWordsToken(p[1])); return true;
+            case "keys": engine.KeyCombo(line.Length > 5 ? line[5..] : null); return true;
+            case "split" when p.Length > 1:
+                if (CaptureProtocol.ParseSplit(line[6..]) is { } layout) engine.Split(layout.Layout, layout.Others);
+                else engine.Split(SplitLayout.SideBySide, []);
+                return true;
+            case "hidden-for" when p.Length > 2:
+            {
+                if (CaptureProtocol.ParseSource(p[1]) is not { } other) return true;
+                string rest = line[(line.IndexOf(p[1], StringComparison.Ordinal) + p[1].Length)..].Trim();
+                if (CaptureProtocol.ParseRedact(rest) is { } hidden) engine.HiddenFor(other, hidden.Regions, hidden.Style);
+                else engine.HiddenFor(other, [], RedactStyle.Solid);
+                return true;
+            }
             case "ink-remove" when p.Length > 1: engine.InkRemove(CaptureProtocol.ParseInt(p[1])); return true;
             case CaptureProtocol.InkClear: engine.InkClear(); return true;
             case "inset" when p.Length > 1:
@@ -287,6 +301,11 @@ internal static class CaptureHost
             string? line;
             while ((line = Input.ReadLine()) is not null)
             {
+                if (line.StartsWith("save-replay ", StringComparison.Ordinal))
+                {
+                    recorder.SaveReplay(line["save-replay ".Length..].Trim());
+                    continue;
+                }
                 switch (line.Trim())
                 {
                     case "pause": recorder.Pause(); break;
@@ -320,6 +339,113 @@ internal static class CaptureHost
         if (image is null) return 4;
         image.Save(args[4], ImageFormat.Png);
         return 0;
+    }
+
+    // ───────────────────────────── the check before sharing (FR-102) ─────────────────────────────
+
+    /// <summary>
+    /// --check &lt;source&gt; &lt;crop&gt; &lt;hidden parts&gt; &lt;own words&gt; &lt;png path&gt;: one frame, nothing
+    /// covered but the parts already hidden, read for everything automatic hiding can find. The
+    /// preview (what was found outlined) goes to the PNG; the findings go to standard output as one
+    /// "checked" line. Exit 0 = checked.
+    /// </summary>
+    private static int RunCheck(string[] args)
+    {
+        if (args.Length < 6) return 2;
+        SourceWindow source = CaptureProtocol.ParseSource(args[1]) ?? throw new InvalidOperationException("That window or screen is gone.");
+        source = source with { Crop = CaptureProtocol.ParseCrop(args[2]) };
+        IReadOnlyList<CropRegion> hidden = args[3].StartsWith("redact ", StringComparison.Ordinal) ? CaptureProtocol.ParseRedact(args[3]["redact ".Length..])?.Regions ?? [] : [];
+        List<string> words = SensitiveText.ParseWordsToken(args[4]);
+        (Bitmap? image, Rectangle client, Rectangle shown) = StillCapture.CaptureUncoveredAsync(source, StillWait).GetAwaiter().GetResult();
+        if (image is null) return 4;
+        using (image)
+        {
+            CheckReport report = Check(image, source, client, shown, hidden, words);
+            Preview(image, client, shown, hidden, report);
+            image.Save(args[5], ImageFormat.Png);
+            Send(report.ToLine());
+        }
+        return 0;
+    }
+
+    /// <summary>Everything found in <paramref name="image"/> that isn't under a part already hidden, as parts of the picture.</summary>
+    internal static CheckReport Check(Bitmap image, SourceWindow source, Rectangle client, Rectangle shown, IReadOnlyList<CropRegion> hidden, IReadOnlyList<string> words)
+    {
+        List<Rectangle> covered = StillCapture.Covers(client, shown, hidden);
+        var findings = new List<CheckFinding>();
+        void Add(SensitiveKinds kind, RectangleF box)
+        {
+            if (box.Width <= 0 || box.Height <= 0 || MostlyCovered(box, covered)) return; // already hidden
+            if (CropRegion.Create(box.X / image.Width, box.Y / image.Height, box.Width / image.Width, box.Height / image.Height, 0.0001) is { } region)
+                findings.Add(new CheckFinding(kind, region));
+        }
+        foreach (SensitiveMatch m in AutoRedactor.FindInStill(image, CheckReport.Everything | SensitiveKinds.Custom, SensitiveText.CustomPattern(words))) Add(m.Kind, m.Box);
+        if (!source.IsOffScreen)
+            foreach (Rectangle box in StillCapture.Covers(client, shown, PasswordFieldFinder.FindOnce(source))) Add(SensitiveKinds.PasswordFields, box);
+        return new CheckReport([.. findings.Take(CheckReport.MaxFindings)]);
+    }
+
+    /// <summary>At least <see cref="HiddenEnough"/> of <paramref name="box"/> is under parts already hidden.</summary>
+    internal static bool MostlyCovered(RectangleF box, IReadOnlyList<Rectangle> covered)
+    {
+        float area = box.Width * box.Height;
+        if (area <= 0) return true;
+        float under = 0;
+        foreach (Rectangle c in covered)
+        {
+            RectangleF overlap = RectangleF.Intersect(box, c);
+            if (!overlap.IsEmpty) under += overlap.Width * overlap.Height; // hidden parts rarely overlap; when they do, it errs towards "covered"
+        }
+        return under >= area * HiddenEnough;
+    }
+
+    /// <summary>A finding this much under a hidden part is already hidden (its box is padded a little past the words).</summary>
+    public const float HiddenEnough = 0.8f;
+
+    /// <summary>The private preview: parts already hidden covered as on the TV, each finding outlined and labelled.</summary>
+    private static void Preview(Bitmap image, Rectangle client, Rectangle shown, IReadOnlyList<CropRegion> hidden, CheckReport report)
+    {
+        using Graphics g = Graphics.FromImage(image);
+        using var fill = new SolidBrush(EffectStyle.RedactFill);
+        foreach (Rectangle r in StillCapture.Covers(client, shown, hidden)) g.FillRectangle(fill, r);
+        float thick = Math.Max(3, image.Height / 300f);
+        using var pen = new Pen(EffectStyle.ClickPrimary, thick);
+        using var label = new SolidBrush(EffectStyle.ClickPrimary);
+        using var font = new Font("Segoe UI Semibold", Math.Max(11, image.Height / 60f), GraphicsUnit.Pixel);
+        foreach (CheckFinding f in report.Findings)
+        {
+            var box = new RectangleF((float)(f.Box.X * image.Width), (float)(f.Box.Y * image.Height), (float)(f.Box.Width * image.Width), (float)(f.Box.Height * image.Height));
+            g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
+            string text = CheckReport.Label(f.Kind);
+            SizeF size = g.MeasureString(text, font);
+            float top = box.Top - size.Height - thick > 0 ? box.Top - size.Height - thick : box.Bottom + thick;
+            g.FillRectangle(label, box.Left - thick / 2, top, size.Width, size.Height);
+            g.DrawString(text, font, Brushes.Black, box.Left - thick / 2, top);
+        }
+    }
+
+    /// <summary>Runs the check helper from SCP: the report (the preview is at <paramref name="path"/>), or null when the source couldn't be seen.</summary>
+    public static async Task<CheckReport?> CheckToFileAsync(SourceWindow source, string path, IReadOnlyList<CropRegion>? hidden, IReadOnlyList<string>? words)
+    {
+        var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+        foreach (string a in new[] { CaptureProtocol.CheckSwitch, CaptureProtocol.SourceSpec(source), CaptureProtocol.Crop(source.Crop),
+                     CaptureProtocol.Redact(hidden ?? [], RedactStyle.Solid), SensitiveText.WordsToken(words), path })
+            info.ArgumentList.Add(a);
+        using Process? helper = Process.Start(info);
+        if (helper is null) return null;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        try
+        {
+            string output = await helper.StandardOutput.ReadToEndAsync(timeout.Token);
+            await helper.WaitForExitAsync(timeout.Token);
+            if (helper.ExitCode != 0 || !File.Exists(path)) return null;
+            return output.Split('\n').Select(l => CheckReport.Parse(l.TrimEnd('\r'))).OfType<CheckReport>().FirstOrDefault();
+        }
+        catch (OperationCanceledException)
+        {
+            helper.Kill();
+            return null;
+        }
     }
 
     /// <summary>Runs the still helper from SCP. True when the PNG was written.</summary>

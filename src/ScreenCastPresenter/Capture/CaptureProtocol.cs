@@ -14,18 +14,34 @@ internal static class CaptureProtocol
     public const string HostSwitch = "--capture-host";
     public const string StillSwitch = "--still";
 
+    /// <summary>The check before sharing (FR-102): one private picture, read for everything automatic hiding can find.</summary>
+    public const string CheckSwitch = "--check";
+
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
     /// <summary>"window:1234", "screen:\\.\DISPLAY2", or "camera:" and the camera's id escaped so it has no spaces.</summary>
     public static string SourceSpec(SourceWindow source) =>
         source.Screen is { } screen ? "screen:" + screen.DeviceName
         : source.Camera is { } camera ? "camera:" + Uri.EscapeDataString(camera.Id)
+        : source.Picture is { } picture ? "picture:" + Uri.EscapeDataString(picture)
         : "window:" + source.Handle.ToString(Inv);
 
     public static SourceWindow? ParseSource(string spec, IReadOnlyList<DisplayMonitor>? monitors = null)
     {
         if (spec.StartsWith("window:", StringComparison.Ordinal) && long.TryParse(spec.AsSpan(7), NumberStyles.Integer, Inv, out long hwnd) && hwnd != 0)
             return new SourceWindow((nint)hwnd, "", "", false);
+        if (spec.StartsWith("picture:", StringComparison.Ordinal) && spec.Length > 8)
+        {
+            try
+            {
+                string path = Uri.UnescapeDataString(spec[8..]);
+                return path.Length > 0 && Path.IsPathFullyQualified(path) ? SourceWindow.ForPicture(path) : null;
+            }
+            catch (UriFormatException)
+            {
+                return null;
+            }
+        }
         if (spec.StartsWith("camera:", StringComparison.Ordinal) && spec.Length > 7)
         {
             try
@@ -148,13 +164,34 @@ internal static class CaptureProtocol
     /// <summary>Automatic hiding (FR-88): what to look for and how covered parts look.</summary>
     public static string AutoHide(SensitiveKinds kinds, RedactStyle style) => string.Create(Inv, $"autohide {(int)kinds} {(int)style}");
 
+    /// <summary>A shortcut on the TV (FR-101): "keys" alone takes it off.</summary>
+    public static string Keys(string? text) => text is { Length: > 0 } ? "keys " + OneLine(text) : "keys";
+
+    /// <summary>Split screen (FR-104): "split none", or "split &lt;layout&gt; &lt;source&gt; [&lt;source&gt; …]".</summary>
+    public static string Split(SplitLayout layout, IReadOnlyList<SourceWindow> others) =>
+        others.Count == 0 ? "split none" : string.Create(Inv, $"split {(int)layout} {string.Join(' ', others.Take(SplitScreen.MaxOthers).Select(SourceSpec))}");
+
+    /// <summary>The rest of a "split" line; null for "none" or nonsense (which goes back to one picture).</summary>
+    public static (SplitLayout Layout, List<SourceWindow> Others)? ParseSplit(string text, IReadOnlyList<DisplayMonitor>? monitors = null)
+    {
+        string[] p = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (p.Length < 2 || !int.TryParse(p[0], NumberStyles.Integer, Inv, out int l) || !Enum.IsDefined((SplitLayout)l)) return null;
+        var others = p.Skip(1).Take(SplitScreen.MaxOthers).Select(s => ParseSource(s, monitors)).OfType<SourceWindow>().ToList();
+        return others.Count == 0 ? null : ((SplitLayout)l, others);
+    }
+
+    /// <summary>Another picture's hidden parts: "hidden-for &lt;source&gt; none", or "hidden-for &lt;source&gt; &lt;style&gt; &lt;parts…&gt;".</summary>
+    public static string HiddenFor(SourceWindow source, IReadOnlyList<CropRegion> regions, RedactStyle style) =>
+        regions.Count == 0 ? $"hidden-for {SourceSpec(source)} none"
+            : string.Create(Inv, $"hidden-for {SourceSpec(source)} {(int)style} {string.Join(' ', regions.Take(Redactions.MaxPerSource).Select(Crop))}");
+
     /// <summary>The presenter's own words for automatic hiding, as one escaped word.</summary>
     public static string AutoHideWords(IReadOnlyList<string>? words) => "autohide-words " + SensitiveText.WordsToken(words);
 
     /// <summary>"autohide kinds style" back to its parts; nonsense is off.</summary>
     public static (SensitiveKinds Kinds, RedactStyle Style) ParseAutoHide(string kinds, string style)
     {
-        SensitiveKinds k = int.TryParse(kinds, NumberStyles.Integer, Inv, out int n) ? (SensitiveKinds)n & SensitiveKinds.All : SensitiveKinds.None;
+        SensitiveKinds k = int.TryParse(kinds, NumberStyles.Integer, Inv, out int n) ? (SensitiveKinds)n & SensitiveKinds.Known : SensitiveKinds.None;
         RedactStyle s = int.TryParse(style, NumberStyles.Integer, Inv, out int m) && Enum.IsDefined((RedactStyle)m) ? (RedactStyle)m : RedactStyle.Solid;
         return (k, s);
     }

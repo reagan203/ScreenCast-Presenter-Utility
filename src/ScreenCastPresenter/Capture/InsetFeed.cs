@@ -33,6 +33,7 @@ internal sealed class InsetFeed : IDisposable
     private string? _cameraProblem;
     private ID3D11Texture2D? _held;
     private volatile bool _closed;
+    private System.Drawing.Bitmap? _picture;
 
     private InsetFeed(Interop.SourceWindow source, ID3D11Device device, ID2D1DeviceContext dc)
     {
@@ -56,6 +57,12 @@ internal sealed class InsetFeed : IDisposable
         var feed = new InsetFeed(source, device, dc);
         try
         {
+            if (source.Picture is { } file)
+            {
+                feed._picture = Core.PictureSource.Load(file) ?? throw new InvalidOperationException($"“{Core.PictureSource.Name(file)}” can't be shown: it isn't a picture this PC can read.");
+                wake();
+                return feed;
+            }
             if (source.Camera is { } camera)
             {
                 // A camera takes a second or two to start: in the background, so the render thread
@@ -95,6 +102,23 @@ internal sealed class InsetFeed : IDisposable
     /// <summary>Copies the newest frame into the held texture (not while <paramref name="frozen"/>). True when there's a new one.</summary>
     public bool Pull(ID3D11DeviceContext context, IDirect3DDevice? winrtDevice, bool frozen)
     {
+        if (_picture is { } picture)
+        {
+            // Sent to the GPU once, then let go.
+            CreateHeld(picture.Size);
+            System.Drawing.Imaging.BitmapData data = picture.LockBits(new Rectangle(System.Drawing.Point.Empty, picture.Size), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            try
+            {
+                context.UpdateSubresource(_held!, 0, null, data.Scan0, (uint)data.Stride, 0);
+            }
+            finally
+            {
+                picture.UnlockBits(data);
+            }
+            picture.Dispose();
+            _picture = null;
+            return true;
+        }
         if (_cameraStarting is { } starting)
         {
             if (!starting.IsCompleted) return false;
@@ -174,6 +198,8 @@ internal sealed class InsetFeed : IDisposable
         }, TaskScheduler.Default);
         _cameraStarting = null;
         _camera?.Dispose();
+        _picture?.Dispose();
+        _picture = null;
         _session?.Dispose();
         _pool?.Dispose();
         _item = null;

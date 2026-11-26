@@ -102,6 +102,15 @@ internal interface IEffectsEngine
     /// <summary>The presenter's own words automatic hiding covers (when <see cref="SensitiveKinds.Custom"/> is on).</summary>
     void AutoHideWords(IReadOnlyList<string> words) { }
 
+    /// <summary>A shortcut the presenter pressed, shown on the TV (FR-101); null takes it off.</summary>
+    void KeyCombo(string? text) { }
+
+    /// <summary>Split screen (FR-104): the main picture and up to three others in a layout; an empty list goes back to one.</summary>
+    void Split(SplitLayout layout, IReadOnlyList<SourceWindow> others) { }
+
+    /// <summary>Hidden parts (FR-74) of another picture on the TV (a pane or the small picture); an empty list uncovers it.</summary>
+    void HiddenFor(SourceWindow source, IReadOnlyList<CropRegion> regions, RedactStyle style) { }
+
     /// <summary>Automatic hiding covered something new: what, in words ("2 email addresses"), on the UI thread.</summary>
     event EventHandler<string>? AutoHidden { add { } remove { } }
 

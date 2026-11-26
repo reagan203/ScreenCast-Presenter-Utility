@@ -63,6 +63,17 @@ internal static class RemotePage
           return sha256(outer);
         }
         function hex(bytes) { return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join(""); }
+        function decryptNotes(k, e) {
+          if (!k || !e || !e.n || !e.c || !e.t) return null;
+          const enc = s => new TextEncoder().encode(s);
+          if (hex(hmac(k, enc("notes-tag\n" + e.n + "\n" + e.c))) !== e.t) return null;
+          const data = fromBase64Url(e.c), out = new Uint8Array(data.length);
+          for (let b = 0; b * 32 < data.length; b++) {
+            const stream = hmac(k, enc("notes\n" + e.n + "\n" + b));
+            for (let i = 0; i < 32 && b * 32 + i < data.length; i++) out[b * 32 + i] = data[b * 32 + i] ^ stream[i];
+          }
+          return new TextDecoder().decode(out);
+        }
         function fromBase64Url(text) {
           const b = atob(text.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((text.length + 3) % 4));
           return Uint8Array.from(b, c => c.charCodeAt(0));
@@ -112,6 +123,9 @@ internal static class RemotePage
           fill("favourites", answer.favourites || [], "favourite-");
           fill("scenes", answer.scenes || [], "scene-");
           fill("playlists", answer.playlists || [], "playlist-");
+          const notes = decryptNotes(key, answer.notes);
+          $("notes-section").hidden = !notes;
+          $("notes").textContent = notes || "";
           $("playlist-section").hidden = !answer.playlist;
           if (answer.playlist) $("playlist-name").textContent = "Playing “" + answer.playlist + "”";
         }
@@ -147,12 +161,14 @@ internal static class RemotePage
         h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 18px 0 8px; }
         .list { display: grid; gap: 8px; }
         .list button { text-align: left; padding: 0 16px; }
+        #notes { white-space: pre-wrap; background: var(--panel); border-radius: 14px; padding: 14px 16px; font-size: 18px; line-height: 1.4; }
         """;
 
     private const string Body = """
         <h1>ScreenCast Presenter</h1>
         <div id="status">Connecting…</div>
         <div class="row big"><button data-a="previous-slide">◀ Back</button><button data-a="next-slide">Next ▶</button></div>
+        <div id="notes-section" hidden><h2>My notes</h2><div id="notes"></div></div>
         <div class="row"><button data-a="blank">Blank / show</button><button data-a="freeze">Freeze / live</button></div>
         <div class="row"><button data-a="spotlight">Spotlight</button><button data-a="go">Show what's ready</button></div>
         <div class="row"><button data-a="previous-source">Previous</button><button data-a="stop">Stop showing</button></div>

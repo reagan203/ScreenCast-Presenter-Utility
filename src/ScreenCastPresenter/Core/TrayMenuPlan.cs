@@ -66,6 +66,20 @@ internal sealed record TrayMenuState
     public bool LaserOn { get; init; }
     public bool ClicksShown { get; init; }
     public bool HasInset { get; init; }
+
+    /// <summary>The last minute is kept (FR-106), and whether it's running now.</summary>
+    public bool ReplayOn { get; init; }
+    public bool ReplayRunning { get; init; }
+
+    /// <summary>Voice commands are on; the notes window is open.</summary>
+    public bool VoiceCommands { get; init; }
+    public bool NotesOpen { get; init; }
+
+    /// <summary>Shortcuts pressed show on the TV.</summary>
+    public bool ShowKeys { get; init; }
+
+    /// <summary>Pictures shown beside the main one (split screen).</summary>
+    public int SplitCount { get; init; }
     public bool Slideshow { get; init; }
 
     // The stage tools (FR-74–FR-85).
@@ -155,6 +169,8 @@ internal static class TrayMenuPlan
         menu.Add(MenuEntry.Separator);
         menu.Add(new("Take a screenshot", "screenshot", Shortcut: "screenshot"));
         AddRecording(menu, s);
+        if (s.ReplayRunning) menu.Add(new("Save the last minute", "save-replay", Shortcut: "save-replay"));
+        if (presenting || s.ReplayOn) menu.Add(new("Keep the last minute", "replay", Checked: s.ReplayOn, Shortcut: "replay")); // the idle menu stays short
         menu.Add(new("Open my recordings", "open-recordings"));
 
         menu.Add(MenuEntry.Separator);
@@ -215,10 +231,12 @@ internal static class TrayMenuPlan
             new("Laser", "laser", Checked: s.LaserOn, Shortcut: "laser"),
             new("Show my clicks", "highlight-clicks", Checked: s.ClicksShown, Shortcut: "highlight-clicks"),
             new(s.HasInset ? "Take the small picture off" : "Small picture in a corner…", "inset", Shortcut: "inset"),
+            new(s.SplitCount > 0 ? "Back to one picture" : "Split screen: show something beside it…", "split-screen", Shortcut: "split-screen"),
             new("Spotlight", "spotlight", Checked: s.SpotlightOn, Shortcut: "spotlight"),
             new(s.CaptionOn ? "Take my name off" : "My name along the bottom", "caption", Shortcut: "caption"),
             new(s.HasQr ? "Take the QR code off" : "A QR code (link or Wi-Fi)…", "qr", Shortcut: "qr"),
             new("Live captions", "live-captions", Checked: s.LiveCaptions, Shortcut: "live-captions"),
+            new("Show my shortcuts", "show-keys", Checked: s.ShowKeys, Shortcut: "show-keys"),
             MenuEntry.Separator,
             new("Hide part of it…", "hide-part", Shortcut: "hide-part"),
             new("Hide private details automatically", "auto-hide", Checked: s.AutoHide, Shortcut: "auto-hide"),
@@ -248,7 +266,13 @@ internal static class TrayMenuPlan
             if (s.PlaylistPlaying) items.Add(new("Stop the playlist", "stop-playlist", Shortcut: "stop-playlist"));
         }
         items.Add(MenuEntry.Separator);
+        items.Add(new("Show a picture…", "show-picture", Shortcut: "show-picture"));
+        items.Add(new("Show a card…", "show-card", Shortcut: "show-card"));
         items.Add(new("Phone remote…", "phone-remote", Checked: s.PhoneRemote, Shortcut: "phone-remote"));
+        items.Add(new("Voice commands", "voice-commands", Checked: s.VoiceCommands, Shortcut: "voice-commands"));
+        items.Add(new("My notes", "notes", Checked: s.NotesOpen, Shortcut: "notes"));
+        items.Add(new("Turn the TV on", "tv-on", Shortcut: "tv-on"));
+        items.Add(new("Turn the TV off", "tv-off", Shortcut: "tv-off"));
         items.Add(new("Save this setup as a room…", "save-room", Shortcut: "save-room"));
         items.Add(new("Rooms, scenes and playlists…", "settings:rooms"));
         return items;

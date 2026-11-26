@@ -12,6 +12,8 @@ When you share a whole screen on Zoom or a TV, the audience sees everything: not
 - **Stay private:** a yellow outline on your screen marks what's being shown, and the TV never copies your whole desktop. Apps on your never-show list (password managers to start with) are never shown, and a whole screen turns black while one is open on it.
 - **Help the room follow:** zoom in around your mouse, show your clicks, put a ring around the pointer, use a laser pointer, or draw on the TV. Add a small picture in a corner, like you on a webcam.
 - **Run the session:** blank the TV with a countdown during a break, see how long you've been talking, play your favourites one after another on a lobby screen, and get an offer to show something when a TV is plugged in.
+- **Show more than one thing:** split screen puts up to four windows, screens, cameras or pictures side by side, stacked, in a grid, or one large. Show a picture or a few lines of words (a "card") without opening an app.
+- **Teach and demo:** your key combinations appear on the TV (never what you type), and zoom can follow where you type.
 - **Hide what's private:** drag a box over part of a window (an inbox, a customer's details) and the audience sees a solid box or a blur there, even as you scroll. Screenshots and recordings of that window cover it too.
 - **Stay in control:** a small private window shows exactly what the audience sees. Get the next thing ready where only you can see it, then show it with one key.
 - **Point people at things:** a spotlight that dims everything but the area round your mouse, and arrows, boxes and text drawn on the TV.
@@ -19,11 +21,14 @@ When you share a whole screen on Zoom or a TV, the audience sees everything: not
 - **Live captions:** what you say appears on the TV, worked out by Windows on your PC. Nothing is recorded or sent anywhere.
 - **Scenes on one key:** save what's shown with everything around it (small picture, name, QR code, spotlight, live captions) and switch to it with Ctrl+Alt+F1 to F9 or a Stream Deck button.
 - **Lobby screens:** playlists of favourites and scenes that take turns on a TV, in order or shuffled, started by a schedule or when the PC starts, carrying on after the TV is unplugged and back.
+- **Check before you share:** see what's private in a window before it's shown, and cover it in one click. Password boxes are covered exactly where Windows says they are, and faces can be blurred.
 - **Hide personal details automatically:** email addresses, phone and card numbers, IBANs, ID numbers, API keys and passwords, and your own list of names (clients, code names) are found on your PC as they appear and covered on the TV, in screenshots and in recordings.
 - **Transcripts:** live captions can write down everything said, with subtitles (.srt and .vtt) to put under a recording. Captions come in three sizes, at the bottom or the top.
 - **Phone remote:** pair your phone with a code only you see and use it as a clicker: next and previous slide, blank, freeze, zoom, your name banner, live captions, a break countdown, favourites, scenes and playlists. Off unless you switch it on; every command is signed, so others on the Wi-Fi can't take control.
 - **Set up once:** save a room's setup (its TV, dimming, extras, favourites) and switch to it in one click. Schedule things, like starting the lobby slideshow at 8:00 and stopping it at 18:00. With three screens, show something different on a second TV.
-- **Screenshots and recordings:** save what you present, with optional meeting and microphone audio.
+- **Screenshots and recordings:** save what you present, with optional meeting and microphone audio, and chapters for each thing shown. Keep the last minute and save it when something goes well.
+- **Run the room:** turn the TV on and off over the cable, follow the room's calendar file, say "Presenter, next slide", and keep private speaker notes on your screen and phone.
+- **For IT teams:** rules set by Group Policy (never-show apps, always-on hiding, features switched off), and settings copied between PCs.
 - **Small and fast:** about 15 MB of memory when idle and a few percent CPU while presenting.
 - **Windows 11 look:** light and dark themes, the Windows accent colour, and a settings window laid out like Windows Settings.
 
@@ -39,6 +44,9 @@ ScreenCastPresenter.exe --action spotlight
 ScreenCastPresenter.exe --scene 2
 ScreenCastPresenter.exe --playlist "Lobby"
 ScreenCastPresenter.exe --on spotlight --off auto-hide
+ScreenCastPresenter.exe --split "Excel" --layout side-by-side
+ScreenCastPresenter.exe --picture "C:\Lobby\welcome.png"
+ScreenCastPresenter.exe --tv on --tv-input hdmi1
 ScreenCastPresenter.exe --help
 ```
 

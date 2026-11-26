@@ -247,6 +247,7 @@ public class PhoneSimulationTests
           console.log("FAVOURITES " + $("favourites").children.map(c => c.textContent).join("|"));
           console.log("PLAYLIST " + ($("playlist-section").hidden ? "-" : $("playlist-name").textContent));
           console.log("PLAYLISTS " + $("playlists").children.map(c => c.textContent).join("|"));
+          console.log("NOTES " + ($("notes-section").hidden ? "-" : $("notes").textContent.replace(/\n/g, "/")));
           console.log("KEY-IN-ADDRESS " + location.hash.includes("k="));
         })();
         """;
@@ -286,6 +287,8 @@ public class PhoneSimulationTests
                         ["playlist"] = line == "cmd stop-playlist" ? null : "Lobby",
                         ["playlists"] = new JsonArray("Lobby", "Waiting room"),
                     };
+                    (string n, string c, string t) = NotesCipher.Encrypt(key, "Start with Q3\nThen the demo");
+                    status["notes"] = new JsonObject { ["n"] = n, ["c"] = c, ["t"] = t };
                     if (line == "cmd caption") status["note"] = "Type the name for the banner on the PC first.";
                     helper.StandardInput.WriteLine("status " + status.ToJsonString());
                     helper.StandardInput.Flush();
@@ -320,6 +323,7 @@ public class PhoneSimulationTests
             // The newer buttons: zoom, a playlist from the list, and the name banner, which the PC answers with a note.
             Dictionary<string, string> more = await Phone(RemoteAuth.Base64Url(key), "-", "zoom-in,list:playlists:2,blank-countdown,caption");
             Assert.Equal("1  Lobby|2  Waiting room", more["PLAYLISTS"]);
+            Assert.Equal("Start with Q3/Then the demo", more["NOTES"]); // decrypted on the phone with its key
             Assert.Equal("Type the name for the banner on the PC first.", more["STATUS"]);
             Assert.Equal("true", more["PROBLEM"]);
             lock (commands) Assert.Equal(["zoom-in", "playlist-2", "blank-countdown", "caption"], commands[^4..]);
@@ -330,6 +334,7 @@ public class PhoneSimulationTests
             Dictionary<string, string> stranger = await Phone(RemoteAuth.Base64Url(RemoteAuth.NewKey()), "-", "stop");
             Assert.Equal("true", stranger["PROBLEM"]);
             Assert.Contains("isn't paired", stranger["STATUS"]);
+            Assert.True(!stranger.TryGetValue("NOTES", out string? strangerNotes) || strangerNotes == "-", "another key: no notes shown"); // nothing to read
             lock (commands) Assert.Equal(before, commands.Count);
 
             // No key at all: says how to pair.

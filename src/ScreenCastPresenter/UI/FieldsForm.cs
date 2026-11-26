@@ -52,7 +52,8 @@ internal sealed class FieldsForm : ThemedForm
     public Func<string?>? Check { get; set; }
 
     /// <summary>A labelled one-line field; returns its row (to show or hide) and its box.</summary>
-    public (Control Row, TextBox Box) AddField(string label, string value, int maxLength, string? placeholder = null, bool secret = false)
+    /// <param name="lines">More than one: a box for several lines (Enter starts a new line).</param>
+    public (Control Row, TextBox Box) AddField(string label, string value, int maxLength, string? placeholder = null, bool secret = false, int lines = 1)
     {
         var row = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 8) };
         row.Controls.Add(new Label { Text = label, AutoSize = true, UseMnemonic = false, Margin = new Padding(0, 0, 0, 3) });
@@ -66,6 +67,13 @@ internal sealed class FieldsForm : ThemedForm
             UseSystemPasswordChar = secret,
             AccessibleName = label,
         };
+        if (lines > 1 && !secret)
+        {
+            box.Multiline = true;
+            box.AcceptsReturn = true;
+            box.ScrollBars = ScrollBars.Vertical;
+            box.Height = _fieldFont.Height * lines + 10;
+        }
         row.Controls.Add(box);
         Add(row);
         return (row, box);

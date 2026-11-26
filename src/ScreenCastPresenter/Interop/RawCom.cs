@@ -78,6 +78,10 @@ internal static unsafe partial class RawCom
         }
     }
 
+    /// <summary>Hands an existing sample (already compressed: a replay being joined, FR-106) to the sink writer, with no RCWs.</summary>
+    public static void WriteSample(nint sinkWriter, uint stream, nint sample) =>
+        Check(((delegate* unmanaged[Stdcall]<nint, uint, nint, int>)Slot(sinkWriter, SinkWriterWriteSample))(sinkWriter, stream, sample));
+
     /// <summary>
     /// The D3D interface behind a WinRT surface (IDirect3DDxgiInterfaceAccess::GetInterface),
     /// as an owned raw pointer (the caller wraps or releases it).

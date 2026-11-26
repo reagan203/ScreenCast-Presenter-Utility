@@ -19,7 +19,23 @@ internal enum SensitiveKinds
     /// <summary>Words and names on the presenter's own list (Settings › Privacy › Hide automatically).</summary>
     Custom = 64,
 
-    All = Emails | Phones | Cards | Ibans | IdNumbers | Secrets | Custom,
+    /// <summary>Password boxes, found exactly by Windows (UI Automation), not by reading the picture.</summary>
+    PasswordFields = 128,
+
+    /// <summary>Faces (Windows' own face detection), blurred. Not part of <see cref="All"/>: chosen on purpose.</summary>
+    Faces = 256,
+
+    /// <summary>With <see cref="Faces"/>: the largest face (the presenter at their camera) stays clear.</summary>
+    KeepLargestFace = 512,
+
+    /// <summary>What's found by reading the text in the picture.</summary>
+    TextKinds = Emails | Phones | Cards | Ibans | IdNumbers | Secrets | Custom,
+
+    /// <summary>Everything about text and boxes ("turn it all on"); faces are chosen separately.</summary>
+    All = TextKinds | PasswordFields,
+
+    /// <summary>Every flag a settings file or a protocol line may carry.</summary>
+    Known = All | Faces | KeepLargestFace,
 }
 
 /// <summary>A word the on-device text recognizer read, and where it is in the picture it read.</summary>
@@ -101,6 +117,7 @@ internal static partial class SensitiveText
     public static List<SensitiveMatch> Find(IReadOnlyList<OcrLine> lines, SensitiveKinds kinds, Regex? custom = null)
     {
         var found = new List<SensitiveMatch>();
+        kinds &= SensitiveKinds.TextKinds; // boxes and faces aren't found in text
         if (kinds == SensitiveKinds.None) return found;
         bool secrets = kinds.HasFlag(SensitiveKinds.Secrets);
         if (!kinds.HasFlag(SensitiveKinds.Custom)) custom = null;
@@ -280,6 +297,8 @@ internal static partial class SensitiveText
             (SensitiveKinds.IdNumbers, "an ID number", "ID numbers"),
             (SensitiveKinds.Secrets, "a key or password", "keys and passwords"),
             (SensitiveKinds.Custom, "a word from your list", "words from your list"),
+            (SensitiveKinds.PasswordFields, "a password box", "password boxes"),
+            (SensitiveKinds.Faces, "a face", "faces"),
         })
         {
             int n = found.Count(f => f.Kind == kind);

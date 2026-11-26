@@ -26,8 +26,19 @@ internal sealed record SourceWindow(nint Handle, string Title, string AppName, b
 
     public bool IsCamera => Camera is not null;
 
-    /// <summary>A window: something on the presenter's screen with a handle (not a whole screen, not a camera).</summary>
-    public bool IsWindow => Screen is null && Camera is null;
+    /// <summary>The app name a picture is listed under.</summary>
+    public const string PictureApp = "Picture";
+
+    /// <summary>Set for a picture file (FR-103); then <see cref="Handle"/> is 0 and there's nothing on screen.</summary>
+    public string? Picture { get; init; }
+
+    public bool IsPicture => Picture is not null;
+
+    /// <summary>A camera or a picture: its picture isn't on the presenter's screen (nothing to point at, crop by dragging, or hide by dragging).</summary>
+    public bool IsOffScreen => IsCamera || IsPicture;
+
+    /// <summary>A window: something on the presenter's screen with a handle (not a whole screen, not a camera, not a picture).</summary>
+    public bool IsWindow => Screen is null && Camera is null && Picture is null;
 
     /// <summary>The part of the source to show; null shows all of it.</summary>
     public Core.CropRegion? Crop { get; init; }
@@ -38,6 +49,7 @@ internal sealed record SourceWindow(nint Handle, string Title, string AppName, b
     public bool IsSameSource(SourceWindow? other) =>
         other is not null && (IsScreen ? other.Screen?.DeviceName == Screen!.DeviceName && other.IsScreen
             : IsCamera ? other.Camera?.Id == Camera!.Id
+            : IsPicture ? string.Equals(other.Picture, Picture, StringComparison.OrdinalIgnoreCase)
             : other.IsWindow && other.Handle == Handle);
 
     public static SourceWindow ForScreen(DisplayMonitor screen) =>
@@ -45,6 +57,10 @@ internal sealed record SourceWindow(nint Handle, string Title, string AppName, b
 
     public static SourceWindow ForCamera(CameraDevice camera) =>
         new(0, camera.Name.Length > 0 ? camera.Name : "Camera", CameraApp, false) { Camera = camera };
+
+    /// <summary>A picture file; <paramref name="title"/> defaults to its file name.</summary>
+    public static SourceWindow ForPicture(string path, string? title = null) =>
+        new(0, title is { Length: > 0 } ? title : Core.PictureSource.Name(path), PictureApp, false) { Picture = path };
 
     public override string ToString() => Title;
 }
@@ -208,6 +224,15 @@ internal static class WindowEnumerator
         WindowCandidate c = Describe(root, PInvoke.GetShellWindow());
         if (!PInvoke.IsWindowVisible(root)) return null;
         return WindowFilter.IsPresentable(c, (uint)Environment.ProcessId) ? ToSource(c, new()) : null;
+    }
+
+    /// <summary>The top-level window the user is working in (its root owner), or 0.</summary>
+    public static nint ForegroundRoot()
+    {
+        HWND foreground = PInvoke.GetForegroundWindow();
+        if (foreground.IsNull) return 0;
+        HWND root = PInvoke.GetAncestor(foreground, GET_ANCESTOR_FLAGS.GA_ROOTOWNER);
+        return root.IsNull ? foreground : root;
     }
 
     /// <summary>Re-reads a window's title and state, or null if it no longer exists.</summary>

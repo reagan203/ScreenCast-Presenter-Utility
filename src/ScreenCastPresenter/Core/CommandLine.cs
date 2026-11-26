@@ -48,13 +48,13 @@ internal static class CommandLine
     private static readonly HashSet<string> Internal = new(StringComparer.OrdinalIgnoreCase)
     {
         QuietStartSwitch,
-        Capture.CaptureProtocol.HostSwitch, Capture.CaptureProtocol.StillSwitch, Recording.RecordingProtocol.RecordSwitch,
+        Capture.CaptureProtocol.HostSwitch, Capture.CaptureProtocol.StillSwitch, Capture.CaptureProtocol.CheckSwitch, Recording.RecordingProtocol.RecordSwitch,
         Installer.UninstallSwitch, StartupRegistration.StartupSwitch, UpdateCheck.Switch, LiveCaptions.Switch, Remote.RemoteHost.Switch,
     };
 
     /// <summary>What "--on NAME" and "--off NAME" switch: set exactly, so a button deck can't get out of step.</summary>
     public static readonly IReadOnlyList<string> Switches =
-        ["spotlight", "caption", "live-captions", "auto-hide", "laser", "highlight-clicks", "pointer-ring", "phone-remote", "audience-view", "outline", "badge", "widget"];
+        ["spotlight", "caption", "live-captions", "auto-hide", "laser", "highlight-clicks", "pointer-ring", "phone-remote", "audience-view", "outline", "badge", "widget", "show-keys", "replay", "voice-commands", "notes"];
 
     private static readonly Dictionary<string, string> Simple = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -99,9 +99,19 @@ internal static class CommandLine
           --qr "link"                  put a QR code for the link on the TV ("--qr off" takes it off)
           --scene N                    show scene 1 to 9
           --playlist "name"            play a playlist on its TV ("--playlist off" stops them)
+          --picture "file"             show a picture file (PNG, JPEG, BMP, GIF, TIFF)
+          --card "words"               show a card with these words ("\n" starts a new line; the first is the title)
+          --split "text"               show the window whose app or title contains the text beside what's shown
+                                       ("--split off" goes back to one picture)
+          --layout NAME                split screen's layout: side-by-side, stacked, grid or focus
           --on NAME, --off NAME        switch one of these on or off (nothing happens if it already is):
                                        spotlight, caption, live-captions, auto-hide, laser, highlight-clicks,
-                                       pointer-ring, phone-remote, audience-view, outline, badge, widget
+                                       pointer-ring, phone-remote, audience-view, outline, badge, widget, show-keys,
+                                       replay (keep the last minute), voice-commands, notes
+          --tv on|off                  turn the TV on or off over the cable (when it takes it)
+          --tv-input NAME              switch the TV to an input: hdmi1, hdmi2, dp1, usb-c…
+          --export-settings "file"     save the settings to a file (to set up another PC the same way)
+          --import-settings "file"     load settings from a file (the app starts again to use them)
           --action NAME                any action, by the name in Settings, e.g. dim, zoom, slideshow
           --help                       this text
 
@@ -206,6 +216,75 @@ internal static class CommandLine
                     if (v.Equals("off", StringComparison.OrdinalIgnoreCase)) actions.Add("cli:qr-off");
                     else if (System.Text.Encoding.UTF8.GetByteCount(v) > QrCode.MaxBytes) return (null, $"That's too long for a QR code on the TV (at most {QrCode.MaxBytes} letters).");
                     else actions.Add("cli:qr:" + v);
+                    break;
+                }
+                case "--tv":
+                {
+                    string? v = NextValue()?.ToLowerInvariant();
+                    if (v is not ("on" or "off")) return (null, "--tv needs “on” or “off”.");
+                    actions.Add("cli:tv:" + v);
+                    break;
+                }
+                case "--tv-input":
+                {
+                    string? v = NextValue();
+                    if (TvControl.ParseInput(v) is not { } code) return (null, $"--tv-input needs an input like hdmi1, hdmi2, dp1 or usb-c{(v is null ? "" : $" (got “{v}”)")}.");
+                    actions.Add("cli:tv-input:" + code.ToString(CultureInfo.InvariantCulture));
+                    break;
+                }
+                case "--export-settings" or "--import-settings":
+                {
+                    string? v = NextValue();
+                    if (v is null) return (null, $"{name} needs a file, e.g. {name} \"C:\\Setup\\scp.json\".");
+                    string full;
+                    try
+                    {
+                        full = Path.GetFullPath(v);
+                    }
+                    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+                    {
+                        return (null, $"“{v}” isn't a file name.");
+                    }
+                    actions.Add((name.Equals("--export-settings", StringComparison.OrdinalIgnoreCase) ? "cli:export-settings:" : "cli:import-settings:") + full);
+                    break;
+                }
+                case "--picture":
+                {
+                    string? v = NextValue();
+                    if (v is null) return (null, "--picture needs a picture file, e.g. --picture \"C:\\Lobby\\welcome.png\".");
+                    string full;
+                    try
+                    {
+                        full = Path.GetFullPath(v);
+                    }
+                    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+                    {
+                        return (null, $"“{v}” isn't a file name.");
+                    }
+                    if (!PictureSource.IsPicture(full)) return (null, $"--picture needs a PNG, JPEG, BMP, GIF or TIFF file (got “{v}”).");
+                    actions.Add("cli:picture:" + full);
+                    break;
+                }
+                case "--card":
+                {
+                    string? v = NextValue();
+                    if (v is null || TextCard.Tidy(v.Replace("\\n", "\n", StringComparison.Ordinal)).Length == 0) return (null, "--card needs its words, e.g. --card \"Welcome\\nWe start at 9:30\".");
+                    actions.Add("cli:card:" + v);
+                    break;
+                }
+                case "--split":
+                {
+                    string? v = NextValue();
+                    if (v is null) return (null, "--split needs a window's name, e.g. --split \"Excel\", or “off”.");
+                    actions.Add(v.Equals("off", StringComparison.OrdinalIgnoreCase) ? "cli:split-off" : "cli:split:" + v);
+                    break;
+                }
+                case "--layout":
+                {
+                    string? v = NextValue();
+                    string? layout = v is null ? null : SplitScreen.All.Select(l => l.ToString()).FirstOrDefault(l => l.Equals(v.Replace("-", "", StringComparison.Ordinal), StringComparison.OrdinalIgnoreCase));
+                    if (layout is null) return (null, $"--layout needs one of: side-by-side, stacked, grid, focus{(v is null ? "" : $" (got “{v}”)")}.");
+                    actions.Add("cli:layout:" + layout);
                     break;
                 }
                 case "--on" or "--off":

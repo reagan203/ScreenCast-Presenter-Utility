@@ -258,6 +258,34 @@ internal sealed partial class ScpApp : IDisposable
                 case "cli:qr-off":
                     if (_qrText is not null) SetQr(null);
                     break;
+                case "cli:split-off":
+                    StopSplit(null);
+                    break;
+                case string picture when picture.StartsWith("cli:picture:", StringComparison.Ordinal):
+                    if (!await ShowPictureAsync(picture["cli:picture:".Length..])) return new CliReply(false, LastCommandMessage("The picture couldn't be shown."));
+                    break;
+                case "cli:tv:on" or "cli:tv:off":
+                    if (!await SetTvPowerAsync(action == "cli:tv:on")) return new CliReply(false, LastCommandMessage("The TV didn't answer."));
+                    break;
+                case string input when input.StartsWith("cli:tv-input:", StringComparison.Ordinal):
+                    if (!uint.TryParse(input["cli:tv-input:".Length..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out uint code)
+                        || !await SetTvInputAsync(code)) return new CliReply(false, LastCommandMessage("The TV didn't answer."));
+                    break;
+                case string export when export.StartsWith("cli:export-settings:", StringComparison.Ordinal):
+                    if (ExportSettingsTo(export["cli:export-settings:".Length..]) is { } exportProblem) return new CliReply(false, exportProblem);
+                    break;
+                case string import when import.StartsWith("cli:import-settings:", StringComparison.Ordinal):
+                    if (ImportSettingsFrom(import["cli:import-settings:".Length..]) is { } importProblem) return new CliReply(false, importProblem);
+                    break;
+                case string card when card.StartsWith("cli:card:", StringComparison.Ordinal):
+                    if (!await ShowCardAsync(card["cli:card:".Length..].Replace("\\n", "\n", StringComparison.Ordinal))) return new CliReply(false, LastCommandMessage("The card couldn't be shown."));
+                    break;
+                case string split when split.StartsWith("cli:split:", StringComparison.Ordinal):
+                    if (await SplitFromCommandLineAsync(split["cli:split:".Length..]) is { } splitProblem) return new CliReply(false, splitProblem);
+                    break;
+                case string layout when layout.StartsWith("cli:layout:", StringComparison.Ordinal):
+                    SetSplitLayout(SplitScreen.Parse(layout["cli:layout:".Length..]));
+                    break;
                 case string sw when sw.StartsWith("cli:on:", StringComparison.Ordinal) || sw.StartsWith("cli:off:", StringComparison.Ordinal):
                 {
                     bool on = sw.StartsWith("cli:on:", StringComparison.Ordinal);
@@ -507,6 +535,19 @@ internal sealed partial class ScpApp : IDisposable
                 case "laser": SetLaser(!_laserOn); break;
                 case "draw": ToggleDrawing(); break;
                 case "inset": ToggleInset(); break;
+                case "split-screen": ToggleSplit(); break;
+                case "show-picture": await ChoosePictureAsync(); break;
+                case "check-before-showing": CheckBeforeShowing(); break;
+                case "save-replay": SaveReplay(); break;
+                case "tv-on": await SetTvPowerAsync(on: true); break;
+                case "tv-off": await SetTvPowerAsync(on: false); break;
+                case "voice-commands": SetVoiceCommands(!Settings.VoiceCommands); break;
+                case "notes": ToggleNotes(); break;
+                case "edit-notes": EditNotes(); break;
+                case "replay": SetReplay(!Settings.ReplayOn); break;
+                case "show-card": await AskForCardAsync(); break;
+                case "split-add": AddToSplit(); break;
+                case "split-layout": NextSplitLayout(); break;
                 case "hide-part": await HidePartAsync(); break;
                 case "show-hidden": await ShowHiddenPartsAsync(); break;
                 case "audience-view": ToggleAudienceView(); break;
@@ -525,6 +566,8 @@ internal sealed partial class ScpApp : IDisposable
                 case "phone-remote": OpenPairing(); break;
                 case "auto-hide": ToggleAutoHide(); break;
                 case "highlight-clicks": SetHighlightClicks(!Settings.HighlightClicks); break;
+                case "show-keys": SetShowKeys(!Settings.ShowKeys); break;
+                case "zoom-follows": SetZoomFollows((ZoomFollows)(((int)Settings.ZoomFollowsMode + 1) % 3)); break;
                 case "pointer-ring": SetPointerRing(!Settings.PointerRing); break;
                 case "crop": await CropCurrentAsync(); break;
                 case "remove-crop": await RemoveCropAsync(); break;
@@ -555,6 +598,8 @@ internal sealed partial class ScpApp : IDisposable
             return;
         }
         if (!await EnsureTvIsSeparateAsync()) return; // a TV copying this screen would show everything
+        if (!await CheckFirstTimeAsync(source)) return; // "Check before showing" (FR-102): the presenter said not to
+        WakeTvForShowing();
         if (source.Screen is { } secondScreen && _second?.FullScreenOutput is { } secondTv && secondScreen.IsSameScreen(secondTv))
         {
             Message($"{secondScreen.Name} is the second TV, so it can't be shown.");
@@ -666,6 +711,11 @@ internal sealed partial class ScpApp : IDisposable
     /// </summary>
     private async Task<PartChoice?> ChoosePartAsync(SourceWindow source, string hint, bool startFromCrop = true)
     {
+        if (source.IsPicture)
+        {
+            Message($"A picture isn't on your screen to choose part of. Zoom in instead{OrPress("zoom-in")}.");
+            return null;
+        }
         if (source.IsCamera)
         {
             Message($"A camera's picture isn't on your screen to choose part of. Zoom in instead{OrPress("zoom-in")} or point the camera.");
@@ -735,10 +785,11 @@ internal sealed partial class ScpApp : IDisposable
     /// </summary>
     private async Task TakeScreenshotAsync()
     {
+        if (Blocked(_policy.ScreenshotsAllowed, "screenshots")) return;
         SourceWindow? source = _session.State == SessionState.Presenting ? _session.Source : null;
-        if (source is { IsCamera: true })
+        if (source is { IsOffScreen: true })
         {
-            // The camera's picture is on the TV: take the TV's screen, which shows exactly it.
+            // The camera's (or picture's) picture is on the TV: take the TV's screen, which shows exactly it.
             if (_session.FullScreenOutput is not { } tv)
             {
                 Message("A screenshot of a camera needs it shown full screen. Show it on the TV, then try again.");
@@ -895,9 +946,9 @@ internal sealed partial class ScpApp : IDisposable
         {
             // Recording the window's spot on screen would also record whatever covers it, so
             // record the shown window itself (it won't follow switches).
-            if (_session.Source is { IsCamera: true })
+            if (_session.Source is { IsOffScreen: true })
             {
-                Message("To record a camera, show it full screen (on the TV or the Zoom screen), then record what it shows.");
+                Message("To record a camera or a picture, show it full screen (on the TV or the Zoom screen), then record what it shows.");
                 return;
             }
             if (_session.Source is { } shown)
@@ -934,9 +985,9 @@ internal sealed partial class ScpApp : IDisposable
     /// <summary>Records a window or screen chosen in the picker (FR-57: carries on while you work).</summary>
     public void RecordSource(SourceWindow source)
     {
-        if (source.IsCamera)
+        if (source.IsOffScreen)
         {
-            Message("To record a camera, show it full screen, then record what the TV shows.");
+            Message("To record a camera or a picture, show it full screen, then record what the TV shows.");
             return;
         }
         if (!source.IsScreen && source.Handle == _session.OutputHandle)
@@ -960,6 +1011,7 @@ internal sealed partial class ScpApp : IDisposable
 
     private void StartRecording(SourceWindow source, string description, bool followsOutput)
     {
+        if (Blocked(_policy.RecordingAllowed, "recording")) return;
         string folder = Settings.RecordingFolder ?? SavedFiles.DefaultRecordingFolder;
         string path = SavedFiles.NextPath(folder, "Screen Recording", DateTime.Now, ".mp4", File.Exists);
         // Hidden parts (FR-74) are covered in a recording of the window or screen too (the TV's own picture already has them).
@@ -970,6 +1022,7 @@ internal sealed partial class ScpApp : IDisposable
             return;
         }
         Diag($"recording: start {description} sound={Settings.MeetingSound} mic={Settings.RecordMicrophone}");
+        StartChapters();
         UpdateBadge(reveal: true);
         if (!followsOutput && source.Screen is { } recordedScreen) MaybeRemindDoNotDisturb(recordedScreen);
     }
@@ -1066,6 +1119,7 @@ internal sealed partial class ScpApp : IDisposable
 
     private void OnRecordingFinished(RecordingResult result)
     {
+        SaveChapters(result);
         Diag($"recording: finished {result.End} {result.Length} {result.Bytes} bytes saved={result.Saved} {result.Detail}");
         UpdateBadge(reveal: false);
         _tray.Refresh();
@@ -1163,6 +1217,7 @@ internal sealed partial class ScpApp : IDisposable
         {
             title = source.IsScreen && source.Screen is { } screen ? $"{screen.Name} (whole screen)"
                 : source.IsCamera ? $"{source.Title} (camera)"
+                : source.IsPicture ? $"{source.Title} (picture)"
                 : source.Title.Length > 0 ? source.Title : source.AppName;
             if (source.IsWindow)
             {
@@ -1225,9 +1280,9 @@ internal sealed partial class ScpApp : IDisposable
     /// </summary>
     private void GoToShown(bool moveToScreen)
     {
-        if (_session.State == SessionState.Presenting && _session.Source is { IsCamera: true } camera)
+        if (_session.State == SessionState.Presenting && _session.Source is { IsOffScreen: true } camera)
         {
-            Message($"The camera “{camera.Title}” is being shown.");
+            Message(camera.IsPicture ? $"The picture “{camera.Title}” is being shown." : $"The camera “{camera.Title}” is being shown.");
             return;
         }
         nint target = _session.State == SessionState.Presenting && _session.Source is { IsWindow: true } source ? source.Handle
@@ -2181,6 +2236,8 @@ internal sealed partial class ScpApp : IDisposable
             _zoomSource = null;
         }
         if (_laserOn && _session.State == SessionState.Off) _laserOn = false; // stopped showing: the laser goes too
+        UpdateCaretTracker();
+        UpdateKeyWatch();
         bool want = !_quitting && _session.State == SessionState.Presenting && (_zoom > 0 || PointerWanted);
         if (want == _pointerTimer.Enabled) return;
         if (want)
@@ -2206,6 +2263,7 @@ internal sealed partial class ScpApp : IDisposable
         _drawing?.Replay(effects);
         effects.InsetFailed -= OnInsetFailed;
         effects.InsetFailed += OnInsetFailed;
+        ReplaySplit(effects); // the other pictures' hidden parts first, then the panes
         if (_inset is { } inset) effects.Inset(inset, InsetLayout.ParseCorner(Settings.InsetCorner), Settings.InsetSize);
         ReplayStage(effects);
     }
@@ -2223,7 +2281,7 @@ internal sealed partial class ScpApp : IDisposable
     /// </summary>
     private (PointF At, bool Over)? PointerOnShown(SourceWindow source)
     {
-        if (source.IsCamera) return null; // its picture isn't on the presenter's screen
+        if (source.IsOffScreen) return null; // its picture isn't on the presenter's screen
         Rectangle area = source.Screen is { } screen ? screen.Bounds
             : WindowEnumerator.IsMinimized(source.Handle) ? Rectangle.Empty : WindowEnumerator.ClientBoundsOnScreen(source.Handle);
         if (area.Width <= 0 || area.Height <= 0) return null;
@@ -2242,10 +2300,11 @@ internal sealed partial class ScpApp : IDisposable
         (PointF At, bool Over)? pointer = PointerOnShown(source);
         bool frozen = _session.IsFrozen;
 
-        // Zoomed in: the view follows the pointer while it's over what's shown (not while frozen: the TV holds still).
-        if (_zoom > 0 && !frozen && _drawing is null && pointer is { Over: true } p)
+        // Zoomed in: the view follows the pointer while it's over what's shown, or where the
+        // presenter types (FR-99); not while frozen: the TV holds still.
+        if (_zoom > 0 && !frozen && _drawing is null && ZoomTarget(source, pointer) is { } p)
         {
-            _zoomCentre = ZoomView.Ease(_zoomCentre, p.At);
+            _zoomCentre = ZoomView.Ease(_zoomCentre, p);
             _session.SetView(ZoomView.View(_zoomCentre, _zoom, source.Crop));
             long now = Environment.TickCount64;
             if (now - _outlineTicks > 50)
@@ -2384,9 +2443,9 @@ internal sealed partial class ScpApp : IDisposable
             Message("Show something first, then draw on it.");
             return;
         }
-        if (source.IsCamera)
+        if (source.IsOffScreen)
         {
-            Message("Drawing works on windows and screens: a camera's picture isn't on your screen to draw over.");
+            Message("Drawing works on windows and screens: a camera's picture or a picture file isn't on your screen to draw over.");
             return;
         }
         if (source.IsWindow && WindowEnumerator.IsMinimized(source.Handle))
@@ -2418,7 +2477,7 @@ internal sealed partial class ScpApp : IDisposable
     /// </summary>
     private (Rectangle Area, Rectangle Shown)? DrawingGeometry()
     {
-        if (_session.State != SessionState.Presenting || _session.Source is not { } source || source.IsCamera) return null;
+        if (_session.State != SessionState.Presenting || _session.Source is not { } source || source.IsOffScreen) return null;
         Rectangle area = source.Screen is { } screen ? screen.Bounds
             : WindowEnumerator.IsAlive(source.Handle) && !WindowEnumerator.IsMinimized(source.Handle) ? WindowEnumerator.ClientBoundsOnScreen(source.Handle) : Rectangle.Empty;
         if (area.Width <= 0 || area.Height <= 0) return null;
@@ -2688,7 +2747,9 @@ internal sealed partial class ScpApp : IDisposable
             Message($"“{Shorten(source.Title, 40)}” has closed.");
             return;
         }
+        if (_split.Count > 0) StopSplit(null); // one or the other
         _inset = source;
+        SendOtherHiddenParts(); // its hidden parts are covered from its first frame
         UpdatePrivateAppGuard(); // a never-show app on a screen shown small: black before the small picture is sent
         if (_session.Effects is null) await ReshowAsync(); // shown the light way: again through the helper, which sends the small picture with it
         else _session.Effects.Inset(source, InsetLayout.ParseCorner(Settings.InsetCorner), Settings.InsetSize);
@@ -2715,7 +2776,12 @@ internal sealed partial class ScpApp : IDisposable
     /// <summary>The small picture's window closed or its camera was unplugged: it's already off in the helper.</summary>
     private void OnInsetFailed(object? sender, string reason)
     {
-        if (_inset is null || !ReferenceEquals(sender, _session.Effects)) return;
+        if (!ReferenceEquals(sender, _session.Effects)) return;
+        if (_inset is null)
+        {
+            if (_split.Count > 0) OnPaneFailed(reason);
+            return;
+        }
         _inset = null;
         UpdatePrivateAppGuard();
         UpdateWidget();
@@ -2962,6 +3028,7 @@ internal sealed partial class ScpApp : IDisposable
     /// <summary>Settings › Advanced › Check for updates. Switched on, it looks straight away and says what it found.</summary>
     public void SetCheckForUpdates(bool on)
     {
+        if (on && Blocked(_policy.UpdateCheckAllowed, "checking for updates")) return;
         Settings.CheckForUpdates = on;
         Save();
         ScheduleUpdateCheck();
@@ -3031,12 +3098,14 @@ internal sealed partial class ScpApp : IDisposable
     private VisibleWindow? PrivateAppOn(SourceWindow source)
     {
         Rectangle? main = ShownScreenArea(source), small = _inset is { } inset ? ShownScreenArea(inset) : null;
-        if (main is null && small is null || Settings.NeverShowApps.Count == 0) return null;
+        List<Rectangle> beside = [.. SplitScreenAreas()];
+        if (main is null && small is null && beside.Count == 0 || Settings.NeverShowApps.Count == 0) return null;
         // Names are looked up afresh each time: Windows reuses process ids, so a cached name could
         // belong to a closed app while a never-show app now has its id.
         List<VisibleWindow> windows = WindowEnumerator.GetVisibleWindows([]);
         return (main is { } m ? NeverShow.FindOnScreen(windows, m, Settings.NeverShowApps) : null)
-            ?? (small is { } s ? NeverShow.FindOnScreen(windows, s, Settings.NeverShowApps) : null);
+            ?? (small is { } s ? NeverShow.FindOnScreen(windows, s, Settings.NeverShowApps) : null)
+            ?? beside.Select(area => NeverShow.FindOnScreen(windows, area, Settings.NeverShowApps)).FirstOrDefault(found => found is not null);
     }
 
     /// <summary>
@@ -3046,7 +3115,7 @@ internal sealed partial class ScpApp : IDisposable
     private void UpdatePrivateAppGuard()
     {
         bool watch = !_quitting && Settings.NeverShowApps.Count > 0
-            && (_session.State == SessionState.Presenting && (_session.Source is { IsScreen: true } || _inset is { IsScreen: true })
+            && (_session.State == SessionState.Presenting && (_session.Source is { IsScreen: true } || _inset is { IsScreen: true } || _split.Any(s => s.IsScreen))
                 || _second is { State: SessionState.Presenting, Source.IsScreen: true });
         if (!watch)
         {
@@ -3096,12 +3165,18 @@ internal sealed partial class ScpApp : IDisposable
     private void EnforceNeverShow()
     {
         if (_inset is { } small && IsNeverShown(small)) RemoveInset($"“{small.AppName}” is on your never-show list, so the small picture is off.");
+        EnforceNeverShowInSplit();
         if (_session.State == SessionState.Presenting && _session.Source is { } shown && IsNeverShown(shown)) _ = GuardAsync(StopShowingAsync);
         UpdatePrivateAppGuard();
     }
 
     public void RemoveNeverShow(string appName)
     {
+        if (_policy.KeepsNeverShow(appName))
+        {
+            Message($"Your organisation keeps “{appName}” on the never-show list.", BadgeDot.Warning);
+            return;
+        }
         if (Settings.NeverShowApps.RemoveAll(a => string.Equals(a, appName, StringComparison.OrdinalIgnoreCase)) == 0) return;
         Save();
         UpdatePrivateAppGuard();
@@ -3564,6 +3639,11 @@ internal sealed partial class ScpApp : IDisposable
         UpdatePrivateAppGuard();
         UpdateDrawing();
         UpdateInset();
+        UpdateSplit();
+        NoteShown();
+        UpdateReplay();
+        UpdateVoice();
+        UpdateNotes();
         UpdatePointerWork();
         UpdateClock();
         UpdateStage();

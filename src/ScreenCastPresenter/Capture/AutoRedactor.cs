@@ -42,9 +42,7 @@ internal sealed class AutoRedactor : IDisposable
     private readonly Action<List<CropRegion>, List<SensitiveMatch>> _found;
     private readonly Stopwatch _since = new();
     private Task? _running;
-    private byte[]? _pixels;
-    private ID2D1Bitmap1? _scanTarget, _scanCpu;
-    private Size _scanSize;
+    private readonly FrameGrabber _grabber = new(ScanLimit);
     private volatile bool _scannedOnce;
 
     /// <param name="found">Called on a worker thread with the boxes (fractions of the content) and what they cover.</param>
@@ -71,18 +69,13 @@ internal sealed class AutoRedactor : IDisposable
     public bool Available => _ocr is not null;
 
     /// <summary>Something new may be shown: its first scan is done (or can't happen).</summary>
-    public bool FirstScanDone => _scannedOnce || !Available || Kinds == SensitiveKinds.None;
+    public bool FirstScanDone => _scannedOnce || !Available || (Kinds & SensitiveKinds.TextKinds) == SensitiveKinds.None;
 
     /// <summary>A scan is running on the worker.</summary>
     public bool Busy => _running is { IsCompleted: false };
 
     /// <summary>Scale for a frame of <paramref name="area"/>: never up, at most <see cref="MaxScanSide"/> a side.</summary>
-    public static Size ScanSize(Size area)
-    {
-        if (area.Width <= 0 || area.Height <= 0) return Size.Empty;
-        double scale = Math.Min(1, (double)ScanLimit / Math.Max(area.Width, area.Height));
-        return new Size(Math.Max(1, (int)(area.Width * scale)), Math.Max(1, (int)(area.Height * scale)));
-    }
+    public static Size ScanSize(Size area) => FrameGrabber.ScanSize(area, ScanLimit);
 
     /// <summary>
     /// On the render thread, after a frame is drawn: starts a scan of <paramref name="area"/> of
@@ -90,49 +83,15 @@ internal sealed class AutoRedactor : IDisposable
     /// </summary>
     public void MaybeScan(ID2D1DeviceContext dc, ID2D1Bitmap1 picture, Rectangle area, bool changed, ID2D1Image? restore)
     {
-        if (_ocr is null || Kinds == SensitiveKinds.None || Busy || area.Width <= 0 || area.Height <= 0) return;
+        if (_ocr is null || (Kinds & SensitiveKinds.TextKinds) == SensitiveKinds.None || Busy || area.Width <= 0 || area.Height <= 0) return;
         if (_scannedOnce && (!changed || _since.Elapsed < ScanEvery)) return;
-        Size size = ScanSize(area.Size);
-        try
-        {
-            EnsureBuffers(dc, size);
-            dc.Target = _scanTarget;
-            dc.BeginDraw();
-            dc.DrawBitmap(picture, new Rect(0, 0, size.Width, size.Height), 1f, InterpolationMode.HighQualityCubic, new Rect(area.X, area.Y, area.Width, area.Height), null);
-            dc.EndDraw().CheckError();
-        }
-        finally
-        {
-            dc.Target = restore;
-        }
-        _scanCpu!.CopyFromBitmap(_scanTarget!);
-        MappedRectangle map = _scanCpu.Map(MapOptions.Read);
-        try
-        {
-            int row = size.Width * 4;
-            for (int y = 0; y < size.Height; y++) Marshal.Copy(map.Bits + (nint)(y * map.Pitch), _pixels!, y * row, row);
-        }
-        finally
-        {
-            _scanCpu.Unmap();
-        }
+        Size size = _grabber.Grab(dc, picture, area, restore);
+        if (size.IsEmpty) return;
         _since.Restart();
         SensitiveKinds kinds = Kinds;
         System.Text.RegularExpressions.Regex? words = Words;
-        byte[] pixels = _pixels!;
+        byte[] pixels = _grabber.Pixels!;
         _running = Task.Run(() => Recognize(pixels, size, kinds, words));
-    }
-
-    private void EnsureBuffers(ID2D1DeviceContext dc, Size size)
-    {
-        if (_scanTarget is not null && _scanSize == size) return;
-        _scanTarget?.Dispose();
-        _scanCpu?.Dispose();
-        var format = new D2DPixelFormat(Format.B8G8R8A8_UNorm, D2DAlphaMode.Premultiplied);
-        _scanTarget = dc.CreateBitmap(new SizeI(size.Width, size.Height), IntPtr.Zero, 0, new BitmapProperties1(format, 96, 96, BitmapOptions.Target));
-        _scanCpu = dc.CreateBitmap(new SizeI(size.Width, size.Height), IntPtr.Zero, 0, new BitmapProperties1(format, 96, 96, BitmapOptions.CpuRead | BitmapOptions.CannotDraw));
-        if (_pixels is null || _pixels.Length < size.Width * size.Height * 4) _pixels = new byte[size.Width * size.Height * 4];
-        _scanSize = size;
     }
 
     private void Recognize(byte[] pixels, Size size, SensitiveKinds kinds, System.Text.RegularExpressions.Regex? words)
@@ -171,13 +130,39 @@ internal sealed class AutoRedactor : IDisposable
     }
 
     /// <summary>
-    /// A still picture (a screenshot, FR-51): what <paramref name="kinds"/> finds in it is covered
-    /// with solid boxes. Scaled down first when it's bigger than the recognizer takes. Returns how
-    /// many were covered (0 when nothing was, or there's no recognizer).
+    /// A still picture (a screenshot, FR-51): what <paramref name="kinds"/> finds in its text is
+    /// covered with solid boxes, and faces (when chosen) are pixelated. Scaled down first when it's
+    /// bigger than the recognizer takes. Returns how many were covered (0 when nothing was, or
+    /// Windows can't read text or find faces here). Password boxes are covered by the caller, which
+    /// knows the window.
     /// </summary>
     internal static int CoverInStill(Bitmap image, SensitiveKinds kinds, System.Text.RegularExpressions.Regex? words = null)
     {
-        if (kinds == SensitiveKinds.None) return 0;
+        List<SensitiveMatch> found = FindInStill(image, kinds, words);
+        if (found.Count == 0) return 0;
+        using var brush = new SolidBrush(EffectStyle.RedactFill);
+        foreach (SensitiveMatch m in found)
+        {
+            if (m.Kind == SensitiveKinds.Faces) Pixelate(image, Rectangle.Round(m.Box));
+            else
+            {
+                using Graphics cover = Graphics.FromImage(image);
+                cover.FillRectangle(brush, m.Box);
+            }
+        }
+        return found.Count;
+    }
+
+    /// <summary>
+    /// What <paramref name="kinds"/> finds in a still picture, in its own pixels: text read by the
+    /// recognizer, and faces (padded, the largest left out when asked). Scaled down first when it's
+    /// bigger than the recognizer takes. Password boxes need the window: the caller asks Windows.
+    /// </summary>
+    internal static List<SensitiveMatch> FindInStill(Bitmap image, SensitiveKinds kinds, System.Text.RegularExpressions.Regex? words = null)
+    {
+        var found = new List<SensitiveMatch>();
+        bool text = (kinds & SensitiveKinds.TextKinds) != 0, faces = kinds.HasFlag(SensitiveKinds.Faces);
+        if (!text && !faces) return found;
         double scale = Math.Min(1, (double)ScanLimit / Math.Max(image.Width, image.Height));
         int w = Math.Max(1, (int)(image.Width * scale)), h = Math.Max(1, (int)(image.Height * scale));
         using var scan = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
@@ -196,14 +181,34 @@ internal sealed class AutoRedactor : IDisposable
         {
             scan.UnlockBits(data);
         }
-        List<OcrLine>? lines = ReadAsync(bgra, w, h).GetAwaiter().GetResult();
-        if (lines is null) return 0;
-        List<SensitiveMatch> found = SensitiveText.Find(lines, kinds, words);
-        using Graphics cover = Graphics.FromImage(image);
-        using var brush = new SolidBrush(EffectStyle.RedactFill);
-        foreach (SensitiveMatch m in found)
-            cover.FillRectangle(brush, RectangleF.FromLTRB(m.Box.Left / (float)scale, m.Box.Top / (float)scale, m.Box.Right / (float)scale, m.Box.Bottom / (float)scale));
-        return found.Count;
+        if (faces && FaceFinder.DetectAsync(bgra, w, h).GetAwaiter().GetResult() is { } people)
+            foreach (CropRegion r in FaceFinder.ToRegions(people, new SizeF(w, h), kinds.HasFlag(SensitiveKinds.KeepLargestFace), FaceFinder.Padding))
+                found.Add(new SensitiveMatch(SensitiveKinds.Faces, new RectangleF((float)(r.X * image.Width), (float)(r.Y * image.Height), (float)(r.Width * image.Width), (float)(r.Height * image.Height))));
+        if (text && ReadAsync(bgra, w, h).GetAwaiter().GetResult() is { } lines)
+            foreach (SensitiveMatch m in SensitiveText.Find(lines, kinds, words))
+                found.Add(m with { Box = RectangleF.FromLTRB(m.Box.Left / (float)scale, m.Box.Top / (float)scale, m.Box.Right / (float)scale, m.Box.Bottom / (float)scale) });
+        return found;
+    }
+
+    /// <summary>Blocks of <see cref="PixelBlocks"/> across: nobody can be recognised, the picture still reads as a person.</summary>
+    public const int PixelBlocks = 8;
+
+    /// <summary>Pixelates <paramref name="area"/> of <paramref name="image"/> in place (a face in a screenshot).</summary>
+    internal static void Pixelate(Bitmap image, Rectangle area)
+    {
+        area.Intersect(new Rectangle(0, 0, image.Width, image.Height));
+        if (area.Width <= 0 || area.Height <= 0) return;
+        int bw = Math.Max(1, Math.Min(PixelBlocks, area.Width)), bh = Math.Max(1, (int)Math.Round(bw * (double)area.Height / area.Width));
+        using var tiny = new Bitmap(bw, bh, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+        using (Graphics g = Graphics.FromImage(tiny))
+        {
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
+            g.DrawImage(image, new Rectangle(0, 0, bw, bh), area, GraphicsUnit.Pixel);
+        }
+        using Graphics back = Graphics.FromImage(image);
+        back.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+        back.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+        back.DrawImage(tiny, area, new Rectangle(0, 0, bw, bh), GraphicsUnit.Pixel);
     }
 
     /// <summary>On the render thread: waits for a running scan, then lets go of the buffers.</summary>
@@ -217,9 +222,6 @@ internal sealed class AutoRedactor : IDisposable
         {
             Debug.WriteLine(ex);
         }
-        _scanTarget?.Dispose();
-        _scanCpu?.Dispose();
-        _scanTarget = _scanCpu = null;
-        _pixels = null;
+        _grabber.Dispose();
     }
 }

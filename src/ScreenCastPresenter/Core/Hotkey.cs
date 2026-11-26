@@ -21,6 +21,9 @@ internal readonly record struct Hotkey(HotkeyModifiers Modifiers, Keys Key)
 
     public static Hotkey CtrlAlt(Keys key) => new(HotkeyModifiers.Control | HotkeyModifiers.Alt, key);
 
+    /// <summary>A key with a name that doesn't depend on the keyboard layout (so it can be shown or used).</summary>
+    public static bool CanName(Keys key) => KeyNames.ContainsKey(key);
+
     /// <summary>
     /// A usable global shortcut needs Ctrl, Alt or Win (Shift alone would block normal typing)
     /// and one supported non-modifier key.

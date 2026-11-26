@@ -58,11 +58,17 @@ internal static class ShortcutCatalog
             new("zoom-in-more", "Zoom in closer", ShortcutGroup.OnTheTv, CS(Keys.Z), Keywords: "magnify closer bigger level"),
             new("highlight-clicks", "Show my clicks on the TV on / off", ShortcutGroup.OnTheTv, C(Keys.H), Keywords: "click highlight ring circle mouse"),
             new("pointer-ring", "Ring around the mouse on the TV on / off", ShortcutGroup.OnTheTv, CS(Keys.H), Keywords: "spotlight find mouse cursor halo circle"),
+            new("show-keys", "Show my shortcuts on the TV on / off", ShortcutGroup.OnTheTv, null, Keywords: "keys keystrokes shortcuts tutorial keyboard combination press show keycastr screencast"),
+            new("zoom-follows", "Zoom follows: the mouse / where I type / both", ShortcutGroup.OnTheTv, null, Keywords: "zoom follow typing caret text cursor keyboard magnify"),
             new("laser", "Laser pointer on / off", ShortcutGroup.OnTheTv, CS(Keys.L), Keywords: "laser red dot point presenter"),
             new("inset", "Small picture in a corner on / off", ShortcutGroup.OnTheTv, null, Keywords: "picture in picture pip webcam face corner overlay small inset"),
+            new("split-screen", "Split screen: show something beside it / back to one", ShortcutGroup.OnTheTv, null, Keywords: "split screen side by side compare two windows both grid multiview dual"),
+            new("split-add", "Split screen: add one more picture", ShortcutGroup.OnTheTv, null, Keywords: "split screen add another third fourth grid"),
+            new("split-layout", "Split screen: change the layout", ShortcutGroup.OnTheTv, null, Keywords: "split layout side by side stacked grid focus arrange"),
             new("draw", "Draw on the TV / stop drawing", ShortcutGroup.OnTheTv, CS(Keys.D), Keywords: "draw pen ink annotate highlighter marker sketch write arrow box text shapes"),
             new("hide-part", "Hide part of it from the audience", ShortcutGroup.OnTheTv, C(Keys.X), Keywords: "hide redact cover blur private secret password email blank out censor box"),
             new("show-hidden", "Show the hidden parts again", ShortcutGroup.OnTheTv, CS(Keys.X), Keywords: "unhide uncover redact remove reveal hidden"),
+            new("check-before-showing", "Check something for private details before showing it", ShortcutGroup.Presenting, null, Keywords: "check scan preflight private email password face before share review safe"),
             new("spotlight", "Spotlight around the mouse on / off", ShortcutGroup.OnTheTv, CS(Keys.F), Keywords: "spotlight torch focus dim darken highlight area circle attention"),
             new("caption", "Name banner on / off", ShortcutGroup.OnTheTv, CS(Keys.N), Keywords: "name caption lower third title banner who speaker job"),
             new("qr", "QR code on the TV / take it off", ShortcutGroup.OnTheTv, C(Keys.Q), Keywords: "qr code link wifi wi-fi scan phone url website guest network"),
@@ -79,10 +85,17 @@ internal static class ShortcutCatalog
         for (int slot = 1; slot <= Scene.Slots; slot++)
             list.Add(new(SceneId(slot), $"Show scene {slot}", ShortcutGroup.Favourites, C(Keys.F1 + slot - 1)));
         list.Add(new("save-scene", "Save this as a scene", ShortcutGroup.Presenting, null, Keywords: "scene save preset layout setup obs"));
+        list.Add(new("show-picture", "Show a picture…", ShortcutGroup.Presenting, null, Keywords: "picture photo image jpg png file slide poster show signage"));
+        list.Add(new("show-card", "Show a card (a few words)…", ShortcutGroup.Presenting, null, Keywords: "card text words welcome notice sign title message signage"));
         list.Add(new("stop-playlist", "Stop the playlist", ShortcutGroup.Presenting, null, Keywords: "playlist stop signage lobby loop"));
         list.Add(new("next-slide", "Next slide", ShortcutGroup.Presenting, null, Keywords: "next slide clicker page down forward advance"));
         list.Add(new("previous-slide", "Previous slide", ShortcutGroup.Presenting, null, Keywords: "previous slide clicker page up back"));
         list.Add(new("phone-remote", "Use my phone as a remote", ShortcutGroup.OnMyScreen, null, Keywords: "phone remote clicker mobile control pair wifi"));
+        list.Add(new("tv-on", "Turn the TV on", ShortcutGroup.OnTheTv, null, Keywords: "tv power on wake standby monitor ddc cec input"));
+        list.Add(new("tv-off", "Turn the TV off", ShortcutGroup.OnTheTv, null, Keywords: "tv power off standby sleep monitor ddc"));
+        list.Add(new("voice-commands", "Voice commands on / off", ShortcutGroup.OnMyScreen, null, Keywords: "voice speech say talk commands hands free microphone presenter next slide"));
+        list.Add(new("notes", "My notes on / off", ShortcutGroup.OnMyScreen, null, Keywords: "notes speaker notes script reminders prompter cue cards private"));
+        list.Add(new("edit-notes", "Edit the notes for what's shown", ShortcutGroup.OnMyScreen, null, Keywords: "notes edit speaker script write"));
         list.Add(new("auto-hide", "Hide private details automatically on / off", ShortcutGroup.OnTheTv, null, Keywords: "automatic hide redact email phone card iban ocr privacy personal details password key token secret words names"));
 
         list.AddRange(
@@ -93,6 +106,8 @@ internal static class ShortcutCatalog
             new("record", "Start / stop recording", ShortcutGroup.Recording, C(Keys.R), Keywords: "video capture webinar record"),
             new("pause-recording", "Pause / resume recording", ShortcutGroup.Recording, CS(Keys.R), Keywords: "hold break"),
             new("screenshot", "Take a screenshot", ShortcutGroup.Recording, CS(Keys.S), Keywords: "snip capture image"),
+            new("save-replay", "Save the last minute", ShortcutGroup.Recording, null, Keywords: "replay last minute instant save clip moment highlight buffer"),
+            new("replay", "Keep the last minute on / off", ShortcutGroup.Recording, null, Keywords: "replay last minute instant buffer keep"),
 
             new("toggle-outline", "Yellow outline on / off", ShortcutGroup.OnMyScreen, C(Keys.Y), Keywords: "border frame"),
             new("toggle-badge", "Status pill on / off", ShortcutGroup.OnMyScreen, C(Keys.I), Keywords: "pill status badge"),

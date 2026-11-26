@@ -17,12 +17,19 @@ internal sealed class Scene
     public Favourite? Source { get; set; }
     public CropRegion? Crop { get; set; }
     public Favourite? Inset { get; set; }
+
+    /// <summary>Split screen (FR-104): what's shown beside the main picture, and how.</summary>
+    public List<Favourite> SplitWith { get; set; } = [];
+    public string SplitLayout { get; set; } = nameof(Core.SplitLayout.SideBySide);
     public string InsetCorner { get; set; } = nameof(Core.InsetCorner.BottomRight);
     public int InsetSize { get; set; } = InsetLayout.DefaultSize;
     public bool Caption { get; set; }
     public string? QrLink { get; set; }
     public bool Spotlight { get; set; }
     public double Dim { get; set; }
+
+    /// <summary>Speaker notes (FR-111): for the presenter's eyes only.</summary>
+    public string Notes { get; set; } = "";
 
     /// <summary>Live captions on or off with this scene; null (a scene saved before scenes kept them) leaves them as they are.</summary>
     public bool? LiveCaptions { get; set; }
@@ -44,11 +51,15 @@ internal sealed class Scene
             scene.Name = InkStroke.TidyText(scene.Name ?? "", MaxNameLength);
             scene.Crop = scene.Crop is { } c ? CropRegion.Create(c.X, c.Y, c.Width, c.Height) is { IsFull: false } valid ? valid : null : null;
             if (scene.Inset is { } inset && (string.IsNullOrWhiteSpace(inset.AppName) || inset.Title is null)) scene.Inset = null;
+            scene.SplitWith = [.. (scene.SplitWith ?? []).OfType<Favourite>().Where(f => !string.IsNullOrWhiteSpace(f.AppName) && f.Title is not null).Take(SplitScreen.MaxOthers)];
+            scene.SplitLayout = SplitScreen.Parse(scene.SplitLayout).ToString();
+            if (scene.SplitWith.Count > 0) scene.Inset = null; // one or the other
             scene.InsetCorner = InsetLayout.ParseCorner(scene.InsetCorner).ToString();
             scene.InsetSize = InsetLayout.Normalize(scene.InsetSize);
             scene.QrLink = KeepableQr(scene.QrLink?.Trim());
             if (scene.QrLink is not null && QrCode.Encode(scene.QrLink) is null) scene.QrLink = null;
             scene.Dim = double.IsFinite(scene.Dim) ? Math.Clamp(scene.Dim, 0, AppSettings.MaxDim) : 0;
+            scene.Notes = NotesCipher.Tidy(scene.Notes);
             slots[i] = scene;
         }
         return slots;
@@ -60,10 +71,12 @@ internal sealed class Scene
         var parts = new List<string> { Source?.Title is { Length: > 0 } t ? TrayMenuPlan.Shorten(t, 30) : Source?.AppName ?? "" };
         if (Crop is not null) parts.Add("part of it");
         if (Inset is not null) parts.Add("small picture");
+        if (SplitWith.Count > 0) parts.Add(SplitWith.Count == 1 ? "split screen" : $"split screen of {SplitWith.Count + 1}");
         if (Caption) parts.Add("name");
         if (QrLink is not null) parts.Add("QR code");
         if (Spotlight) parts.Add("spotlight");
         if (LiveCaptions == true) parts.Add("live captions");
+        if (Notes.Length > 0) parts.Add("notes");
         if (Dim > 0) parts.Add($"dimmed {Dim:P0}");
         return string.Join(" · ", parts.Where(p => p.Length > 0));
     }
@@ -72,17 +85,46 @@ internal sealed class Scene
 /// <summary>Which screen a playlist plays on (FR-87).</summary>
 internal enum PlaylistScreen { Main, Second }
 
-/// <summary>One step of a playlist: a favourite or a scene, for so many seconds.</summary>
+/// <summary>
+/// One step of a playlist, for so many seconds: a favourite or a scene (by number), a picture file
+/// or a folder of pictures (each in turn), or a text card (FR-103).
+/// </summary>
 internal sealed class PlaylistItem
 {
-    public string Kind { get; set; } = "Favourite";
+    public const string FavouriteKind = "Favourite", SceneKind = "Scene", PictureKind = "Picture", CardKind = "Card";
+
+    public string Kind { get; set; } = FavouriteKind;
     public int Slot { get; set; } = 1;
     public int Seconds { get; set; } = Slideshow.DefaultSeconds;
 
-    public bool IsScene => string.Equals(Kind, "Scene", StringComparison.OrdinalIgnoreCase);
+    /// <summary>A picture's file, or a folder of pictures.</summary>
+    public string? Path { get; set; }
+
+    /// <summary>A card's words (the first line is its title).</summary>
+    public string? Text { get; set; }
+
+    public bool IsScene => string.Equals(Kind, SceneKind, StringComparison.OrdinalIgnoreCase);
+    public bool IsPicture => string.Equals(Kind, PictureKind, StringComparison.OrdinalIgnoreCase);
+    public bool IsCard => string.Equals(Kind, CardKind, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A favourite or a scene: shown by its number.</summary>
+    public bool IsSlot => !IsPicture && !IsCard;
+
+    /// <summary>Made sensible from a settings file; null when it can't be a step (no number, no picture, no words).</summary>
+    public PlaylistItem? Normalized()
+    {
+        int seconds = Slideshow.Normalize(Seconds);
+        if (IsPicture)
+            return Path?.Trim() is { Length: > 0 } p && System.IO.Path.IsPathFullyQualified(p) ? new PlaylistItem { Kind = PictureKind, Path = p, Seconds = seconds } : null;
+        if (IsCard) return TextCard.Tidy(Text) is { Length: > 0 } t ? new PlaylistItem { Kind = CardKind, Text = t, Seconds = seconds } : null;
+        return Slot is >= 1 and <= AppSettings.SlotCount ? new PlaylistItem { Kind = IsScene ? SceneKind : FavouriteKind, Slot = Slot, Seconds = seconds } : null;
+    }
 
     public string Words(Func<int, string>? favouriteName = null, Func<int, string>? sceneName = null) =>
-        (IsScene ? sceneName?.Invoke(Slot) ?? $"scene {Slot}" : favouriteName?.Invoke(Slot) ?? $"favourite {Slot}") + $" for {Slideshow.Words(Seconds)}";
+        (IsPicture ? Path is { } p && !PictureSource.IsPicture(p) ? $"the pictures in “{System.IO.Path.GetFileName(p.TrimEnd('\\', '/'))}”" : $"“{PictureSource.Name(Path ?? "")}”"
+            : IsCard ? $"the card “{TrayMenuPlan.Shorten(TextCard.Title(Text ?? ""), 30)}”"
+            : IsScene ? sceneName?.Invoke(Slot) ?? $"scene {Slot}" : favouriteName?.Invoke(Slot) ?? $"favourite {Slot}")
+        + $" for {Slideshow.Words(Seconds)}{(IsPicture && Path is { } folder && !PictureSource.IsPicture(folder) ? " each" : "")}";
 }
 
 /// <summary>
@@ -113,10 +155,7 @@ internal sealed class Playlist
             p.Name = RoomProfile.TidyName(p.Name);
             if (p.Name.Length == 0 || result.Any(r => string.Equals(r.Name, p.Name, StringComparison.OrdinalIgnoreCase))) continue;
             p.Screen = p.Where.ToString();
-            p.Items = [.. (p.Items ?? []).OfType<PlaylistItem>()
-                .Where(i => i.Slot is >= 1 and <= AppSettings.SlotCount)
-                .Select(i => new PlaylistItem { Kind = i.IsScene ? "Scene" : "Favourite", Slot = i.Slot, Seconds = Slideshow.Normalize(i.Seconds) })
-                .Take(MaxItems)];
+            p.Items = [.. (p.Items ?? []).OfType<PlaylistItem>().Select(i => i.Normalized()).OfType<PlaylistItem>().Take(MaxItems)];
             if (p.Items.Count == 0) continue;
             result.Add(p);
             if (result.Count == Max) break;
@@ -159,6 +198,24 @@ internal static class PlaylistPlayer
             if (available(items[index])) return index;
         }
         return null;
+    }
+
+    /// <summary>
+    /// The steps a playlist plays now: a folder becomes each of its pictures in turn (as they are
+    /// now; read again each time round), everything else stays one step.
+    /// </summary>
+    public static List<PlaylistItem> Expand(IReadOnlyList<PlaylistItem> items)
+    {
+        var steps = new List<PlaylistItem>(items.Count);
+        foreach (PlaylistItem item in items)
+        {
+            if (item.IsPicture && item.Path is { } folder && !PictureSource.IsPicture(folder))
+            {
+                foreach (string file in PictureSource.InFolder(folder)) steps.Add(new PlaylistItem { Kind = PlaylistItem.PictureKind, Path = file, Seconds = item.Seconds });
+            }
+            else steps.Add(item);
+        }
+        return steps;
     }
 
     /// <summary>A playlist of every saved favourite and scene, <paramref name="seconds"/> each (what the "make one" form starts from).</summary>

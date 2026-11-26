@@ -50,6 +50,8 @@ internal sealed partial class ScpApp
             Source = FavouriteMatcher.FromSource(source),
             Crop = source.Crop,
             Inset = _inset is { } inset ? FavouriteMatcher.FromSource(inset) : null,
+            SplitWith = [.. _split.Select(FavouriteMatcher.FromSource)],
+            SplitLayout = SplitLayoutNow.ToString(),
             InsetCorner = Settings.InsetCorner,
             InsetSize = Settings.InsetSize,
             Caption = _captionOn,
@@ -83,6 +85,13 @@ internal sealed partial class ScpApp
         Settings.InsetSize = scene.InsetSize;
         if (scene.Inset is { } small && await ResolveAsync(small) is { } inset && !inset.IsSameSource(shown)) await SetInsetAsync(inset);
         else if (_inset is not null) RemoveInset(null);
+        StopSplit(null);
+        if (scene.SplitWith.Count > 0)
+        {
+            Settings.SplitLayout = SplitScreen.Parse(scene.SplitLayout).ToString();
+            foreach (Favourite beside in scene.SplitWith)
+                if (await ResolveAsync(beside) is { } other && SplitProblem(other) is null) await AddSplitAsync(other, quiet: true);
+        }
         if (scene.Caption != _captionOn && (Settings.CaptionName.Length > 0 || !scene.Caption)) SetCaption(scene.Caption);
         if (scene.QrLink != _qrText) SetQr(scene.QrLink);
         if (scene.Spotlight != _spotlightOn) SetSpotlight(scene.Spotlight);
@@ -96,11 +105,13 @@ internal sealed partial class ScpApp
     {
         if (f.ScreenDevice is { } device) return _monitors.FirstOrDefault(m => m.DeviceName == device) is { } screen ? SourceWindow.ForScreen(screen) : null;
         if (f.CameraId is { } id) return (await Cameras.ListAsync()).FirstOrDefault(c => c.Id == id) is { } camera ? SourceWindow.ForCamera(camera) : null;
+        if (f.PicturePath is { } picture) return PictureSource.Problem(picture) is null ? SourceWindow.ForPicture(picture, f.Title) : null;
         return FavouriteMatcher.FindBest(f, WindowEnumerator.GetPresentableWindows()) is { } w && !IsNeverShown(w) ? w : null;
     }
 
     private static string Missing(Favourite f) =>
-        f.ScreenDevice is not null ? "its screen isn't connected" : f.CameraId is not null ? "its camera isn't connected" : $"{f.AppName} isn't open";
+        f.ScreenDevice is not null ? "its screen isn't connected" : f.CameraId is not null ? "its camera isn't connected"
+        : f.PicturePath is not null ? "its picture can't be found" : $"{f.AppName} isn't open";
 
     /// <summary>Settings: forget a scene.</summary>
     public void DeleteScene(int slot)
@@ -174,13 +185,14 @@ internal sealed partial class ScpApp
     /// <summary>Shows the next item that can be shown; false when none can.</summary>
     private async Task<bool> ShowNextAsync(PlaylistRun run)
     {
+        List<PlaylistItem> steps = PlaylistPlayer.Expand(run.Playlist.Items); // a folder's pictures as they are now
         var resolved = new Dictionary<PlaylistItem, SourceWindow?>();
-        foreach (PlaylistItem item in run.Playlist.Items.Distinct()) resolved[item] = await ResolveItemAsync(item, run.Screen);
+        foreach (PlaylistItem item in steps.Distinct()) resolved[item] = await ResolveItemAsync(item, run.Screen);
         if (!_playing.TryGetValue(run.Screen, out PlaylistRun? still) || !ReferenceEquals(still, run)) return false; // stopped meanwhile
-        int? next = PlaylistPlayer.Next(run.Playlist.Items, run.Index, item => resolved[item] is not null, run.Playlist.Shuffle, _shuffle);
+        int? next = PlaylistPlayer.Next(steps, run.Index is { } at && at < steps.Count ? at : null, item => resolved[item] is not null, run.Playlist.Shuffle, _shuffle);
         if (next is not { } index) return false;
-        if (index == run.Index && run.Index is not null) return true; // only one can be shown: it stays
-        PlaylistItem chosen = run.Playlist.Items[index];
+        if (index == run.Index && run.Index is not null && steps.Count(s => resolved[s] is not null) == 1) return true; // only one can be shown: it stays
+        PlaylistItem chosen = steps[index];
         _playlistSwitching = true;
         try
         {
@@ -202,6 +214,8 @@ internal sealed partial class ScpApp
     /// <summary>What an item shows now, or null when it can't be (not open, not connected, never-show, a TV's own screen).</summary>
     private async Task<SourceWindow?> ResolveItemAsync(PlaylistItem item, PlaylistScreen screen)
     {
+        if (item.IsPicture) return item.Path is { } file && PictureSource.Problem(file) is null ? SourceWindow.ForPicture(file) : null;
+        if (item.IsCard) return item.Text is { } words && TextCard.Render(CardsFolder, words) is { } card ? SourceWindow.ForPicture(card, TextCard.Title(words)) : null;
         Favourite? f = item.IsScene ? Settings.Scenes[item.Slot - 1]?.Source : Settings.Favourites[item.Slot - 1];
         if (f is null || await ResolveAsync(f) is not { } source) return null;
         if (source.Screen is { } s && (_session.FullScreenOutput is { } tv && s.IsSameScreen(tv) || _second?.FullScreenOutput is { } tv2 && s.IsSameScreen(tv2)
@@ -270,11 +284,7 @@ internal sealed partial class ScpApp
     {
         var favourites = Enumerable.Range(1, AppSettings.SlotCount).Where(s => Settings.Favourites[s - 1] is not null).ToList();
         var scenes = Enumerable.Range(1, Scene.Slots).Where(s => Settings.Scenes[s - 1] is not null).ToList();
-        if (favourites.Count + scenes.Count == 0)
-        {
-            Message("Save a few favourites or scenes first, then make a playlist of them.");
-            return;
-        }
+        // Pictures and cards need no favourites: a playlist can be made of them alone.
         if (Settings.Playlists.Count >= Playlist.Max)
         {
             Message($"You can keep {Playlist.Max} playlists. Remove one in Settings first.");
@@ -285,6 +295,8 @@ internal sealed partial class ScpApp
         ComboBox where = form.AddList("Plays on", ["The TV", "The second TV"], 0);
         ComboBox seconds = form.AddList("Each shows for", [.. Slideshow.Seconds.Select(Slideshow.Words)], Math.Max(0, Slideshow.Seconds.ToList().IndexOf(Settings.SlideshowSeconds)));
         CheckBox shuffle = form.AddCheck("Shuffle: a different order each time round", false);
+        (_, TextBox folder) = form.AddField("Pictures from a folder (optional): each in turn", "", 260, @"C:\Users\Public\Pictures\Lobby");
+        (_, TextBox card) = form.AddField("A card's words (optional): the first line is its title", "", TextCard.MaxLength, "Welcome to Acme" + Environment.NewLine + "Wi-Fi: Guest", lines: 3);
         var ticks = new List<(CheckBox Box, PlaylistItem Item)>();
         foreach (int s in favourites)
             ticks.Add((form.AddCheck($"Favourite {s}: {TrayMenuPlan.Shorten(Settings.Favourites[s - 1]!.Title, 40)}", true), new PlaylistItem { Kind = "Favourite", Slot = s }));
@@ -293,14 +305,21 @@ internal sealed partial class ScpApp
         form.Check = () =>
             RoomProfile.TidyName(name.Text).Length == 0 ? "Type a name for the playlist."
             : Playlist.Find(Settings.Playlists, name.Text) is not null ? "There's a playlist with that name already."
-            : !ticks.Any(t => t.Box.Checked) ? "Tick at least one favourite or scene." : null;
+            : folder.Text.Trim().Length > 0 && !(Path.IsPathFullyQualified(folder.Text.Trim()) && Directory.Exists(folder.Text.Trim())) ? "That pictures folder can't be found."
+            : folder.Text.Trim().Length > 0 && PictureSource.InFolder(folder.Text.Trim()).Count == 0 ? "That folder has no pictures in it."
+            : !ticks.Any(t => t.Box.Checked) && folder.Text.Trim().Length == 0 && TextCard.Tidy(card.Text).Length == 0 ? "Tick a favourite or scene, or add pictures or a card." : null;
         if (!form.Ask()) return;
         int each = Slideshow.Seconds[Math.Max(0, seconds.SelectedIndex)];
         Settings.Playlists.Add(new Playlist
         {
             Name = RoomProfile.TidyName(name.Text),
             Screen = (where.SelectedIndex == 1 ? PlaylistScreen.Second : PlaylistScreen.Main).ToString(),
-            Items = [.. ticks.Where(t => t.Box.Checked).Select(t => new PlaylistItem { Kind = t.Item.Kind, Slot = t.Item.Slot, Seconds = each })],
+            Items =
+            [
+                .. ticks.Where(t => t.Box.Checked).Select(t => new PlaylistItem { Kind = t.Item.Kind, Slot = t.Item.Slot, Seconds = each }),
+                .. folder.Text.Trim() is { Length: > 0 } pictures ? [new PlaylistItem { Kind = PlaylistItem.PictureKind, Path = pictures, Seconds = each }] : Array.Empty<PlaylistItem>(),
+                .. TextCard.Tidy(card.Text) is { Length: > 0 } words ? [new PlaylistItem { Kind = PlaylistItem.CardKind, Text = words, Seconds = each }] : Array.Empty<PlaylistItem>(),
+            ],
             Shuffle = shuffle.Checked,
         });
         Save();
@@ -349,6 +368,11 @@ internal sealed partial class ScpApp
     /// <summary>Settings › Privacy › Hide automatically: what to look for (none switches it off).</summary>
     public void SetAutoHide(SensitiveKinds kinds)
     {
+        if ((_policy.AutoHide & ~kinds) != 0)
+        {
+            kinds |= _policy.AutoHide; // the organisation keeps these on
+            Message("Your organisation keeps some details always hidden automatically.", BadgeDot.Warning);
+        }
         SensitiveKinds before = Settings.AutoHideKinds;
         Settings.AutoHideKinds = kinds;
         Save();
@@ -500,6 +524,7 @@ internal sealed partial class ScpApp
     /// <summary>Settings › General › Phone remote: on starts the remote's helper; off stops it.</summary>
     public void SetPhoneRemote(bool on, bool quiet = false)
     {
+        if (on && Blocked(_policy.PhoneRemoteAllowed, "the phone remote")) return;
         Settings.PhoneRemote = on;
         Save();
         if (on && _remote is null) StartRemote(newKey: false);
@@ -588,6 +613,10 @@ internal sealed partial class ScpApp
         "outline" => Settings.ShowOutline,
         "badge" => Settings.ShowBadge,
         "widget" => Settings.ShowWidget,
+        "show-keys" => Settings.ShowKeys,
+        "replay" => Settings.ReplayOn,
+        "voice-commands" => Settings.VoiceCommands,
+        "notes" => NotesOpen,
         _ => null,
     };
 
@@ -607,6 +636,10 @@ internal sealed partial class ScpApp
             case "outline": SetShowOutline(on); break;
             case "badge": SetShowBadge(on); break;
             case "widget": SetShowWidget(on); break;
+            case "show-keys": SetShowKeys(on); break;
+            case "replay": SetReplay(on); break;
+            case "voice-commands": SetVoiceCommands(on); break;
+            case "notes": ToggleNotes(); break;
             default: await RunAsync(what); break; // the others are toggles of their own name
         }
         return IsSwitchedOn(what) == on ? null : LastCommandMessage($"Couldn't switch {what} {(on ? "on" : "off")}.");
@@ -660,6 +693,7 @@ internal sealed partial class ScpApp
             ["playlists"] = new JsonArray([.. Settings.Playlists.Select(p => (JsonNode?)JsonValue.Create(TrayMenuPlan.Shorten(p.Name, 40)))]),
         };
         if (note is not null) json["note"] = TrayMenuPlan.Shorten(note, 200);
+        if (Settings.NotesOnPhone && NotesForPhone() is { } notes) json["notes"] = notes;
         return json.ToJsonString();
     }
 
@@ -687,6 +721,9 @@ internal sealed partial class ScpApp
 
     private void StartExtend()
     {
+        ApplyPolicy();
+        TidyCards();
+        TidyReplayParts();
         _liveText.Limit = Settings.CaptionLook.MaxShown;
         if (Settings.PhoneRemote) StartRemote(newKey: false);
         if (Settings.PlaylistAtStart is { } name)
@@ -718,6 +755,16 @@ internal sealed partial class ScpApp
 
     private void DisposeExtend()
     {
+        if (ReplayRunning) _replay!.Stop();
+        _timeline?.Dispose();
+        _timeline = null;
+        _caret?.Dispose();
+        _caret = null;
+        _keyTimer.Dispose();
+        _keyClear.Dispose();
+        _voice?.Dispose();
+        _voice = null;
+        _notesWindow?.Dispose();
         StopPlaylists(null);
         StopRemote();
         FinishTranscript();

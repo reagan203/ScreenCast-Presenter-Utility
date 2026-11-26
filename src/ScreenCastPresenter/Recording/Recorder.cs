@@ -32,7 +32,7 @@ namespace ScreenCastPresenter.Recording;
 /// except audio. Audio is pulled from the mixer by recording time, so sound and picture stay in
 /// sync however long the webinar runs.
 /// </summary>
-internal sealed class Recorder : IDisposable
+internal sealed partial class Recorder : IDisposable
 {
     /// <summary>Biggest video we encode; bigger sources are scaled down (hardware encoders top out around 4K).</summary>
     public static readonly Size MaxVideo = new(3840, 2160);
@@ -116,7 +116,7 @@ internal sealed class Recorder : IDisposable
         try
         {
             if (!Direct3D.IsCaptureSupported) throw new NotSupportedException("Screen capture isn't available on this version of Windows.");
-            Directory.CreateDirectory(Path.GetDirectoryName(_request.Path)!);
+            Directory.CreateDirectory(_request.IsReplay ? _request.Path : Path.GetDirectoryName(_request.Path)!);
             var steps = Stopwatch.StartNew();
             InitialiseCapture();
             DiagLog.Write($"recorder: capture ready {steps.ElapsedMilliseconds} ms");
@@ -128,7 +128,7 @@ internal sealed class Recorder : IDisposable
             Task audio = Task.Run(StartAudio);
             try
             {
-                _writer = new Mp4Writer(_request.Path, video.Width, video.Height, _device!, withAudio: WantsAudio);
+                _writer = new Mp4Writer(_request.IsReplay ? ReplayBuffer.PartPath(_request.Path, 0) : _request.Path, video.Width, video.Height, _device!, withAudio: WantsAudio);
             }
             finally
             {
@@ -159,6 +159,7 @@ internal sealed class Recorder : IDisposable
         }
 
         StopAudio();
+        EndReplay();
         try
         {
             _writer?.Finish();
@@ -222,6 +223,7 @@ internal sealed class Recorder : IDisposable
             bool fresh = TakeLatestFrame();
             if (fresh) pacer.FrameArrived();
             ScanForAutoHide(fresh);
+            if (_request.IsReplay) RotateIfDue(elapsed, audioFrames);
 
             if (clock.IsPaused)
             {
@@ -284,7 +286,7 @@ internal sealed class Recorder : IDisposable
             int samples = frames * AudioMixer.Channels;
             _mixer.Read(frames, mix);
             AudioMixer.ToPcm16(mix.AsSpan(0, samples), pcm);
-            _writer.WriteAudio(pcm.AsSpan(0, samples), written * Mp4Writer.Second / AudioMixer.SampleRate);
+            _writer.WriteAudio(pcm.AsSpan(0, samples), (written - _partAudioStart) * Mp4Writer.Second / AudioMixer.SampleRate);
             written += frames;
         }
         return written;
@@ -318,7 +320,7 @@ internal sealed class Recorder : IDisposable
         _dc.EndDraw().CheckError();
         _dc.Target = null;
 
-        _writer.WriteVideo(_ring[slot]!, elapsed.Ticks, Mp4Writer.FrameDuration);
+        _writer.WriteVideo(_ring[slot]!, (elapsed - _partStart).Ticks, Mp4Writer.FrameDuration);
     }
 
     private void InitialiseCapture()
@@ -511,8 +513,9 @@ internal sealed class Recorder : IDisposable
 
     private ID2D1SolidColorBrush? _hiddenBrush;
 
-    // Automatic hiding (FR-88): scans on this thread's GPU context, read on a worker; what it found is kept here.
-    private AutoRedactor? _auto;
+    // Automatic hiding (FR-88, FR-98, FR-100): text and faces read on this thread's GPU context and a
+    // worker, password boxes asked on their own thread; what it found is kept here.
+    private AutoCover? _auto;
     private readonly object _autoLock = new();
     private List<Core.CropRegion> _autoRegions = [];
 
@@ -523,10 +526,18 @@ internal sealed class Recorder : IDisposable
     private void ScanForAutoHide(bool fresh)
     {
         if (_request.AutoHide == Core.SensitiveKinds.None || _heldBitmap is null) return;
-        _auto ??= new AutoRedactor(_request.AutoHide, (regions, _) =>
+        if (_auto is null)
         {
-            lock (_autoLock) _autoRegions = regions;
-        }) { Words = Core.SensitiveText.CustomPattern(_request.AutoHideWords) };
+            AutoCover? made = null;
+            made = new AutoCover(_request.Source, () =>
+            {
+                if (made is null) return;
+                List<Core.CropRegion> regions = [.. made.Covers().Select(c => c.Region)]; // a recording covers everything with solid boxes
+                lock (_autoLock) _autoRegions = regions;
+            });
+            _auto = made;
+            made.Configure(_request.AutoHide, Core.SensitiveText.CustomPattern(_request.AutoHideWords), Core.RedactStyle.Solid);
+        }
         _auto.MaybeScan(_dc!, _heldBitmap, ClientArea(), fresh, null);
     }
 

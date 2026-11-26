@@ -37,6 +37,12 @@ internal enum ScheduleAction
 
     /// <summary>Stop and save a recording (FR-59), if one is running.</summary>
     StopRecording,
+
+    /// <summary>Turn the TV on (and to this PC's input), over the cable (FR-107).</summary>
+    TvOn,
+
+    /// <summary>Turn the TV off (standby), over the cable (FR-107).</summary>
+    TvOff,
 }
 
 /// <summary>FR-59: when "stop at a set time" means, from now.</summary>
@@ -133,6 +139,8 @@ internal sealed class ScheduleEntry
         ScheduleAction.StopPlaylist => "stop the playlists",
         ScheduleAction.Scene => $"show scene {Slot}",
         ScheduleAction.StopRecording => "stop the recording",
+        ScheduleAction.TvOn => "turn the TV on",
+        ScheduleAction.TvOff => "turn the TV off",
         _ => "",
     };
 
@@ -234,6 +242,8 @@ internal static class ScheduleChoices
             ("Show the picture again", ScheduleAction.ShowAgain, 1, null),
             ("Stop showing", ScheduleAction.Stop, 1, null),
             ("Stop the recording (it's saved)", ScheduleAction.StopRecording, 1, null),
+            ("Turn the TV on", ScheduleAction.TvOn, 1, null),
+            ("Turn the TV off", ScheduleAction.TvOff, 1, null),
         };
         for (int i = 0; i < favourites.Count; i++)
         {

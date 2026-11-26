@@ -40,6 +40,22 @@ internal static class RemoteAuth
         }
     }
 
+    /// <summary>Like <see cref="FromBase64Url"/>, for longer data (encrypted notes, FR-111).</summary>
+    public static byte[]? FromBase64UrlLong(string? text)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length > 16_000) return null;
+        string padded = text.Replace('-', '+').Replace('_', '/');
+        padded += new string('=', (4 - padded.Length % 4) % 4);
+        try
+        {
+            return Convert.FromBase64String(padded);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>What is signed: the session, the counter and the command, one per line.</summary>
     public static byte[] Message(string session, long counter, string command) =>
         Encoding.UTF8.GetBytes(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{session}\n{counter}\n{command}"));

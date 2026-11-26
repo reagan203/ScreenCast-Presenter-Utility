@@ -22,8 +22,15 @@ internal enum MeetingSound
 /// <param name="Hidden">Parts hidden from the audience (FR-74), covered in the recording too.</param>
 /// <param name="AutoHide">Automatic hiding (FR-88): what it finds is covered in the recording too.</param>
 /// <param name="AutoHideWords">The presenter's own words automatic hiding covers.</param>
+/// <param name="ReplaySeconds">
+/// More than 0: the replay buffer (FR-106). <paramref name="Path"/> is then a folder of short parts,
+/// of which only enough to cover this many seconds are kept, and "save-replay" joins them into a file.
+/// </param>
 internal sealed record RecordingRequest(SourceWindow Source, bool Cursor, MeetingSound Sound, bool Microphone, string Path, IReadOnlyList<CropRegion>? Hidden = null,
-    SensitiveKinds AutoHide = SensitiveKinds.None, IReadOnlyList<string>? AutoHideWords = null);
+    SensitiveKinds AutoHide = SensitiveKinds.None, IReadOnlyList<string>? AutoHideWords = null, int ReplaySeconds = 0)
+{
+    public bool IsReplay => ReplaySeconds > 0;
+}
 
 /// <summary>Why a recording ended.</summary>
 internal enum RecordingEnd
@@ -56,7 +63,7 @@ internal static class RecordingProtocol
 
     /// <summary>The path goes last so it may contain spaces.</summary>
     public static string Start(RecordingRequest r) =>
-        string.Create(Inv, $"record {CaptureProtocol.SourceSpec(r.Source)} {(r.Cursor ? 1 : 0)} {CaptureProtocol.Crop(r.Source.Crop)} {r.Sound.ToString().ToLowerInvariant()} {(r.Microphone ? 1 : 0)} {Hidden(r.Hidden)} {(int)r.AutoHide} {SensitiveText.WordsToken(r.AutoHideWords)} {r.Path}");
+        string.Create(Inv, $"record {CaptureProtocol.SourceSpec(r.Source)} {(r.Cursor ? 1 : 0)} {CaptureProtocol.Crop(r.Source.Crop)} {r.Sound.ToString().ToLowerInvariant()} {(r.Microphone ? 1 : 0)} {Hidden(r.Hidden)} {(int)r.AutoHide} {SensitiveText.WordsToken(r.AutoHideWords)} {Math.Max(0, r.ReplaySeconds)} {r.Path}");
 
     /// <summary>The hidden parts as one word: "-" for none, else boxes separated by ";".</summary>
     private static string Hidden(IReadOnlyList<CropRegion>? hidden) =>
@@ -67,13 +74,14 @@ internal static class RecordingProtocol
 
     public static RecordingRequest? ParseStart(string? line, IReadOnlyList<DisplayMonitor>? monitors = null)
     {
-        string[] p = (line ?? "").TrimStart('\uFEFF').TrimEnd('\r').Split(' ', 10); // tolerate a byte-order mark and CRLF
-        if (p.Length < 10 || p[0] != "record" || p[9].Trim().Length == 0) return null;
+        string[] p = (line ?? "").TrimStart('\uFEFF').TrimEnd('\r').Split(' ', 11); // tolerate a byte-order mark and CRLF
+        if (p.Length < 11 || p[0] != "record" || p[10].Trim().Length == 0) return null;
         SourceWindow? source = CaptureProtocol.ParseSource(p[1], monitors);
         if (source is null) return null;
         if (!Enum.TryParse(p[4], ignoreCase: true, out MeetingSound sound) || !Enum.IsDefined(sound)) return null;
-        return new RecordingRequest(source with { Crop = CaptureProtocol.ParseCrop(p[3]) }, p[2] == "1", sound, p[5] == "1", p[9], ParseHidden(p[6]),
-            CaptureProtocol.ParseAutoHide(p[7], "0").Kinds, SensitiveText.ParseWordsToken(p[8]));
+        int replay = int.TryParse(p[9], NumberStyles.None, Inv, out int r) ? Math.Min(r, ReplayBuffer.MaxSeconds) : 0;
+        return new RecordingRequest(source with { Crop = CaptureProtocol.ParseCrop(p[3]) }, p[2] == "1", sound, p[5] == "1", p[10], ParseHidden(p[6]),
+            CaptureProtocol.ParseAutoHide(p[7], "0").Kinds, SensitiveText.ParseWordsToken(p[8]), replay);
     }
 
     public static string Started(int width, int height) => string.Create(Inv, $"started {width} {height}");
@@ -87,6 +95,11 @@ internal static class RecordingProtocol
         string.Create(Inv, $"finished {end} {(long)elapsed.TotalSeconds} {bytes} {Flatten(text)}");
 
     public static string Failed(string text) => "failed " + Flatten(text);
+
+    /// <summary>The replay buffer saved the last part of what was shown (FR-106): its length and file.</summary>
+    public static string ReplaySaved(TimeSpan length, string path) => string.Create(Inv, $"replay-saved {(long)length.TotalSeconds} {path}");
+
+    public static string ReplayFailed(string text) => "replay-failed " + Flatten(text);
 
     private static string Flatten(string text) => text.Replace('\r', ' ').Replace('\n', ' ');
 }
@@ -110,6 +123,8 @@ internal sealed record RecordingReply(string Kind, long A, long B, bool Paused, 
             "finished" when p.Length > 1 && Enum.TryParse(p[1], out RecordingEnd end) && Enum.IsDefined(end) =>
                 new RecordingReply("finished", N(2), N(3), false, "", Rest(4), end),
             "failed" => new RecordingReply("failed", 0, 0, false, "", Rest(1), RecordingEnd.Error),
+            "replay-saved" when p.Length > 2 => new RecordingReply("replay-saved", N(1), 0, false, "", Rest(2), default),
+            "replay-failed" => new RecordingReply("replay-failed", 0, 0, false, "", Rest(1), default),
             _ => null,
         };
     }

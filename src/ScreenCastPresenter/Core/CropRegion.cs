@@ -14,14 +14,17 @@ internal sealed record CropRegion(double X, double Y, double Width, double Heigh
     public bool IsFull => X <= 0.0001 && Y <= 0.0001 && Width >= 0.9999 && Height >= 0.9999;
 
     /// <summary>Clamped to the source and at least <see cref="MinSize"/>; null if the input is nonsense.</summary>
-    public static CropRegion? Create(double x, double y, double width, double height)
+    public static CropRegion? Create(double x, double y, double width, double height) => Create(x, y, width, height, MinSize);
+
+    /// <summary>Clamped to the source and at least <paramref name="minSize"/> a side (small boxes over a word use a smaller minimum).</summary>
+    public static CropRegion? Create(double x, double y, double width, double height, double minSize)
     {
         if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(width) || !double.IsFinite(height)) return null;
         double left = Math.Clamp(Math.Min(x, x + width), 0, 1);
         double top = Math.Clamp(Math.Min(y, y + height), 0, 1);
         double right = Math.Clamp(Math.Max(x, x + width), 0, 1);
         double bottom = Math.Clamp(Math.Max(y, y + height), 0, 1);
-        if (right - left < MinSize || bottom - top < MinSize) return null;
+        if (right - left < minSize || bottom - top < minSize) return null;
         return new CropRegion(left, top, right - left, bottom - top);
     }
 

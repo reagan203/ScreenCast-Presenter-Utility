@@ -12,7 +12,7 @@ namespace ScreenCastPresenter;
 /// Composition root: owns the session, shortcuts, tray, badge, outline and settings, and turns
 /// every user action (shortcut, palette, tray, picker) into the same code path (<see cref="RunAsync"/>).
 /// </summary>
-internal sealed class ScpApp : IDisposable
+internal sealed partial class ScpApp : IDisposable
 {
     private static readonly double[] DimSteps = [0, 0.1, 0.2, 0.3, 0.4];
 
@@ -42,18 +42,27 @@ internal sealed class ScpApp : IDisposable
         _store = store;
         _guard = new CaptureGuard();
         _monitors = DisplayHelpers.GetMonitors();
-        _session = new SessionController(new Win32SessionPlatform(() => store.Current)) { BlankMessage = store.Current.BlankMessage };
+        _session = new SessionController(new Win32SessionPlatform(() => store.Current, () => MarksWanted)) { BlankMessage = store.Current.BlankMessage };
         _hotkeys = new HotkeyManager();
         _badge = new PresentingBadge(PresenterScreen);
         _outline = new SourceOutline();
         _recording = new RecordingController(() => new RecordingHelperProcess());
         _tray = new TrayIcon(this);
+        _commands = new CommandServer(HandleCommandLineAsync);
 
         _session.StateChanged += (_, _) => OnSessionChanged(reveal: true);
         _session.SourceGeometryChanged += (_, _) => OnSessionChanged(reveal: false);
         _session.OutputDoubleClicked += (_, _) => Guard(() => GoToShown(moveToScreen: true));
         _foreground.Changed += (_, active) => Guard(() => UpdateStepBack(active));
         _titles.TitleChanged += (_, _) => Guard(CheckBrowserPage);
+        _windowChanges.Changed += (_, _) => Guard(CheckPrivateApps);
+        _pointerTimer.Tick += (_, _) => Guard(OnPointerTick);
+        _clock.Tick += (_, _) => Guard(OnClockTick);
+        _slideshowTimer.Tick += (_, _) => _ = GuardAsync(OnSlideshowTickAsync);
+        _updateTimer.Tick += (_, _) => _ = GuardAsync(OnUpdateTimerAsync);
+        _arrivals = new ScreenArrivals(_monitors.Select(m => m.DeviceName));
+        _session.EngineChanged += (_, _) => Guard(OnEngineChanged);
+        _session.HoldCheck = source => PrivateAppOn(source) is not null ? HoldReason.PrivateApp : null;
         _session.Message += (_, message) =>
         {
             Diag("session: " + message);
@@ -76,6 +85,7 @@ internal sealed class ScpApp : IDisposable
             _trimTimer.Stop();
             TrimMemory();
         };
+        StartStage();
     }
 
     /// <summary>
@@ -150,7 +160,8 @@ internal sealed class ScpApp : IDisposable
         (_session.State != SessionState.Off ? _session.OutputIsFloating : Settings.OutputInWindow) ? OutputOption.Window : new OutputOption(ChosenOutput);
 
     /// <param name="startedByWindows">Started at sign-in (FR-42): stay quiet unless something needs attention.</param>
-    public void Start(bool startedByWindows = false)
+    /// <param name="commandLine">Started by a command-line request (FR-43): do it once ready.</param>
+    public void Start(bool startedByWindows = false, string[]? commandLine = null)
     {
         _ = _session.SetDimAsync(Settings.Dim);
         ApplyShortcuts(reportProblems: true);
@@ -159,10 +170,186 @@ internal sealed class ScpApp : IDisposable
         PreparePickerSoon();
         TryRegistry(() => _startup.RepairPath()); // portable exe moved since "start with Windows" was set
         _ = GuardAsync(OfferNewScreenAsync); // a TV plugged in before SCP started
+        _ = GuardAsync(_commands.RunAsync);  // later command-line launches come here
+        ScheduleUpdateCheck();
         if (!Settings.FirstRunDone) OpenFirstRun();
-        else if (!startedByWindows)
+        else if (!startedByWindows && commandLine is null)
             Message($"ScreenCast Presenter is ready. Click its icon by the clock{OrPress("picker")} to show something.", BadgeDot.Accent, Button("Choose what to show", OpenPicker));
+        if (commandLine is not null) _ = GuardAsync(() => HandleCommandLineAsync(commandLine));
     }
+
+    // ───────────────────────────── command line (FR-43) ─────────────────────────────
+
+    private readonly CommandServer _commands;
+
+    /// <summary>Messages shown while a command-line request runs, to explain a failure to the script.</summary>
+    private List<string>? _commandMessages;
+
+    private readonly SemaphoreSlim _commandGate = new(1, 1);
+
+    /// <summary>A command line from another launch (through the pipe) or from this one's own start.</summary>
+    private async Task<CliReply> HandleCommandLineAsync(string[] args)
+    {
+        Diag("command line: " + string.Join(' ', args));
+        (CliRequest? request, string? error) = CommandLine.Parse(args);
+        if (request is null) return Told(new CliReply(false, error ?? "That command wasn't understood."));
+        if (request.Help) return new CliReply(true, CommandLine.Usage);
+        if (_quitting) return new CliReply(false, "ScreenCast Presenter is closing.");
+        await _commandGate.WaitAsync(); // the command it started with and one from the pipe never overlap
+        List<string> shown = _commandMessages = [];
+        try
+        {
+            CliReply reply = await RunCommandLineAsync(request);
+            return shown.Contains(reply.Message) ? reply : Told(reply);
+        }
+        catch (Exception ex)
+        {
+            HandleError(ex);
+            return new CliReply(false, "Something went wrong, but ScreenCast Presenter is still running.");
+        }
+        finally
+        {
+            _commandMessages = null;
+            _commandGate.Release();
+        }
+
+        // A button deck or desktop shortcut has no console: a failure is also said on screen.
+        CliReply Told(CliReply reply)
+        {
+            if (!reply.Ok) Message(reply.Message, BadgeDot.Warning);
+            return reply;
+        }
+    }
+
+    /// <summary>The output first, then what to show, then the actions in order. Stops at the first step that can't be done.</summary>
+    private async Task<CliReply> RunCommandLineAsync(CliRequest request)
+    {
+        if (request.Output is { } output && await ApplyCommandOutputAsync(output) is { } outputProblem) return new CliReply(false, outputProblem);
+        if (request.Show is { } show && await ShowFromCommandLineAsync(show) is { } showProblem) return new CliReply(false, showProblem);
+
+        foreach (string action in request.Actions)
+        {
+            switch (action)
+            {
+                case "cli:blank-on" or "cli:blank-off":
+                    if (_session.State == SessionState.Off) return new CliReply(false, "Nothing is being shown right now.");
+                    if (_session.IsBlanked != (action == "cli:blank-on")) await _session.ToggleBlankAsync(withMessage: false);
+                    break;
+                case "cli:freeze-on" or "cli:freeze-off":
+                    if (_session.State != SessionState.Presenting) return new CliReply(false, "Nothing is being shown right now.");
+                    if (_session.IsFrozen != (action == "cli:freeze-on")) await _session.ToggleFreezeAsync();
+                    if (_session.IsFrozen != (action == "cli:freeze-on")) return new CliReply(false, LastCommandMessage("Couldn't freeze what is shown."));
+                    break;
+                case "cli:record-on":
+                    if (!_recording.IsActive) ToggleRecording();
+                    break;
+                case "stop-recording":
+                    if (_recording.IsActive) _recording.Stop();
+                    break;
+                case "pick-window" or "crop" or "hide-part" or "get-ready" or "second-tv":
+                    _ = RunCommandAsync(action); // waits for the presenter's click: don't hold up the command line meanwhile
+                    break;
+                case "save-room" or "qr":
+                    _ = RunCommandAsync(action); // asks the presenter something first: don't hold up the command line
+                    break;
+                case "caption" when Settings.CaptionName.Length == 0 && !_captionOn:
+                    _ = RunCommandAsync(action); // asks for the name first
+                    break;
+                case "cli:qr-off":
+                    if (_qrText is not null) SetQr(null);
+                    break;
+                case string qr when qr.StartsWith("cli:qr:", StringComparison.Ordinal):
+                    if (_session.State != SessionState.Presenting) return new CliReply(false, "Show something first, then put a QR code on it.");
+                    SetQr(qr["cli:qr:".Length..]);
+                    break;
+                case string room when room.StartsWith("room:", StringComparison.Ordinal):
+                    if (!await ApplyRoomAsync(room["room:".Length..])) return new CliReply(false, LastCommandMessage("That room couldn't be set up."));
+                    break;
+                default:
+                    await RunCommandAsync(action);
+                    break;
+            }
+        }
+        return new CliReply(true, CommandStatus());
+    }
+
+    /// <summary>"--output 2 | window | zoom". Null when done, else why not.</summary>
+    private async Task<string?> ApplyCommandOutputAsync(CliOutput output)
+    {
+        if (output.Window)
+        {
+            await SetOutputWindowAsync();
+            return null;
+        }
+        if (output.Zoom)
+        {
+            if (_monitors.FirstOrDefault(m => m.IsVirtual) is not { } zoom) return "No Zoom screen is set up. Use --output window, or set one up in Settings › Where it shows.";
+            await SetOutputMonitorAsync(zoom, quiet: true);
+            return null;
+        }
+        if (_monitors.FirstOrDefault(m => m.Number == output.Screen) is not { } screen)
+            return $"Screen {output.Screen} isn't connected. Connected: {string.Join(", ", _monitors.Select(m => m.Name))}.";
+        await SetOutputMonitorAsync(screen, quiet: true);
+        return null;
+    }
+
+    /// <summary>"--present", "--screen", "--camera", "--favourite", "--again". Null when it's showing, else why not.</summary>
+    private async Task<string?> ShowFromCommandLineAsync(CliShow show)
+    {
+        SourceWindow? wanted = null;
+        switch (show.Kind)
+        {
+            case CliShowKind.Window:
+                wanted = CommandLine.FindWindow(WindowEnumerator.GetPresentableWindows(), show.Value);
+                if (wanted is null) return $"No open window matches “{show.Value}”. Open it first, or check the name.";
+                await PresentAsync(wanted);
+                break;
+            case CliShowKind.Screen:
+                if (_monitors.FirstOrDefault(m => m.Number.ToString(System.Globalization.CultureInfo.InvariantCulture) == show.Value) is not { } screen)
+                    return $"Screen {show.Value} isn't connected.";
+                wanted = SourceWindow.ForScreen(screen);
+                await PresentAsync(wanted);
+                break;
+            case CliShowKind.Camera:
+                return await ShowCameraFromCommandLineAsync(show.Value);
+            case CliShowKind.Favourite:
+                int slot = int.Parse(show.Value, System.Globalization.CultureInfo.InvariantCulture);
+                if (Settings.Favourites[slot - 1] is not { } favourite) return $"Favourite {slot} is empty.";
+                await ShowFavouriteAsync(slot);
+                return ShowsNow(favourite) ? null : LastCommandMessage($"Favourite {slot} couldn't be shown.");
+            case CliShowKind.Again:
+                if (Settings.LastSource is not { } last || !await PresentLastShownAsync()) return "There's nothing to show again: the last thing shown isn't open.";
+                return ShowsNow(last) ? null : LastCommandMessage("It couldn't be shown again.");
+        }
+        bool showing = _session.State == SessionState.Presenting && (wanted is null || wanted.IsSameSource(_session.Source));
+        return showing ? null : LastCommandMessage("It couldn't be shown.");
+
+        // What's on now is that favourite (not whatever was showing before the command).
+        bool ShowsNow(Favourite expected) =>
+            _session.State == SessionState.Presenting && _session.Source is { } now && FavouriteMatcher.FromSource(now).Matches(expected);
+    }
+
+    /// <summary>"--camera Document": the camera whose name contains the text.</summary>
+    private async Task<string?> ShowCameraFromCommandLineAsync(string name)
+    {
+        List<CameraDevice> cameras = await Cameras.ListAsync(fresh: true);
+        if (Cameras.Find(cameras, name) is not { } camera)
+            return cameras.Count == 0 ? "No camera is connected." : $"No camera matches “{name}”. Connected: {string.Join(", ", cameras.Select(c => c.Name))}.";
+        SourceWindow wanted = SourceWindow.ForCamera(camera);
+        await PresentAsync(wanted);
+        return _session.State == SessionState.Presenting && wanted.IsSameSource(_session.Source) ? null : LastCommandMessage("The camera couldn't be shown.");
+    }
+
+    /// <summary>Why the last step failed, in the words shown to the presenter.</summary>
+    private string LastCommandMessage(string fallback) => _commandMessages is { Count: > 0 } m ? m[^1] : fallback;
+
+    /// <summary>What's on now, for the script's console.</summary>
+    private string CommandStatus() => _session.State switch
+    {
+        SessionState.Presenting when _session.Source is { } s => $"{(_session.IsBlanked ? $"{OutputNameCapitalised()} is blank" : ShowingText(_session.IsFrozen))}: {(s.Title.Length > 0 ? s.Title : s.AppName)}",
+        SessionState.IdleScreen => $"{OutputNameCapitalised()} shows a blank screen.",
+        _ => _recording.IsActive ? "Recording." : "Not showing anything.",
+    };
 
     // ───────────────────────────── start with Windows (FR-42) ─────────────────────────────
 
@@ -285,12 +472,20 @@ internal sealed class ScpApp : IDisposable
                 case "picker": OpenPicker(); break;
                 case "palette": OpenPalette(); break;
                 case "present-active": await PresentActiveWindowAsync(); break;
+                case "pick-window": await PickWindowAsync(); break;
                 case "previous-source": await PresentPreviousAsync(); break;
                 case "next-window": await CycleAsync(+1); break;
                 case "previous-window": await CycleAsync(-1); break;
                 case "stop": await StopShowingAsync(); break;
                 case "blank": await _session.ToggleBlankAsync(withMessage: false); break;
                 case "blank-message": await _session.ToggleBlankAsync(withMessage: true); break;
+                case "blank-countdown":
+                    if (_countdownEnd is not null && _session.IsBlanked) await _session.ToggleBlankAsync(withMessage: false); // the key again: show again
+                    else await StartCountdownAsync(Settings.CountdownMinutes);
+                    break;
+                case "restart-timer": RestartTalkTimer(); break;
+                case "slideshow": await ToggleSlideshowAsync(); break;
+                case "check-updates": await CheckForUpdatesAsync(manual: true); break;
                 case "dim": CycleDim(); break;
                 case "move-output": await MoveOutputToNextScreenAsync(); break;
                 case "switch-output": await SwitchOutputAsync(); break;
@@ -301,13 +496,38 @@ internal sealed class ScpApp : IDisposable
                 case ShortcutCatalog.PauseShortcutsId: TogglePauseShortcuts(); break;
                 case "toggle-theme": SetTheme(Theme.Opposite); break;
                 case "freeze": await _session.ToggleFreezeAsync(); break;
+                case "zoom-in": await ToggleZoomAsync(); break;
+                case "zoom-in-more": await ZoomMoreAsync(); break;
+                case "laser": SetLaser(!_laserOn); break;
+                case "draw": ToggleDrawing(); break;
+                case "inset": ToggleInset(); break;
+                case "hide-part": await HidePartAsync(); break;
+                case "show-hidden": await ShowHiddenPartsAsync(); break;
+                case "audience-view": ToggleAudienceView(); break;
+                case "get-ready": ChooseNext(); break;
+                case "go": await GoAsync(); break;
+                case "spotlight": SetSpotlight(!_spotlightOn); break;
+                case "caption": ToggleCaption(); break;
+                case "qr": ToggleQr(); break;
+                case "live-captions": ToggleLiveCaptions(); break;
+                case "second-tv": await ToggleSecondTvAsync(); break;
+                case "save-room": SaveRoom(); break;
+                case "save-scene": SaveScene(); break;
+                case "next-slide": SendSlide(forward: true); break;
+                case "previous-slide": SendSlide(forward: false); break;
+                case "stop-playlist": StopPlaylists("The playlist stopped."); break;
+                case "phone-remote": OpenPairing(); break;
+                case "auto-hide": ToggleAutoHide(); break;
+                case "highlight-clicks": SetHighlightClicks(!Settings.HighlightClicks); break;
+                case "pointer-ring": SetPointerRing(!Settings.PointerRing); break;
                 case "crop": await CropCurrentAsync(); break;
                 case "remove-crop": await RemoveCropAsync(); break;
                 case "screenshot": await TakeScreenshotAsync(); break;
                 case "record": ToggleRecording(); break;
                 case "pause-recording": TogglePauseRecording(); break;
                 default:
-                    if (TrySlot(id, "save-favourite-", out int save)) SaveFavourite(save);
+                    if (TrySlot(id, "scene-", out int scene)) await ShowSceneAsync(scene);
+                    else if (TrySlot(id, "save-favourite-", out int save)) SaveFavourite(save);
                     else if (TrySlot(id, "favourite-", out int show)) await ShowFavouriteAsync(show);
                     break;
             }
@@ -320,7 +540,20 @@ internal sealed class ScpApp : IDisposable
 
     public async Task PresentAsync(SourceWindow source)
     {
+        if (SlideshowOn && !_slideshowSwitching) StopSlideshow("Slideshow stopped: you chose something to show.");
+        PresenterChose(PlaylistScreen.Main);
+        if (IsNeverShown(source))
+        {
+            Message($"“{source.AppName}” is on your never-show list, so it isn't shown.", BadgeDot.Warning,
+                Button("Change the list", () => OpenSettings(SettingsForm.Section.Privacy), primary: false));
+            return;
+        }
         if (!await EnsureTvIsSeparateAsync()) return; // a TV copying this screen would show everything
+        if (source.Screen is { } secondScreen && _second?.FullScreenOutput is { } secondTv && secondScreen.IsSameScreen(secondTv))
+        {
+            Message($"{secondScreen.Name} is the second TV, so it can't be shown.");
+            return;
+        }
         if (_session.State == SessionState.Off) await OfferNewScreenAsync(); // plugged in since: show on it, not in the window
         OutputPlacement? placement = ChosenPlacement;
         if (placement is null)
@@ -350,7 +583,7 @@ internal sealed class ScpApp : IDisposable
                 return;
             }
         }
-        else if (!WindowEnumerator.IsAlive(source.Handle))
+        else if (source.IsWindow && !WindowEnumerator.IsAlive(source.Handle))
         {
             Message($"“{source.Title}” has closed.");
             return;
@@ -358,7 +591,7 @@ internal sealed class ScpApp : IDisposable
 
         // FR-04: apply the crop last used for this app.
         bool savedCrop = false;
-        if (!source.IsScreen && source.Crop is null && Settings.SavedCrops.TryGetValue(source.AppName, out CropRegion? crop))
+        if (source.IsWindow && source.Crop is null && Settings.SavedCrops.TryGetValue(source.AppName, out CropRegion? crop))
         {
             source = source with { Crop = crop };
             savedCrop = true;
@@ -367,7 +600,8 @@ internal sealed class ScpApp : IDisposable
         CheckDuplicateDisplay();
         bool onlyScreen = _monitors.Count < 2 && !placement.IsFloating;
         bool wasOff = _session.State == SessionState.Off;
-        await _session.PresentAsync(source, placement);
+        // The slideshow's own switch is skipped if the TV went blank, frozen or black meanwhile (checked as it runs).
+        await _session.PresentAsync(source, placement, onlyIfLive: _slideshowSwitching || _playlistSwitching);
         if (_session.State != SessionState.Presenting) return;
         if (savedCrop)
             Message("Showing the same part as last time.", BadgeDot.Accent, Button("Show all of it", RemoveCropAsync));
@@ -424,8 +658,13 @@ internal sealed class ScpApp : IDisposable
     /// Lets the user drag a part of a window or screen. Null when cancelled or impossible (the
     /// reason is shown); a null crop inside means "all of it".
     /// </summary>
-    private async Task<PartChoice?> ChoosePartAsync(SourceWindow source, string hint)
+    private async Task<PartChoice?> ChoosePartAsync(SourceWindow source, string hint, bool startFromCrop = true)
     {
+        if (source.IsCamera)
+        {
+            Message($"A camera's picture isn't on your screen to choose part of. Zoom in instead{OrPress("zoom-in")} or point the camera.");
+            return null;
+        }
         Rectangle client;
         if (source.Screen is { } screen) client = screen.Bounds;
         else
@@ -457,7 +696,7 @@ internal sealed class ScpApp : IDisposable
             return null;
         }
 
-        Rectangle? initial = source.Crop?.ToScreen(client);
+        Rectangle? initial = startFromCrop ? source.Crop?.ToScreen(client) : null;
         Rectangle? chosen = await RegionSelector.SelectAsync(area, initial, hint, host.Scale);
         if (chosen is not { } selection) return null;
 
@@ -474,7 +713,7 @@ internal sealed class ScpApp : IDisposable
             Message("Nothing is being shown right now.");
             return;
         }
-        if (!source.IsScreen && Settings.SavedCrops.Remove(source.AppName)) Save();
+        if (source.IsWindow && Settings.SavedCrops.Remove(source.AppName)) Save();
         if (source.Crop is null)
         {
             Message("All of it is already showing.");
@@ -491,6 +730,16 @@ internal sealed class ScpApp : IDisposable
     private async Task TakeScreenshotAsync()
     {
         SourceWindow? source = _session.State == SessionState.Presenting ? _session.Source : null;
+        if (source is { IsCamera: true })
+        {
+            // The camera's picture is on the TV: take the TV's screen, which shows exactly it.
+            if (_session.FullScreenOutput is not { } tv)
+            {
+                Message("A screenshot of a camera needs it shown full screen. Show it on the TV, then try again.");
+                return;
+            }
+            source = SourceWindow.ForScreen(tv);
+        }
         if (source is null)
         {
             if (PresenterScreen() is not { } screen) return;
@@ -522,7 +771,7 @@ internal sealed class ScpApp : IDisposable
         bool saved;
         try
         {
-            saved = await CaptureHost.CaptureStillToFileAsync(source, Settings.ShowCursor && source.IsScreen, path);
+            saved = await CaptureHost.CaptureStillToFileAsync(source, Settings.ShowCursor && source.IsScreen, path, Redactions.For(Settings, source));
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
@@ -599,6 +848,11 @@ internal sealed class ScpApp : IDisposable
         {
             // Recording the window's spot on screen would also record whatever covers it, so
             // record the shown window itself (it won't follow switches).
+            if (_session.Source is { IsCamera: true })
+            {
+                Message("To record a camera, show it full screen (on the TV or the Zoom screen), then record what it shows.");
+                return;
+            }
             if (_session.Source is { } shown)
             {
                 RecordSource(shown);
@@ -633,6 +887,11 @@ internal sealed class ScpApp : IDisposable
     /// <summary>Records a window or screen chosen in the picker (FR-57: carries on while you work).</summary>
     public void RecordSource(SourceWindow source)
     {
+        if (source.IsCamera)
+        {
+            Message("To record a camera, show it full screen, then record what the TV shows.");
+            return;
+        }
         if (!source.IsScreen && source.Handle == _session.OutputHandle)
         {
             RecordOutput();
@@ -656,7 +915,8 @@ internal sealed class ScpApp : IDisposable
     {
         string folder = Settings.RecordingFolder ?? SavedFiles.DefaultRecordingFolder;
         string path = SavedFiles.NextPath(folder, "Screen Recording", DateTime.Now, ".mp4", File.Exists);
-        var request = new RecordingRequest(source, Settings.ShowCursor, Settings.MeetingSound, Settings.RecordMicrophone, path);
+        // Hidden parts (FR-74) are covered in a recording of the window or screen too (the TV's own picture already has them).
+        var request = new RecordingRequest(source, Settings.ShowCursor, Settings.MeetingSound, Settings.RecordMicrophone, path, Redactions.For(Settings, source));
         if (_recording.Start(request, description, followsOutput) is { } problem)
         {
             Message("Recording didn't start: " + problem, BadgeDot.Warning);
@@ -664,6 +924,7 @@ internal sealed class ScpApp : IDisposable
         }
         Diag($"recording: start {description} sound={Settings.MeetingSound} mic={Settings.RecordMicrophone}");
         UpdateBadge(reveal: true);
+        if (!followsOutput && source.Screen is { } recordedScreen) MaybeRemindDoNotDisturb(recordedScreen);
     }
 
     public void SetRecordSound(MeetingSound sound)
@@ -817,24 +1078,33 @@ internal sealed class ScpApp : IDisposable
 
         if (s.State == SessionState.Presenting && s.Source is { } source)
         {
-            title = source.IsScreen && source.Screen is { } screen ? $"{screen.Name} (whole screen)" : source.Title.Length > 0 ? source.Title : source.AppName;
-            if (!source.IsScreen)
+            title = source.IsScreen && source.Screen is { } screen ? $"{screen.Name} (whole screen)"
+                : source.IsCamera ? $"{source.Title} (camera)"
+                : source.Title.Length > 0 ? source.Title : source.AppName;
+            if (source.IsWindow)
             {
                 thumb = source.Handle;
                 if (source.Crop is { } c) crop = c.ToPixels(WindowEnumerator.ClientSize(source.Handle));
             }
             (dot, detail) = s switch
             {
+                { IsBlanked: true } when _countdownEnd is { } end => (BadgeDot.Hollow, end > DateTime.UtcNow
+                    ? $"Blank · back in {BlankCountdown.Clock(end - DateTime.UtcNow)}" : "Blank · the break is over"),
                 { IsBlanked: true } => (BadgeDot.Hollow, $"{OutputNameCapitalised()} is blank · audience sees black"),
+                _ when s.IsHeldFor(HoldReason.PrivateApp) => (BadgeDot.Warning, $"“{_privateAppShown ?? "A never-show app"}” is open here · audience sees black"),
                 { IsAwayFromPage: true } => (BadgeDot.Warning, "On another page · audience sees black until you go back"),
                 { IsFrozen: true } => (BadgeDot.Warning, ShowingText(frozen: true) + " · click to go to it"),
                 { IsSourceMinimized: true } => (BadgeDot.Warning, "Minimised · click to restore it"),
                 _ => (BadgeDot.Accent, ShowingText(frozen: false) + (source.Crop is null ? "" : " · part of it")),
             };
-            if (!source.IsScreen) menu.Add(("Go to this window", GoToShown));
+            if (TalkText() is { Length: > 0 } talk) detail += " · " + talk;
+            if (_slideshowSlot is { } slide) detail = $"Slideshow, favourite {slide} · {detail}";
+            if (source.IsWindow) menu.Add(("Go to this window", GoToShown));
             menu.Add((s.IsBlanked ? "Show again" : "Blank the TV", () => _ = RunAsync("blank")));
             menu.Add((s.IsFrozen ? "Go live" : "Freeze the TV", () => _ = RunAsync("freeze")));
             menu.Add(("Show something else…", OpenPicker));
+            if (SlideshowOn) menu.Add(("Stop the slideshow", () => StopSlideshow("Slideshow stopped.")));
+            if (_inset is not null) menu.Add(("Take the small picture off", () => RemoveInset("The small picture is off.")));
             menu.Add(("Stop showing", () => _ = RunAsync("stop")));
         }
         else if (s.State == SessionState.IdleScreen)
@@ -872,7 +1142,12 @@ internal sealed class ScpApp : IDisposable
     /// </summary>
     private void GoToShown(bool moveToScreen)
     {
-        nint target = _session.State == SessionState.Presenting && _session.Source is { IsScreen: false } source ? source.Handle
+        if (_session.State == SessionState.Presenting && _session.Source is { IsCamera: true } camera)
+        {
+            Message($"The camera “{camera.Title}” is being shown.");
+            return;
+        }
+        nint target = _session.State == SessionState.Presenting && _session.Source is { IsWindow: true } source ? source.Handle
             : _session.State == SessionState.Off && _recording.SourceHandle != 0 ? _recording.SourceHandle : 0;
         if (target != 0)
         {
@@ -1008,12 +1283,11 @@ internal sealed class ScpApp : IDisposable
         Message(show ? "Your mouse pointer shows on the TV." : "Your mouse pointer no longer shows on the TV.");
     }
 
-    /// <summary>Shows what's shown again (a quick fade), so a changed way of showing it applies at once.</summary>
-    private async Task ReshowAsync()
-    {
-        if (_session.State != SessionState.Presenting || _session.Source is not { } shown || _session.IsFrozen || ChosenPlacement is not { } placement) return;
-        await _session.PresentAsync(shown, placement);
-    }
+    /// <summary>
+    /// Shows what's shown again with a newly chosen engine (a quick fade), so a changed way of
+    /// showing it applies at once. (Presenting the same thing again would keep the engine it has.)
+    /// </summary>
+    private Task ReshowAsync() => _session.RestartEngineAsync();
 
     private async Task PresentActiveWindowAsync()
     {
@@ -1021,9 +1295,39 @@ internal sealed class ScpApp : IDisposable
         else Message("Click into the window you want to show, then press the shortcut again.");
     }
 
+    /// <summary>
+    /// FR-05: point at a window on your own screen and click it. The shortcut again (or Esc)
+    /// cancels. The click layer and outline cover only the presenter's screens, never the TV.
+    /// </summary>
+    private async Task PickWindowAsync()
+    {
+        if (WindowPicker.Open is { } open)
+        {
+            open.Cancel(); // the shortcut toggles it
+            return;
+        }
+        _picker?.Dismiss();
+        List<DisplayMonitor> screens = PresenterScreens();
+        if (screens.Count == 0) return;
+        SourceWindow? chosen = await WindowPicker.PickAsync(screens, IsNeverShown);
+        if (chosen is null || _quitting) return;
+        await PresentAsync(chosen);
+    }
+
+    /// <summary>
+    /// The screens that are the presenter's own: all of them except the TV (the screen the
+    /// presentation fills, or will fill). With only one screen, that one.
+    /// </summary>
+    private List<DisplayMonitor> PresenterScreens()
+    {
+        DisplayMonitor? tv = _session.State != SessionState.Off ? _session.FullScreenOutput : ChosenPlacement is { IsFloating: false } p ? p.Monitor : null;
+        if (_monitors.Count < 2 || tv is null) return [.. _monitors];
+        return [.. _monitors.Where(m => !m.IsSameScreen(tv))];
+    }
+
     private async Task PresentPreviousAsync()
     {
-        if (_session.PreviousSource is { } previous && WindowEnumerator.Refresh(previous) is { } alive)
+        if (_session.PreviousSource is { } previous && (previous.IsWindow ? WindowEnumerator.Refresh(previous) : previous) is { } alive)
         {
             await PresentAsync(alive);
             return;
@@ -1041,6 +1345,12 @@ internal sealed class ScpApp : IDisposable
     private async Task<bool> PresentLastShownAsync()
     {
         if (Settings.LastSource is not { } last) return false;
+        if (last.CameraId is { } cameraId)
+        {
+            if ((await Cameras.ListAsync()).FirstOrDefault(c => c.Id == cameraId) is not { } camera) return false;
+            await PresentAsync(SourceWindow.ForCamera(camera));
+            return true;
+        }
         if (last.ScreenDevice is { } device)
         {
             if (_monitors.FirstOrDefault(m => m.DeviceName == device) is not { } screen) return false;
@@ -1064,7 +1374,7 @@ internal sealed class ScpApp : IDisposable
 
     private async Task CycleAsync(int direction)
     {
-        List<SourceWindow> windows = WindowEnumerator.GetPresentableWindows();
+        List<SourceWindow> windows = [.. WindowEnumerator.GetPresentableWindows().Where(w => !IsNeverShown(w))];
         if (OutputChooser.Cycle(windows, _session.Source, direction) is { } next) await PresentAsync(next);
         else Message("There are no windows to show.");
     }
@@ -1148,6 +1458,12 @@ internal sealed class ScpApp : IDisposable
         {
             if (_monitors.FirstOrDefault(m => m.DeviceName == device) is { } screen) await PresentAsync(SourceWindow.ForScreen(screen));
             else Message($"The screen saved as favourite {slot} isn't connected.");
+            return;
+        }
+        if (favourite.CameraId is { } cameraId)
+        {
+            if ((await Cameras.ListAsync()).FirstOrDefault(c => c.Id == cameraId) is { } camera) await PresentAsync(SourceWindow.ForCamera(camera));
+            else Message($"The camera saved as favourite {slot} (“{favourite.Title}”) isn't connected.");
             return;
         }
         SourceWindow? match = FavouriteMatcher.FindBest(favourite, WindowEnumerator.GetPresentableWindows());
@@ -1332,6 +1648,7 @@ internal sealed class ScpApp : IDisposable
     private void Save()
     {
         _session.BlankMessage = Settings.BlankMessage;
+        if (_second is { } second) second.BlankMessage = Settings.BlankMessage;
         SettingsChanged?.Invoke(this, EventArgs.Empty);
         if (_store.Save())
         {
@@ -1560,6 +1877,9 @@ internal sealed class ScpApp : IDisposable
         _shortcutsForm?.Close();
         _settingsForm?.Close();
         _firstRun?.Close();
+        _studio?.Close();
+        StopLiveCaptions(null);
+        if (_second is { } second) await second.StopAsync();
         await _session.StopAsync();
         if (_recording.IsActive)
         {
@@ -1588,6 +1908,9 @@ internal sealed class ScpApp : IDisposable
                 case "settings": OpenSettings(); return;
                 case "settings:output": OpenSettings(SettingsForm.Section.Output); return;
                 case "settings:appearance": OpenSettings(SettingsForm.Section.Appearance); return;
+                case "settings:privacy": OpenSettings(SettingsForm.Section.Privacy); return;
+                case "settings:rooms": OpenSettings(SettingsForm.Section.Rooms); return;
+                case "stop-second-tv": await StopSecondTvAsync(); return;
                 case "quit": RequestQuit(); return;
                 case "record-output": RecordOutput(); return;
                 case "record-picker": OpenRecordPicker(); return;
@@ -1601,10 +1924,26 @@ internal sealed class ScpApp : IDisposable
                     return;
                 case "stop-after:never": SetRecordingStopAfter(null); return;
             }
+            if (command.StartsWith("countdown:", StringComparison.Ordinal)
+                && int.TryParse(command.AsSpan("countdown:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int countdown))
+            {
+                await StartCountdownAsync(countdown);
+                return;
+            }
             if (command.StartsWith("stop-after:", StringComparison.Ordinal)
                 && int.TryParse(command.AsSpan("stop-after:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int minutes))
             {
                 SetRecordingStopAfter(TimeSpan.FromMinutes(minutes));
+                return;
+            }
+            if (command.StartsWith("playlist:", StringComparison.Ordinal))
+            {
+                await StartPlaylistAsync(command["playlist:".Length..]);
+                return;
+            }
+            if (command.StartsWith("room:", StringComparison.Ordinal))
+            {
+                await ApplyRoomAsync(command["room:".Length..]);
                 return;
             }
             if (command.StartsWith("output:", StringComparison.Ordinal))
@@ -1710,6 +2049,1014 @@ internal sealed class ScpApp : IDisposable
         Save();
         UpdateBrowserPage();
         if (!keep) Message("The audience now sees whichever tab or page you're on in the browser window.");
+    }
+
+    // ───────────────────────────── zoom, click highlights, pointer ring (FR-64, FR-65) ─────────────────────────────
+
+    /// <summary>About 60 times a second while zoomed in or showing clicks or the pointer ring; stopped otherwise.</summary>
+    private readonly System.Windows.Forms.Timer _pointerTimer = new() { Interval = 16 };
+
+    /// <summary>The laser pointer is on (FR-71): a red dot with a fading trail stands in for the pointer on the TV.</summary>
+    private bool _laserOn;
+
+    public bool IsLaserOn => _laserOn;
+    public bool IsDrawing => _drawing is not null;
+    public bool IsZoomed => _zoom > 0;
+
+    /// <summary>Drawing on the TV is on (FR-71); null otherwise.</summary>
+    private InkDrawing? _drawing;
+    private DrawingOverlay? _drawingOverlay;
+
+    /// <summary>What was shown when drawing started: anything else shown ends the drawing.</summary>
+    private SourceWindow? _drawingSource;
+
+    /// <summary>0 when not zoomed in; otherwise how much closer (1.5–4).</summary>
+    private double _zoom;
+
+    /// <summary>What was shown (with its crop) when zooming in: anything else shown, or a new crop, ends it.</summary>
+    private SourceWindow? _zoomSource;
+    private PointF _zoomCentre;
+    private (bool Primary, bool Secondary) _buttons;
+    private PointF? _sentPointer;
+    private PointF? _sentLaser;
+    private long _outlineTicks;
+
+    /// <summary>Marks on the TV are on, so what is shown must go through the helper, which can draw them.</summary>
+    private bool MarksWanted => PointerWanted || StageWantsHelper;
+
+    /// <summary>Marks that follow the pointer, so the pointer check must run (about 60 times a second).</summary>
+    private bool PointerWanted => Settings.HighlightClicks || Settings.PointerRing || _laserOn || _spotlightOn || _drawing is not null || _inset is not null;
+
+    /// <summary>Runs the pointer check only while something needs it (NFR-04: no work while presenting plainly).</summary>
+    private void UpdatePointerWork()
+    {
+        if (_zoom > 0 && (_session.State != SessionState.Presenting || _session.Source is not { } shown || _zoomSource is null
+                          || !shown.IsSameSource(_zoomSource) || shown.Crop != _zoomSource.Crop))
+        {
+            _zoom = 0; // something else is shown, or the crop changed: zooming in ended
+            _zoomSource = null;
+        }
+        if (_laserOn && _session.State == SessionState.Off) _laserOn = false; // stopped showing: the laser goes too
+        bool want = !_quitting && _session.State == SessionState.Presenting && (_zoom > 0 || PointerWanted);
+        if (want == _pointerTimer.Enabled) return;
+        if (want)
+        {
+            _buttons = MouseButtonsNow(); // a button already held down isn't a click
+            _pointerTimer.Start();
+        }
+        else
+        {
+            _pointerTimer.Stop();
+            _sentPointer = null;
+            _sentLaser = null;
+        }
+    }
+
+    /// <summary>A new engine took over: it starts without marks, so tell it what should be on.</summary>
+    private void OnEngineChanged()
+    {
+        _sentPointer = null;
+        _sentLaser = null;
+        if (_session.Effects is not { } effects) return;
+        if (_laserOn) effects.ShowCursor(false);
+        _drawing?.Replay(effects);
+        effects.InsetFailed -= OnInsetFailed;
+        effects.InsetFailed += OnInsetFailed;
+        if (_inset is { } inset) effects.Inset(inset, InsetLayout.ParseCorner(Settings.InsetCorner), Settings.InsetSize);
+        ReplayStage(effects);
+    }
+
+    private static (bool Primary, bool Secondary) MouseButtonsNow()
+    {
+        bool left = (Windows.Win32.PInvoke.GetAsyncKeyState((int)Keys.LButton) & 0x8000) != 0;
+        bool right = (Windows.Win32.PInvoke.GetAsyncKeyState((int)Keys.RButton) & 0x8000) != 0;
+        return PointerInput.Buttons(left, right, SystemInformation.MouseButtonsSwapped);
+    }
+
+    /// <summary>
+    /// Where the pointer is on what's shown, as a fraction of its whole area, and whether it is
+    /// really over it (not over another window in front of it). Null when it can't be placed.
+    /// </summary>
+    private (PointF At, bool Over)? PointerOnShown(SourceWindow source)
+    {
+        if (source.IsCamera) return null; // its picture isn't on the presenter's screen
+        Rectangle area = source.Screen is { } screen ? screen.Bounds
+            : WindowEnumerator.IsMinimized(source.Handle) ? Rectangle.Empty : WindowEnumerator.ClientBoundsOnScreen(source.Handle);
+        if (area.Width <= 0 || area.Height <= 0) return null;
+        Point pointer = Cursor.Position;
+        bool over = area.Contains(pointer) && (source.IsScreen || WindowEnumerator.RootAt(pointer) == source.Handle);
+        return (PointerInput.Fraction(pointer, area), over);
+    }
+
+    private void OnPointerTick()
+    {
+        if (_session.State != SessionState.Presenting || _session.Source is not { } source)
+        {
+            UpdatePointerWork();
+            return;
+        }
+        (PointF At, bool Over)? pointer = PointerOnShown(source);
+        bool frozen = _session.IsFrozen;
+
+        // Zoomed in: the view follows the pointer while it's over what's shown (not while frozen: the TV holds still).
+        if (_zoom > 0 && !frozen && _drawing is null && pointer is { Over: true } p)
+        {
+            _zoomCentre = ZoomView.Ease(_zoomCentre, p.At);
+            _session.SetView(ZoomView.View(_zoomCentre, _zoom, source.Crop));
+            long now = Environment.TickCount64;
+            if (now - _outlineTicks > 50)
+            {
+                _outlineTicks = now;
+                UpdateOutline();
+            }
+        }
+
+        (bool Primary, bool Secondary) buttons = MouseButtonsNow();
+        (bool Primary, bool Secondary) pressed = PointerInput.Pressed(_buttons, buttons);
+        _buttons = buttons;
+        if (_session.Effects is not { } effects) return;
+
+        // While frozen the presenter may be working privately: no clicks, ring or laser go to the TV.
+        // While it's black (blank or held) there's nothing to mark, and the helper can rest.
+        bool hidden = frozen || _session.IsBlanked || _session.IsHeld;
+        PointF? at = !hidden && pointer is { Over: true } q ? q.At : null;
+        if (Settings.HighlightClicks && at is { } click)
+        {
+            if (pressed.Primary) effects.Click(click, secondary: false);
+            if (pressed.Secondary) effects.Click(click, secondary: true);
+        }
+        PointF? ring = Settings.PointerRing ? at : null;
+        if (ring != _sentPointer)
+        {
+            _sentPointer = ring;
+            effects.Pointer(ring);
+        }
+        PointF? laser = _laserOn ? at : null;
+        if (laser != _sentLaser)
+        {
+            _sentLaser = laser;
+            effects.Laser(laser);
+        }
+        SendSpotlight(effects, at);
+    }
+
+    /// <summary>Ctrl+Alt+Z: zoom in around the pointer, or back out. Through black, like a crop.</summary>
+    private async Task ToggleZoomAsync()
+    {
+        if (_session.State != SessionState.Presenting || _session.Source is not { } source)
+        {
+            Message("Show something first, then zoom in on it.");
+            return;
+        }
+        if (_zoom > 0)
+        {
+            await ZoomOutAsync();
+            return;
+        }
+        double level = ZoomView.Normalize(Settings.ZoomLevel);
+        _zoomCentre = PointerOnShown(source) is { Over: true } p ? p.At : ZoomView.Middle(source.Crop);
+        _zoom = level;
+        _zoomSource = source;
+        await _session.SetViewAsync(ZoomView.View(_zoomCentre, level, source.Crop));
+        if (_session.View is null)
+        {
+            _zoom = 0;
+            _zoomSource = null;
+            return;
+        }
+        UpdatePointerWork();
+        UpdateOutline();
+        Message($"Zoomed in {level:0.#}×. The TV follows your pointer over what you show.", BadgeDot.Accent,
+            Button("Zoom out", ZoomOutAsync), Button("Closer", ZoomMoreAsync, primary: false));
+    }
+
+    private async Task ZoomOutAsync()
+    {
+        if (_zoom <= 0) return;
+        _zoom = 0;
+        _zoomSource = null;
+        await _session.SetViewAsync(null);
+        UpdatePointerWork();
+        UpdateOutline();
+    }
+
+    /// <summary>Ctrl+Alt+Shift+Z: zoom in, or closer still (1.5× → 2× → 3× → 4× → 1.5×). Remembered for next time.</summary>
+    private async Task ZoomMoreAsync()
+    {
+        if (_zoom <= 0)
+        {
+            await ToggleZoomAsync();
+            return;
+        }
+        if (_session.Source is not { } source) return;
+        _zoom = ZoomView.Next(_zoom);
+        Settings.ZoomLevel = _zoom;
+        Save();
+        _session.SetView(ZoomView.View(_zoomCentre, _zoom, source.Crop));
+        UpdateOutline();
+        _drawingOverlay?.UpdateGeometry(); // drawing: the layer covers the newly shown part
+        Message($"Zoomed in {_zoom:0.#}×.");
+    }
+
+    /// <summary>
+    /// The laser pointer (FR-71): a red dot with a short fading trail follows the mouse over what
+    /// is shown, and the real pointer is hidden on the TV meanwhile. It stays on through switches,
+    /// and goes off when showing stops.
+    /// </summary>
+    private void SetLaser(bool on)
+    {
+        if (on && _session.State != SessionState.Presenting)
+        {
+            Message("Show something first, then use the laser pointer.");
+            return;
+        }
+        if (on == _laserOn) return;
+        _laserOn = on;
+        ApplyMarksChange();
+        _session.Effects?.ShowCursor(!on);
+        if (!on)
+        {
+            _session.Effects?.Laser(null);
+            _sentLaser = null;
+        }
+        Message(on ? "Laser pointer on: a red dot follows your mouse over what you show." : "Laser pointer off.", BadgeDot.Accent,
+            Button(on ? "Turn it off" : "Turn it on", () => SetLaser(!on), primary: false));
+    }
+
+    /// <summary>
+    /// Ctrl+Alt+Shift+D: draw on what is shown, for the TV (FR-71). A see-through layer covers the
+    /// part the audience sees, on your own screen; lines appear on the TV as you draw. Done or Esc
+    /// ends it and clears the drawing from the TV.
+    /// </summary>
+    private void ToggleDrawing()
+    {
+        if (_drawing is not null)
+        {
+            StopDrawing();
+            return;
+        }
+        if (_session.State != SessionState.Presenting || _session.Source is not { } source)
+        {
+            Message("Show something first, then draw on it.");
+            return;
+        }
+        if (source.IsCamera)
+        {
+            Message("Drawing works on windows and screens: a camera's picture isn't on your screen to draw over.");
+            return;
+        }
+        if (source.IsWindow && WindowEnumerator.IsMinimized(source.Handle))
+        {
+            Message($"Restore “{Shorten(source.Title, 40)}” first, then draw on it.");
+            return;
+        }
+        if (DrawingGeometry() is null)
+        {
+            Message("Move the window onto your own screen first, then draw on it.");
+            return;
+        }
+        if (_laserOn) SetLaser(false);
+        _drawing = new InkDrawing();
+        _drawingSource = source;
+        ApplyMarksChange(); // shown the light way: shown again through the helper, which can draw
+        var overlay = new DrawingOverlay(_drawing, () => _session.Effects, DrawingGeometry, PresenterScreen()?.Scale ?? 1);
+        overlay.Closed += (_, _) => Guard(StopDrawing);
+        overlay.LaserChosen += (_, _) => Guard(() => SetLaser(true));
+        _drawingOverlay = overlay;
+        overlay.Show();
+        if (_drawing is null) return; // it closed at once (nothing left to draw on)
+        Message($"Draw on what you show: the audience sees it as you draw. Press Esc or Done to stop{OrPress("draw")}; that clears the drawing.", BadgeDot.Accent);
+    }
+
+    /// <summary>
+    /// Where to draw: the content's whole area on screen (what the lines are measured against) and
+    /// the part of it the audience sees (crop or zoom), kept to the presenter's own screens.
+    /// </summary>
+    private (Rectangle Area, Rectangle Shown)? DrawingGeometry()
+    {
+        if (_session.State != SessionState.Presenting || _session.Source is not { } source || source.IsCamera) return null;
+        Rectangle area = source.Screen is { } screen ? screen.Bounds
+            : WindowEnumerator.IsAlive(source.Handle) && !WindowEnumerator.IsMinimized(source.Handle) ? WindowEnumerator.ClientBoundsOnScreen(source.Handle) : Rectangle.Empty;
+        if (area.Width <= 0 || area.Height <= 0) return null;
+        Rectangle shown = (_session.View ?? source.Crop)?.ToScreen(area) ?? area;
+        Rectangle onMine = PresenterScreens().Select(m => Rectangle.Intersect(m.Bounds, shown)).OrderByDescending(r => (long)r.Width * r.Height).FirstOrDefault();
+        return onMine.Width > 0 && onMine.Height > 0 ? (area, onMine) : null;
+    }
+
+    /// <summary>Something else shown, stopped or minimised: the drawing ends. Moved or resized: the layer follows.</summary>
+    private void UpdateDrawing()
+    {
+        if (_drawing is null) return;
+        if (_session.State != SessionState.Presenting || _session.Source is not { } source || !source.IsSameSource(_drawingSource)
+            || source.IsWindow && WindowEnumerator.IsMinimized(source.Handle))
+        {
+            StopDrawing();
+            return;
+        }
+        _drawingOverlay?.UpdateGeometry();
+    }
+
+    private void StopDrawing()
+    {
+        if (_drawing is null) return;
+        _drawing = null;
+        _drawingSource = null;
+        DrawingOverlay? overlay = _drawingOverlay;
+        _drawingOverlay = null;
+        overlay?.Close();
+        overlay?.Dispose();
+        _session.Effects?.InkClear(); // the drawing goes from the TV too
+        UpdatePointerWork();
+    }
+
+    /// <summary>Settings › Where it shows › Zoom.</summary>
+    public void SetZoomLevel(double level)
+    {
+        Settings.ZoomLevel = ZoomView.Normalize(level);
+        Save();
+        if (_zoom > 0 && _session.Source is { } source)
+        {
+            _zoom = Settings.ZoomLevel;
+            _session.SetView(ZoomView.View(_zoomCentre, _zoom, source.Crop));
+            UpdateOutline();
+            _drawingOverlay?.UpdateGeometry();
+        }
+    }
+
+    public void SetHighlightClicks(bool on)
+    {
+        Settings.HighlightClicks = on;
+        Save();
+        ApplyMarksChange();
+        Message(on ? "Your clicks show as rings on the TV." : "Clicks no longer show on the TV.", BadgeDot.Accent,
+            Button("Undo", () => SetHighlightClicks(!on), primary: false));
+    }
+
+    public void SetPointerRing(bool on)
+    {
+        Settings.PointerRing = on;
+        Save();
+        ApplyMarksChange();
+        Message(on ? "A ring follows your pointer on the TV, so the room can see it." : "The ring around your pointer is off.", BadgeDot.Accent,
+            Button("Undo", () => SetPointerRing(!on), primary: false));
+    }
+
+    /// <summary>
+    /// Marks were switched on or off: shown with the light way (which can't draw them), it is shown
+    /// again through the helper, with a quick fade. The pointer check starts or stops.
+    /// </summary>
+    private void ApplyMarksChange()
+    {
+        if (MarksWanted && _session.State == SessionState.Presenting && _session.Effects is null && !_session.IsFrozen) _ = GuardAsync(ReshowAsync);
+        UpdatePointerWork();
+    }
+
+    // ───────────────────────────── countdown and talk timer (FR-66, FR-67) ─────────────────────────────
+
+    /// <summary>Four times a second while something is shown and a countdown or the talk timer needs it.</summary>
+    private readonly System.Windows.Forms.Timer _clock = new() { Interval = 250 };
+    private readonly TalkTimer _talk = new();
+    private DateTime? _countdownEnd;
+    private bool _toldBreakOver;
+    private string? _lastTalkText;
+
+    /// <summary>The talk timer starts with showing and resets when it stops; the clock runs only while needed.</summary>
+    private void UpdateClock()
+    {
+        if (_session.State == SessionState.Off)
+        {
+            _talk.Reset();
+            StopCountdown();
+        }
+        else _talk.Start(DateTime.UtcNow);
+        bool want = !_quitting && _session.State != SessionState.Off && (_countdownEnd is not null || Settings.ShowTalkTimer || Settings.TalkMinutes > 0);
+        if (want == _clock.Enabled) return;
+        if (want) _clock.Start();
+        else _clock.Stop();
+    }
+
+    private void OnClockTick()
+    {
+        DateTime now = DateTime.UtcNow;
+        if (_countdownEnd is { } end) TickCountdown(now, end);
+        switch (_talk.Check(now, Settings.TalkMinutes))
+        {
+            case TalkAlert.TwoMinutesLeft:
+                Message("Two minutes left in your talk.");
+                break;
+            case TalkAlert.TimeUp:
+                Message($"Time's up: you've talked for {Settings.TalkMinutes} minutes.", BadgeDot.Warning, Button("Restart the timer", RestartTalkTimer, primary: false));
+                break;
+        }
+        // The bar shows the talk time and the countdown: redraw it when either has moved on a second.
+        string talk = TalkText() + (_countdownEnd is { } shownEnd ? "|" + BlankCountdown.Clock(shownEnd - now) : "");
+        if (talk != _lastTalkText)
+        {
+            _lastTalkText = talk;
+            UpdateWidget(); // once a second: only the bar on the presenter's screen changes
+        }
+    }
+
+    /// <summary>"12:04" or "12:04 of 20:00" for the now-showing bar; empty when switched off or not showing.</summary>
+    private string TalkText() =>
+        Settings.ShowTalkTimer && _session.State != SessionState.Off && _talk.Started is not null ? _talk.Text(DateTime.UtcNow, Settings.TalkMinutes) : "";
+
+    private void RestartTalkTimer()
+    {
+        if (_session.State == SessionState.Off)
+        {
+            Message("The talk timer starts when you show something.");
+            return;
+        }
+        _talk.Reset();
+        _talk.Start(DateTime.UtcNow);
+        _lastTalkText = null;
+        Message("The talk timer starts again from 0:00.");
+    }
+
+    /// <summary>
+    /// Blank with a countdown (FR-66): the TV shows the blank message and the time left. At the end
+    /// it says the break is over but stays blank, because what is shown may have changed during
+    /// the break: only the presenter brings it back.
+    /// </summary>
+    private async Task StartCountdownAsync(int minutes)
+    {
+        if (_session.State == SessionState.Off)
+        {
+            Message("Show something first, then blank it with a countdown.");
+            return;
+        }
+        minutes = BlankCountdown.Normalize(minutes);
+        TimeSpan length = TimeSpan.FromMinutes(minutes);
+        _countdownEnd = DateTime.UtcNow + length;
+        _toldBreakOver = false;
+        await _session.BlankWithMessageAsync(BlankCountdown.Text(Settings.BlankMessage, length));
+        if (!_session.IsBlanked)
+        {
+            _countdownEnd = null;
+            return;
+        }
+        UpdateClock();
+        UpdateWidget();
+        Message($"The TV counts down {minutes} minute{(minutes == 1 ? "" : "s")}. When it ends, it stays blank until you show it again.", BadgeDot.Accent,
+            Button("Show again now", () => _ = RunAsync("blank"), primary: false));
+    }
+
+    private void TickCountdown(DateTime now, DateTime end)
+    {
+        if (!_session.IsBlanked || _session.State == SessionState.Off)
+        {
+            StopCountdown(); // shown again, stopped, or the window closed
+            return;
+        }
+        TimeSpan left = end - now;
+        _session.UpdateIdleMessage(BlankCountdown.Text(Settings.BlankMessage, left));
+        if (left <= TimeSpan.Zero && !_toldBreakOver)
+        {
+            _toldBreakOver = true;
+            Message("The break is over. The TV stays blank until you show it again.", BadgeDot.Accent, Button("Show again", () => _ = RunAsync("blank")));
+            UpdateWidget();
+        }
+    }
+
+    private void StopCountdown()
+    {
+        if (_countdownEnd is null) return;
+        _countdownEnd = null;
+        // A blank screen left behind (the window closed meanwhile) keeps its message, without a time that no longer counts.
+        _session.UpdateIdleMessage(Settings.BlankMessage);
+        UpdateWidget();
+    }
+
+    /// <summary>Settings › Where it shows › Countdown.</summary>
+    public void SetCountdownMinutes(int minutes)
+    {
+        Settings.CountdownMinutes = BlankCountdown.Normalize(minutes);
+        Save();
+    }
+
+    /// <summary>Settings › General › Talk timer.</summary>
+    public void SetShowTalkTimer(bool show)
+    {
+        Settings.ShowTalkTimer = show;
+        Save();
+        _lastTalkText = null;
+        UpdateClock();
+        UpdateWidget();
+    }
+
+    /// <summary>Settings › General › Talk length (0 = none).</summary>
+    public void SetTalkMinutes(int minutes)
+    {
+        Settings.TalkMinutes = TalkTimer.Normalize(minutes);
+        Save();
+        UpdateClock();
+    }
+
+    // ───────────────────────────── picture-in-picture (FR-72) ─────────────────────────────
+
+    /// <summary>What the small picture in a corner of the TV shows; null when there's none.</summary>
+    private SourceWindow? _inset;
+
+    public bool HasInset => _inset is not null;
+
+    /// <summary>The "small picture" action: takes it off, or opens the picker to choose one.</summary>
+    private void ToggleInset()
+    {
+        if (_inset is not null)
+        {
+            RemoveInset("The small picture is off.");
+            return;
+        }
+        if (_session.State != SessionState.Presenting)
+        {
+            Message("Show something first, then add a small picture to it, like you on a webcam.");
+            return;
+        }
+        OpenPicker(PickerMode.Inset);
+    }
+
+    /// <summary>Shows <paramref name="source"/> small in a corner of the TV, over what's shown.</summary>
+    public async Task SetInsetAsync(SourceWindow source)
+    {
+        if (_session.State != SessionState.Presenting || _session.Source is not { } main)
+        {
+            Message("Show something first, then add a small picture to it.");
+            return;
+        }
+        if (source.IsSameSource(main))
+        {
+            Message("That's already the main picture. Choose something else to show small.");
+            return;
+        }
+        if (IsNeverShown(source))
+        {
+            Message($"“{source.AppName}” is on your never-show list, so it isn't shown.", BadgeDot.Warning);
+            return;
+        }
+        if (source.Screen is { } screen && _session.FullScreenOutput is { } tv && screen.IsSameScreen(tv))
+        {
+            Message($"{screen.Name} is where your presentation is shown, so it can't be shown small on itself.");
+            return;
+        }
+        if (source.IsWindow && !WindowEnumerator.IsAlive(source.Handle))
+        {
+            Message($"“{Shorten(source.Title, 40)}” has closed.");
+            return;
+        }
+        _inset = source;
+        UpdatePrivateAppGuard(); // a never-show app on a screen shown small: black before the small picture is sent
+        if (_session.Effects is null) await ReshowAsync(); // shown the light way: again through the helper, which sends the small picture with it
+        else _session.Effects.Inset(source, InsetLayout.ParseCorner(Settings.InsetCorner), Settings.InsetSize);
+        if (_qrText is { } qrNow) _session.Effects?.Qr(qrNow, QrCorner()); // the QR code moves out of the small picture's corner
+        UpdatePointerWork();
+        UpdateWidget();
+        string name = source.Screen is { } s ? s.Name : Shorten(source.Title.Length > 0 ? source.Title : source.AppName, 40);
+        Message($"“{name}” shows small in the {InsetLayout.Words(InsetLayout.ParseCorner(Settings.InsetCorner))} corner.", BadgeDot.Accent,
+            Button("Take it off", () => RemoveInset(null), primary: false));
+    }
+
+    private void RemoveInset(string? why)
+    {
+        if (_inset is null) return;
+        _inset = null;
+        _session.Effects?.Inset(null, InsetCorner.BottomRight, Settings.InsetSize);
+        if (_qrText is { } qrNow) _session.Effects?.Qr(qrNow, QrCorner());
+        UpdatePrivateAppGuard();
+        UpdatePointerWork();
+        UpdateWidget();
+        if (why is not null) Message(why);
+    }
+
+    /// <summary>The small picture's window closed or its camera was unplugged: it's already off in the helper.</summary>
+    private void OnInsetFailed(object? sender, string reason)
+    {
+        if (_inset is null || !ReferenceEquals(sender, _session.Effects)) return;
+        _inset = null;
+        UpdatePrivateAppGuard();
+        UpdateWidget();
+        Message(reason, BadgeDot.Warning);
+    }
+
+    /// <summary>Stopped showing: the small picture goes. What it showed became the main picture: it goes too.</summary>
+    private void UpdateInset()
+    {
+        if (_inset is null) return;
+        if (_session.State != SessionState.Presenting) RemoveInset(null); // stopped, or the shown window closed: it goes with the picture
+        else if (_session.Source is { } main && main.IsSameSource(_inset)) RemoveInset("That's the main picture now, so the small one is off.");
+    }
+
+    /// <summary>Settings › Where it shows › Small picture.</summary>
+    public void SetInsetPlace(InsetCorner corner, int percent)
+    {
+        Settings.InsetCorner = corner.ToString();
+        Settings.InsetSize = InsetLayout.Normalize(percent);
+        Save();
+        if (_inset is { } inset) _session.Effects?.Inset(inset, corner, Settings.InsetSize);
+        if (_qrText is { } qrNow) _session.Effects?.Qr(qrNow, QrCorner());
+    }
+
+    // ───────────────────────────── slideshow of favourites (FR-69) ─────────────────────────────
+
+    private readonly System.Windows.Forms.Timer _slideshowTimer = new();
+
+    /// <summary>The favourite the slideshow is showing; null when it's off.</summary>
+    private int? _slideshowSlot;
+
+    /// <summary>The slideshow itself is choosing what to show (so that doesn't count as the presenter choosing).</summary>
+    private bool _slideshowSwitching;
+    private bool _slideshowTicking;
+
+    public bool SlideshowOn => _slideshowSlot is not null;
+
+    /// <summary>Ctrl+Alt+L: play the favourites one after another, or stop.</summary>
+    private async Task ToggleSlideshowAsync()
+    {
+        if (SlideshowOn)
+        {
+            StopSlideshow("Slideshow stopped.");
+            return;
+        }
+        int? first = Slideshow.Next(Settings.Favourites, null, await FavouriteAvailabilityAsync());
+        if (first is not { } slot)
+        {
+            Message(Settings.Favourites.Any(f => f is not null)
+                ? "None of your favourites can be shown right now. Open them first, then try again."
+                : "Save a few favourites first (show something, then save it from the tray menu under Favourites), then play them one after another.");
+            return;
+        }
+        await ShowSlideAsync(slot);
+        if (!SlideshowOn) return;
+        Message($"Slideshow: your favourites one after another, {Slideshow.Words(Settings.SlideshowSeconds)} each. Choosing something else stops it.", BadgeDot.Accent,
+            Button("Stop the slideshow", () => StopSlideshow("Slideshow stopped."), primary: false));
+    }
+
+    /// <summary>Which favourites can be shown now: the app open (and not never-shown), the screen connected and not the TV, the camera plugged in.</summary>
+    private async Task<Func<Favourite, bool>> FavouriteAvailabilityAsync()
+    {
+        List<SourceWindow> windows = WindowEnumerator.GetPresentableWindows();
+        List<CameraDevice> cameras = Settings.Favourites.Any(f => f?.CameraId is not null) ? await Cameras.ListAsync() : [];
+        DisplayMonitor? tv = _session.FullScreenOutput ?? (ChosenPlacement is { IsFloating: false } p && _monitors.Count > 1 ? p.Monitor : null);
+        return f => f.ScreenDevice is { } device ? _monitors.Any(m => m.DeviceName == device) && tv?.DeviceName != device
+            : f.CameraId is { } id ? cameras.Any(c => c.Id == id)
+            : FavouriteMatcher.FindBest(f, windows) is { } w && !IsNeverShown(w);
+    }
+
+    private async Task ShowSlideAsync(int slot)
+    {
+        _slideshowSwitching = true;
+        try
+        {
+            await ShowFavouriteAsync(slot);
+        }
+        finally
+        {
+            _slideshowSwitching = false;
+        }
+        if (_session.State != SessionState.Presenting)
+        {
+            StopSlideshow(null);
+            return;
+        }
+        _slideshowSlot = slot;
+        _slideshowTimer.Stop();
+        _slideshowTimer.Interval = Settings.SlideshowSeconds * 1000;
+        _slideshowTimer.Start();
+        UpdateWidget();
+    }
+
+    private async Task OnSlideshowTickAsync()
+    {
+        if (!SlideshowOn || _slideshowTicking) return;
+        // Blank, frozen or held black: the slideshow waits, so it never changes what's behind the black.
+        if (_session.State != SessionState.Presenting || _session.IsBlanked || _session.IsFrozen || _session.IsHeld) return;
+        _slideshowTicking = true;
+        try
+        {
+            int? next = Slideshow.Next(Settings.Favourites, _slideshowSlot, await FavouriteAvailabilityAsync());
+            if (!SlideshowOn) return;
+            if (next is not { } slot)
+            {
+                StopSlideshow("None of your favourites can be shown any more, so the slideshow stopped.");
+                return;
+            }
+            if (slot == _slideshowSlot) return; // only one can be shown: it stays
+            await ShowSlideAsync(slot);
+        }
+        finally
+        {
+            _slideshowTicking = false;
+        }
+    }
+
+    private void StopSlideshow(string? why)
+    {
+        if (!SlideshowOn) return;
+        _slideshowSlot = null;
+        _slideshowTimer.Stop();
+        if (why is not null) Message(why);
+        UpdateWidget();
+    }
+
+    /// <summary>Settings › Where it shows › Slideshow.</summary>
+    public void SetSlideshowSeconds(int seconds)
+    {
+        Settings.SlideshowSeconds = Slideshow.Normalize(seconds);
+        Save();
+        if (SlideshowOn)
+        {
+            _slideshowTimer.Interval = Settings.SlideshowSeconds * 1000;
+        }
+    }
+
+    // ───────────────────────────── update check (FR-73) ─────────────────────────────
+
+    /// <summary>The first look 30 seconds after start (never slowing it), then every few hours whether a day has passed.</summary>
+    private readonly System.Windows.Forms.Timer _updateTimer = new();
+    private bool _checkingForUpdates;
+
+    private void ScheduleUpdateCheck()
+    {
+        _updateTimer.Stop();
+        if (!Settings.CheckForUpdates || _quitting) return;
+        _updateTimer.Interval = 30_000;
+        _updateTimer.Start();
+    }
+
+    private async Task OnUpdateTimerAsync()
+    {
+        _updateTimer.Interval = (int)TimeSpan.FromHours(6).TotalMilliseconds;
+        if (Settings.CheckForUpdates && UpdateCheck.IsDue(Settings.LastUpdateCheckUtc, DateTime.UtcNow)) await CheckForUpdatesAsync(manual: false);
+    }
+
+    /// <summary>
+    /// Asks (through the helper) whether a newer version is out, and says so with a link to its
+    /// release page. Asked by hand, it also says when it's up to date or couldn't tell; a version
+    /// skipped earlier is told about again then.
+    /// </summary>
+    public async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (_checkingForUpdates)
+        {
+            if (manual) Message("Already checking for updates…");
+            return;
+        }
+        _checkingForUpdates = true;
+        UpdateResult result;
+        try
+        {
+            result = await RunUpdateHelperAsync();
+        }
+        finally
+        {
+            _checkingForUpdates = false;
+        }
+        Settings.LastUpdateCheckUtc = DateTime.UtcNow;
+        Save();
+        Diag($"update check: {UpdateCheck.Reply(result)}");
+        Version current = typeof(ScpApp).Assembly.GetName().Version ?? new Version(1, 0, 0);
+        if (result.Version is { } latest && UpdateCheck.IsNewer(latest, current, manual ? null : Settings.SkippedVersion) && UpdateCheck.ReleasePage(result.Tag) is { } page)
+        {
+            string tag = result.Tag!;
+            Message($"ScreenCast Presenter {tag} is out (you have {current.ToString(3)}).", BadgeDot.Accent,
+                Button("See what's new", () => ShellOpen(page)), Button("Skip this version", () => SkipVersion(tag), primary: false));
+            return;
+        }
+        if (manual)
+            Message(result.Problem is { } problem ? $"Couldn't check for updates. {problem}" : $"You have the latest version ({current.ToString(3)}).",
+                result.Problem is null ? BadgeDot.Accent : BadgeDot.Warning);
+    }
+
+    private void SkipVersion(string tag)
+    {
+        Settings.SkippedVersion = tag;
+        Save();
+        Message($"You won't be told about {tag} again. A newer version will still be announced.");
+    }
+
+    /// <summary>The helper does the asking (the app itself never touches the network); one line comes back.</summary>
+    private static async Task<UpdateResult> RunUpdateHelperAsync()
+    {
+        try
+        {
+            var info = new ProcessStartInfo(Exe, UpdateCheck.Switch)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = new System.Text.UTF8Encoding(false),
+            };
+            using Process? helper = Process.Start(info);
+            if (helper is null) return new UpdateResult(null, null, "The check couldn't start.");
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            try
+            {
+                string? line = await helper.StandardOutput.ReadLineAsync(timeout.Token);
+                await helper.WaitForExitAsync(timeout.Token);
+                return UpdateCheck.ParseReply(line);
+            }
+            catch (OperationCanceledException)
+            {
+                try
+                {
+                    helper.Kill();
+                }
+                catch (InvalidOperationException)
+                {
+                    // it ended just now
+                }
+                return new UpdateResult(null, null, "GitHub took too long to answer.");
+            }
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            Debug.WriteLine(ex);
+            return new UpdateResult(null, null, "The check couldn't start.");
+        }
+    }
+
+    /// <summary>Settings › Advanced › Check for updates. Switched on, it looks straight away and says what it found.</summary>
+    public void SetCheckForUpdates(bool on)
+    {
+        Settings.CheckForUpdates = on;
+        Save();
+        ScheduleUpdateCheck();
+        if (on) _ = GuardAsync(() => CheckForUpdatesAsync(manual: true));
+    }
+
+    // ───────────────────────────── a TV plugged in (FR-70) ─────────────────────────────
+
+    private readonly ScreenArrivals _arrivals;
+
+    /// <summary>
+    /// A TV or projector was just plugged in and nothing is shown: offer to show the last thing on
+    /// it (or to choose something). Not for a Zoom screen, not while set to show in a window (that
+    /// has its own offer), and not while a copying TV is being made separate (that says so itself).
+    /// </summary>
+    private void OfferArrivedScreen(List<string> arrived)
+    {
+        if (arrived.Count == 0 || !Settings.OfferNewScreen || _quitting || _session.State != SessionState.Off || Settings.OutputInWindow || _forcingExtend is not null) return;
+        if (_monitors.Where(m => arrived.Contains(m.DeviceName, StringComparer.OrdinalIgnoreCase) && !m.IsVirtual && !m.IsPrimary)
+                .OrderBy(m => m.IsTv ? 0 : 1).FirstOrDefault() is not { } screen) return;
+        string what = screen.IsTv ? "A TV" : "A screen";
+        if (Settings.LastSource is { Title.Length: > 0 } last)
+        {
+            Message($"{what} is connected ({screen.Name}). Show “{Shorten(last.Title, 40)}” on it?", BadgeDot.Accent,
+                Button("Show it there", () => ShowOnArrivedScreenAsync(screen, again: true)),
+                Button("Choose something else", () => ShowOnArrivedScreenAsync(screen, again: false), primary: false));
+            return;
+        }
+        Message($"{what} is connected ({screen.Name}). Show something on it?", BadgeDot.Accent,
+            Button("Choose what to show", () => ShowOnArrivedScreenAsync(screen, again: false)));
+    }
+
+    private async Task ShowOnArrivedScreenAsync(DisplayMonitor screen, bool again)
+    {
+        if (_monitors.FirstOrDefault(m => m.IsSameScreen(screen)) is not { } connected)
+        {
+            Message("That screen isn't connected any more.");
+            return;
+        }
+        await SetOutputMonitorAsync(connected, quiet: true);
+        if (again && await PresentLastShownAsync()) return;
+        OpenPicker();
+    }
+
+    /// <summary>Settings › Where it shows › When a TV is plugged in.</summary>
+    public void SetOfferNewScreen(bool offer)
+    {
+        Settings.OfferNewScreen = offer;
+        Save();
+    }
+
+    // ───────────────────────────── never-show apps ─────────────────────────────
+
+    private readonly WindowChangeWatcher _windowChanges = new();
+
+    /// <summary>The never-show app holding a whole screen black right now (named in messages).</summary>
+    private string? _privateAppShown;
+
+    /// <summary>A window of an app on the never-show list (a whole screen is checked as it's shown instead).</summary>
+    public bool IsNeverShown(SourceWindow source) => source.IsWindow && NeverShow.IsBlocked(Settings.NeverShowApps, source.AppName);
+
+    /// <summary>The area of the screen the audience sees, for a whole-screen source; null for a window.</summary>
+    private static Rectangle? ShownScreenArea(SourceWindow source) =>
+        source.Screen is { } screen ? source.Crop?.ToScreen(screen.Bounds) ?? screen.Bounds : null;
+
+    /// <summary>A never-show app's window on the part of a screen being shown: the main picture, or a whole screen shown small (FR-72).</summary>
+    private VisibleWindow? PrivateAppOn(SourceWindow source)
+    {
+        Rectangle? main = ShownScreenArea(source), small = _inset is { } inset ? ShownScreenArea(inset) : null;
+        if (main is null && small is null || Settings.NeverShowApps.Count == 0) return null;
+        // Names are looked up afresh each time: Windows reuses process ids, so a cached name could
+        // belong to a closed app while a never-show app now has its id.
+        List<VisibleWindow> windows = WindowEnumerator.GetVisibleWindows([]);
+        return (main is { } m ? NeverShow.FindOnScreen(windows, m, Settings.NeverShowApps) : null)
+            ?? (small is { } s ? NeverShow.FindOnScreen(windows, s, Settings.NeverShowApps) : null);
+    }
+
+    /// <summary>
+    /// While a whole screen is shown, watch for never-show apps on it: the picture cuts to black the
+    /// moment one appears there and fades back once it's minimised, closed or moved away.
+    /// </summary>
+    private void UpdatePrivateAppGuard()
+    {
+        bool watch = !_quitting && Settings.NeverShowApps.Count > 0
+            && (_session.State == SessionState.Presenting && (_session.Source is { IsScreen: true } || _inset is { IsScreen: true })
+                || _second is { State: SessionState.Presenting, Source.IsScreen: true });
+        if (!watch)
+        {
+            _windowChanges.Stop();
+            _privateAppShown = null;
+            if (_session.IsHeldFor(HoldReason.PrivateApp)) _ = _session.ComeBackAsync(HoldReason.PrivateApp);
+            return;
+        }
+        _windowChanges.Start();
+        CheckPrivateApps();
+    }
+
+    private void CheckPrivateApps()
+    {
+        CheckSecondPrivateApps();
+        if (_session.State != SessionState.Presenting || _session.Source is not { } source) return;
+        string screenName = (source.Screen ?? _inset?.Screen)?.Name ?? "the screen";
+        if (PrivateAppOn(source) is { } found)
+        {
+            if (!_session.IsHeldFor(HoldReason.PrivateApp)) _session.CutAway(HoldReason.PrivateApp);
+            if (!string.Equals(_privateAppShown, found.AppName, StringComparison.OrdinalIgnoreCase))
+            {
+                _privateAppShown = found.AppName;
+                Message($"“{found.AppName}” is open on {screenName}, so the audience sees black. Minimise it or move it to another screen.", BadgeDot.Warning,
+                    Button("Change the list", () => OpenSettings(SettingsForm.Section.Privacy), primary: false));
+                UpdateBadge(reveal: false);
+                UpdateWidget();
+            }
+            return;
+        }
+        _privateAppShown = null;
+        if (_session.IsHeldFor(HoldReason.PrivateApp)) _ = _session.ComeBackAsync(HoldReason.PrivateApp);
+    }
+
+    /// <summary>Settings › Privacy: add an app (by program name) to the never-show list.</summary>
+    public void AddNeverShow(string appName)
+    {
+        List<string> next = NeverShow.Normalize([.. Settings.NeverShowApps, appName]);
+        if (next.Count == Settings.NeverShowApps.Count) return;
+        Settings.NeverShowApps = next;
+        Save();
+        Message($"“{next[^1]}” is never shown now.");
+        EnforceNeverShow();
+    }
+
+    /// <summary>The list just grew: whatever it now covers stops at once, shown big or small.</summary>
+    private void EnforceNeverShow()
+    {
+        if (_inset is { } small && IsNeverShown(small)) RemoveInset($"“{small.AppName}” is on your never-show list, so the small picture is off.");
+        if (_session.State == SessionState.Presenting && _session.Source is { } shown && IsNeverShown(shown)) _ = GuardAsync(StopShowingAsync);
+        UpdatePrivateAppGuard();
+    }
+
+    public void RemoveNeverShow(string appName)
+    {
+        if (Settings.NeverShowApps.RemoveAll(a => string.Equals(a, appName, StringComparison.OrdinalIgnoreCase)) == 0) return;
+        Save();
+        UpdatePrivateAppGuard();
+    }
+
+    /// <summary>Puts the usual password managers back on the list, keeping the user's own additions.</summary>
+    public void RestoreNeverShowDefaults()
+    {
+        Settings.NeverShowApps = NeverShow.Normalize([.. Settings.NeverShowApps, .. NeverShow.Defaults]);
+        Save();
+        EnforceNeverShow();
+    }
+
+    // ───────────────────────────── notifications: Do not disturb ─────────────────────────────
+
+    private bool _remindedDoNotDisturb;
+
+    /// <summary>
+    /// Pop-up notifications appear on the main screen, so showing or recording all of it would
+    /// include them. Windows doesn't let apps switch on Do not disturb, so say so once per run,
+    /// with a button to the setting, and only when Windows says pop-ups would show now.
+    /// </summary>
+    private void MaybeRemindDoNotDisturb(DisplayMonitor screen)
+    {
+        if (!Settings.RemindDoNotDisturb || _remindedDoNotDisturb || !screen.IsPrimary) return;
+        bool privatePreview = _session.IsPrivatePreview && _session.Source?.Screen?.IsSameScreen(screen) == true; // nobody else sees it
+        if (!NotificationReminder.ShouldRemind(true, false, NotificationReminder.PopUpsWouldShow(), true, privatePreview)) return;
+        _remindedDoNotDisturb = true;
+        string uri = NotificationReminder.SettingsUri(OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000));
+        Message($"Windows notifications can pop up on {screen.Name} while all of it is shown. Turn on Do not disturb so they don't.", BadgeDot.Accent,
+            Button("Open Do not disturb", () => ShellOpen(uri)), Button("Don't remind me", () => SetRemindDoNotDisturb(false), primary: false));
+    }
+
+    /// <summary>Settings › Privacy › Notifications.</summary>
+    public void SetRemindDoNotDisturb(bool remind)
+    {
+        Settings.RemindDoNotDisturb = remind;
+        Save();
+        if (!remind) Message("You won't be reminded about notifications. Switch it back on in Settings › Privacy.");
     }
 
     // ───────────────────────────── a screen plugged in while showing in a window ─────────────────────────────
@@ -1844,6 +3191,8 @@ internal sealed class ScpApp : IDisposable
         Recording = _recording.Status,
         Where = AudienceScreenName,
         ShowAgainTitle = _session.State == SessionState.Off ? Settings.LastSource?.Title : null,
+        Zoomed = IsZoomed,
+        Drawing = IsDrawing,
     };
 
     private QuickPanelHeader QuickPanelHeaderContent()
@@ -2128,6 +3477,14 @@ internal sealed class ScpApp : IDisposable
         UpdateQuickPanel();
         UpdateStepBack(null);
         UpdateBrowserPage();
+        UpdatePrivateAppGuard();
+        UpdateDrawing();
+        UpdateInset();
+        UpdatePointerWork();
+        UpdateClock();
+        UpdateStage();
+        if (_session.State == SessionState.Off) StopSlideshow(null);
+        if (_session.State == SessionState.Presenting && _session.Source?.Screen is { } shownScreen) MaybeRemindDoNotDisturb(shownScreen);
         _tray.Refresh();
         ScheduleTrim();
     }
@@ -2146,6 +3503,8 @@ internal sealed class ScpApp : IDisposable
         BadgeContent? content = s.State switch
         {
             SessionState.Presenting when s.IsBlanked => new BadgeContent(BadgeDot.Hollow, $"{OutputNameCapitalised()} is blank", "Your audience sees black", [showAgain, stop]),
+            SessionState.Presenting when s.IsHeldFor(HoldReason.PrivateApp) => new BadgeContent(BadgeDot.Warning, $"“{_privateAppShown ?? "A never-show app"}” is open here",
+                "Your audience sees black until you minimise it or move it away", [stop]),
             SessionState.Presenting when s.IsAwayFromPage => new BadgeContent(BadgeDot.Warning, "On another page", "Your audience sees black until you go back",
                 [Button("Show this page instead", ShowCurrentBrowserPage), stop]),
             SessionState.Presenting when s.IsFrozen => new BadgeContent(BadgeDot.Warning, $"{OutputNameCapitalised()} is frozen", "You can scroll and click privately", [goLive, stop]),
@@ -2180,12 +3539,14 @@ internal sealed class ScpApp : IDisposable
         Rectangle? bounds = null;
         if (show && s.Source is { } source)
         {
-            if (source.Screen is { } screen) bounds = source.Crop?.ToScreen(screen.Bounds) ?? screen.Bounds;
+            CropRegion? part = s.View ?? source.Crop; // zoomed in: exactly the part on the TV
+            if (source.Screen is { } screen) bounds = part?.ToScreen(screen.Bounds) ?? screen.Bounds;
             else if (WindowEnumerator.IsAlive(source.Handle))
-                bounds = source.Crop is { } crop ? crop.ToScreen(WindowEnumerator.ClientBoundsOnScreen(source.Handle)) : DwmHelpers.GetVisibleBounds((Windows.Win32.Foundation.HWND)source.Handle);
+                bounds = part is { } crop ? crop.ToScreen(WindowEnumerator.ClientBoundsOnScreen(source.Handle)) : DwmHelpers.GetVisibleBounds((Windows.Win32.Foundation.HWND)source.Handle);
         }
         // Around a window, the outline sits just above it, so other windows in front cover it too.
         _outline.Update(bounds, ShowingText(s.IsFrozen), _monitors, s.FullScreenOutput, s.Source is { IsScreen: false } window ? window.Handle : 0);
+        UpdateSecondOutline();
     }
 
     /// <summary>"TV" for a TV-like output, else "Display 2".</summary>
@@ -2223,6 +3584,7 @@ internal sealed class ScpApp : IDisposable
     private void Message(string text, BadgeDot dot = BadgeDot.Accent, params BadgeButton[] buttons)
     {
         Diag("app: " + text);
+        _commandMessages?.Add(text);
         _badge.ShowMessage(text, dot, buttons);
     }
 
@@ -2254,7 +3616,7 @@ internal sealed class ScpApp : IDisposable
 
     private async Task ShowAgainAsync(SourceWindow source)
     {
-        if (source.Screen is not null)
+        if (!source.IsWindow)
         {
             await PresentAsync(source);
             return;
@@ -2275,7 +3637,9 @@ internal sealed class ScpApp : IDisposable
     {
         try
         {
+            NotePlaylistBeforeScreensChange();
             _monitors = DisplayHelpers.GetMonitors();
+            List<string> arrived = _arrivals.Update(_monitors.Select(m => m.DeviceName), DateTime.UtcNow);
             if (_picker is { Visible: false }) DiscardPicker(); // laid out for the old screens
             if (_session.FullScreenOutput is { } output) // a floating window is kept on screen by Windows itself
             {
@@ -2298,6 +3662,8 @@ internal sealed class ScpApp : IDisposable
             CheckDuplicateDisplay();
             OnSessionChanged(reveal: false);
             await OfferNewScreenAsync(); // an HDMI cable plugged in while set to show in a window
+            OfferArrivedScreen(arrived);
+            await ResumePlaylistAsync(); // a lobby screen carries on when its TV is back
         }
         catch (Exception ex)
         {
@@ -2384,6 +3750,7 @@ internal sealed class ScpApp : IDisposable
             return false;
         }
         RememberWindowModeScreens(); // the TV isn't "new" any more: don't offer it twice
+        _arrivals.Know(tv.DeviceName);
         await SetOutputMonitorAsync(tv, quiet: true);
         Message($"Your TV was copying your whole screen. It's now a separate screen ({tv.Name}) that shows only what you choose.", BadgeDot.Accent);
         return true;
@@ -2425,9 +3792,18 @@ internal sealed class ScpApp : IDisposable
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         SystemEvents.SessionSwitch -= OnSessionSwitch;
         Theme.Changed -= OnThemeChanged;
+        _commands.Dispose();
+        _commandGate.Dispose();
+        DisposeStage();
         _trimTimer.Dispose();
+        _drawingOverlay?.Dispose();
+        _pointerTimer.Dispose();
+        _clock.Dispose();
+        _slideshowTimer.Dispose();
+        _updateTimer.Dispose();
         _foreground.Dispose();
         _titles.Dispose();
+        _windowChanges.Dispose();
         _picker?.Dispose();
         _hotkeys.Dispose();
         _session.Dispose();

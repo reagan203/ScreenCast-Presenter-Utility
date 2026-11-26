@@ -47,3 +47,64 @@ internal interface ICaptureEngine : IDisposable
     /// <summary>The engine can't continue (GPU reset, capture refused, screen gone).</summary>
     event EventHandler<string>? Failed;
 }
+
+/// <summary>
+/// An engine that draws marks over the picture, inside the output (FR-65, FR-71): only the WGC
+/// engine can (the DWM engine never touches pixels). Points are fractions of the content's whole
+/// area. None of these throw.
+/// </summary>
+internal interface IEffectsEngine
+{
+    /// <summary>A click ring at <paramref name="at"/> (blue for a right click).</summary>
+    void Click(PointF at, bool secondary);
+
+    /// <summary>The ring around the pointer; null hides it.</summary>
+    void Pointer(PointF? at);
+
+    /// <summary>The laser dot; null hides it.</summary>
+    void Laser(PointF? at);
+
+    /// <summary>Draw the real mouse pointer (off while the laser stands in for it).</summary>
+    void ShowCursor(bool on);
+
+    void InkStart(InkStroke stroke);
+    void InkAdd(int id, IReadOnlyList<PointF> points);
+    void InkRemove(int id);
+    void InkClear();
+
+    /// <summary>A mark's points replaced: an arrow or box following the drag (FR-78).</summary>
+    void InkSet(int id, IReadOnlyList<PointF> points);
+
+    /// <summary>Parts of the shown window or screen covered for the audience (FR-74); an empty list shows everything.</summary>
+    void Redact(IReadOnlyList<CropRegion> regions, RedactStyle style);
+
+    /// <summary>Everything dimmed but a circle around <paramref name="at"/> (FR-77); null turns it off.</summary>
+    void Spotlight(PointF? at);
+
+    /// <summary>A name banner along the bottom (FR-79); null takes it off.</summary>
+    void Caption(string? name, string? second);
+
+    /// <summary>The picture shown above the blank screen's message (FR-80), a PNG or JPEG file; null for none.</summary>
+    void Logo(string? path);
+
+    /// <summary>A QR code in a corner (FR-81); null takes it off.</summary>
+    void Qr(string? text, InsetCorner corner);
+
+    /// <summary>Live captions along the bottom (FR-84): the latest words; null takes them off.</summary>
+    void LiveCaption(string? text);
+
+    /// <summary>Live captions' size and place (FR-89).</summary>
+    void CaptionStyle(CaptionLook look) { }
+
+    /// <summary>Automatic hiding (FR-88): what to look for and cover; <see cref="SensitiveKinds.None"/> stops it.</summary>
+    void AutoHide(SensitiveKinds kinds, RedactStyle style) { }
+
+    /// <summary>Automatic hiding covered something new: what, in words ("2 email addresses"), on the UI thread.</summary>
+    event EventHandler<string>? AutoHidden { add { } remove { } }
+
+    /// <summary>The small picture in a corner (FR-72): another window, a screen or a camera; null takes it off.</summary>
+    void Inset(SourceWindow? source, InsetCorner corner, int percent);
+
+    /// <summary>The small picture couldn't start or went away (closed, unplugged): it's off, and this says why.</summary>
+    event EventHandler<string>? InsetFailed;
+}

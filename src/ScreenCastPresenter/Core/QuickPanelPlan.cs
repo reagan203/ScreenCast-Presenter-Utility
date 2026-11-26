@@ -27,6 +27,9 @@ internal sealed record QuickPanelState
 
     /// <summary>When nothing is shown: the last thing shown, to bring back in one click.</summary>
     public string? ShowAgainTitle { get; init; }
+
+    public bool Zoomed { get; init; }
+    public bool Drawing { get; init; }
 }
 
 /// <summary>
@@ -64,6 +67,11 @@ internal static class QuickPanelPlan
                 tiles.Add(s.Cropped
                     ? new("Part of it", Icons.Crop, "remove-crop", On: true, KeepOpen: true, Shortcut: "remove-crop", Description: "Showing part of the window. Click to show all of it")
                     : new("Part of it", Icons.Crop, "crop", Shortcut: "crop", Description: "Show only part of the window"));
+                tiles.Add(new("Zoom in", Icons.Search, "zoom-in", On: s.Zoomed, KeepOpen: true, Shortcut: "zoom-in",
+                    Description: s.Zoomed ? "Zoomed in, following your mouse. Click to zoom out" : $"Zoom in around your mouse on {s.Where}"));
+                // While recording, the recording tiles need the room.
+                if (!recording) tiles.Add(new("Draw", Icons.Highlight, "draw", On: s.Drawing, Shortcut: "draw",
+                    Description: s.Drawing ? "Drawing. Click to stop and clear it" : $"Draw on {s.Where} as you talk"));
             }
         }
 

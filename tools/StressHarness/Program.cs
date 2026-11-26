@@ -9,7 +9,7 @@ namespace StressHarness;
 /// <summary>
 /// Load, stress and soak tests for ScreenCast Presenter (SRS 8.1, rev 2).
 ///
-///   StressHarness [quick|full|smoke|picker|ui|switches|storm|flood|hostile|pressure|flash|soak] [--count N] [--minutes N]
+///   StressHarness [quick|full|smoke|picker|ui|switches|storm|flood|hostile|pressure|flash|soak|record|window|widget|cli|extras|nevershow|stage|speed|room] [--count N] [--minutes N]
 ///
 /// Drives the real app only through its global shortcuts, with test windows from TestWindowHost,
 /// and checks after every scenario: no crash, UI responsive, privacy audit clean, at most one
@@ -68,11 +68,19 @@ internal static partial class Program
             case "record": Record(); break;
             case "window": FloatingWindow(); break;
             case "widget": Widget(); break;
+            case "cli": CommandLine(Or(count, 20)); break;
+            case "extras": Extras(); break;
+            case "nevershow": NeverShowScenario(); break;
+            case "stage": Stage(); break;
+            case "speed": Speed(); break;
+            case "room": RoomRunning(); break;
             case "quick":
                 Smoke(); Picker(20); Ui(10); Switches(200); Storm(2000); Flood(300); Hostile(50); Pressure(60); Flash(100); Record(); FloatingWindow(); Widget();
+                CommandLine(20); Extras(); NeverShowScenario(); Stage(); Speed(); RoomRunning();
                 break;
             case "full":
                 Smoke(); Picker(50); Ui(30); Switches(1000); Storm(10000); Flood(300); Hostile(1000); Pressure(300); Flash(100); Record(); FloatingWindow(); Widget();
+                CommandLine(200); Extras(); NeverShowScenario(); Stage(); Speed(); RoomRunning();
                 break;
             default:
                 Console.WriteLine("Unknown scenario.");
@@ -229,6 +237,131 @@ internal static partial class Program
 
         static nint Bar(ScpProcess scp) =>
             Native.TopLevelWindows(scp.Id, visibleOnly: true).FirstOrDefault(h => Native.Title(h) == "ScreenCast Presenter now showing");
+    }
+
+    /// <summary>
+    /// FR-43: command lines reaching the running copy through its pipe: each answered with the
+    /// right exit code, mistakes refused without touching the app, and a burst of them (as a
+    /// button deck might send) with no backlog and nothing left running.
+    /// </summary>
+    private static void CommandLine(int burst)
+    {
+        Scenario($"command line x{burst}", (scp, _) =>
+        {
+            (int code, string output) = scp.RunCommandLine("--favourite", "1");
+            Check(code == 0, $"cli: --favourite 1 exited {code}: {output}");
+            Check(WaitFor(() => scp.OutputWindows().Count == 1, 3000), "cli: --favourite 1 showed nothing");
+            Check(scp.RunCommandLine("--blank").ExitCode == 0, "cli: --blank failed");
+            Check(scp.RunCommandLine("--blank").ExitCode == 0, "cli: --blank twice isn't a toggle: it should still succeed");
+            Check(scp.RunCommandLine("--unblank").ExitCode == 0, "cli: --unblank failed");
+            Check(scp.RunCommandLine("--action", "dim").ExitCode == 0, "cli: --action dim failed");
+            Check(scp.RunCommandLine("--present", "no such window xyz").ExitCode == 1, "cli: a window that isn't open should exit 1");
+            Check(scp.RunCommandLine("--screen", "64").ExitCode == 1, "cli: a screen that isn't connected should exit 1");
+            Check(scp.RunCommandLine("--launch-rockets").ExitCode == 2, "cli: a mistake should exit 2");
+            Probe(scp, "after single commands");
+
+            var clock = Stopwatch.StartNew();
+            for (int i = 0; i < burst; i++)
+            {
+                (int c, string o) = scp.RunCommandLine("--favourite", (i % 2 + 1).ToString(CultureInfo.InvariantCulture));
+                Check(c == 0, $"cli: burst command {i} exited {c}: {o}");
+            }
+            Console.WriteLine($"    {burst} commands in {clock.Elapsed.TotalSeconds:F1} s ({clock.Elapsed.TotalMilliseconds / burst:F0} ms each, including starting the exe)");
+            Probe(scp, "after the burst");
+            Check(scp.RunCommandLine("--stop").ExitCode == 0, "cli: --stop failed");
+            Check(WaitFor(() => scp.OutputWindows().Count == 0, 3000), "cli: --stop left the output showing");
+        });
+    }
+
+    /// <summary>
+    /// The things for the TV (FR-05, FR-64–FR-71), driven by their shortcuts and the mouse: zoom
+    /// following the pointer, click rings, the pointer ring, the laser, a countdown, drawing, click
+    /// a window to show it, and the slideshow. Privacy is audited while each overlay is open.
+    /// </summary>
+    private static void Extras()
+    {
+        Scenario("extras for the TV", (scp, host) =>
+        {
+            Native.CtrlAlt('1'); Wait(900);
+            Check(scp.OutputWindows().Count == 1, "extras: favourite 1 didn't show");
+            Native.GetWindowRect(host["SCP dark A"], out Native.RECT r);
+            host.Send($"front {host["SCP dark A"]}"); Wait(300);
+            Point middle = new((r.Left + r.Right) / 2, (r.Top + r.Bottom) / 2);
+
+            // Zoom in, follow the pointer across the window, zoom out.
+            Native.SetCursorPos(middle.X, middle.Y);
+            Native.CtrlAlt('Z'); Wait(700);
+            for (int i = 0; i < 40; i++) { Native.SetCursorPos(r.Left + 20 + i * Math.Max(1, (r.Right - r.Left - 40) / 40), middle.Y); Wait(25); }
+            Probe(scp, "zoomed in, following");
+            Native.CtrlAltShift('Z'); Wait(300); // closer
+            Native.CtrlAlt('Z'); Wait(700);
+
+            // Click rings and the pointer ring (switching them on shows it again through the helper).
+            Native.CtrlAlt('H'); Wait(1500);
+            Check(scp.HelperCount >= 1, "extras: click rings need the capture helper, and none is running");
+            for (int i = 0; i < 5; i++) { Native.Click(middle.X + i * 10, middle.Y); Wait(120); }
+            Native.CtrlAltShift('H'); Wait(500);
+            for (int i = 0; i < 20; i++) { Native.SetCursorPos(middle.X + i * 5, middle.Y + i * 3); Wait(20); }
+            Native.CtrlAlt('H'); Native.CtrlAltShift('H'); Wait(400);
+
+            // The laser.
+            Native.CtrlAltShift('L'); Wait(400);
+            for (int i = 0; i < 30; i++) { Native.SetCursorPos(middle.X - 60 + i * 4, middle.Y + (i % 5) * 4); Wait(16); }
+            Native.CtrlAltShift('L'); Wait(300);
+            Probe(scp, "after the laser");
+
+            // A countdown, then show again with the same key.
+            Native.CtrlAlt('T'); Wait(2500);
+            Check(scp.OutputWindows().Count == 1, "extras: the countdown closed the output");
+            Native.CtrlAlt('T'); Wait(600);
+
+            // Drawing: the layer opens, a line is drawn, the audit runs while it's open, Esc ends it.
+            Native.CtrlAltShift('D'); Wait(1500);
+            Check(DrawingLayer(scp) != 0, "extras: Ctrl+Alt+Shift+D opened no drawing layer");
+            Native.SetCursorPos(middle.X - 50, middle.Y);
+            Native.mouse_event(0x0002, 0, 0, 0, 0);
+            for (int i = 0; i < 25; i++) { Native.SetCursorPos(middle.X - 50 + i * 4, middle.Y + (i % 7) * 3); Wait(16); }
+            Native.mouse_event(0x0004, 0, 0, 0, 0);
+            Probe(scp, "drawing layer open");
+            Native.Chord(Native.VK_ESCAPE); Wait(500);
+            Check(DrawingLayer(scp) == 0, "extras: Esc left the drawing layer open");
+
+            // Click a window to show it.
+            Native.GetWindowRect(host["SCP dark B"], out Native.RECT b);
+            host.Send($"front {host["SCP dark B"]}"); Wait(300);
+            Native.CtrlAltShift('W'); Wait(600);
+            Probe(scp, "click-a-window layer open");
+            Native.Click((b.Left + b.Right) / 2, (b.Top + b.Bottom) / 2); Wait(900);
+            Check(scp.OutputWindows().Count == 1, "extras: clicking a window showed nothing");
+
+            // The slideshow: its first switch comes after 10 seconds.
+            Native.CtrlAlt('L'); Wait(11_500);
+            Probe(scp, "slideshow running");
+            Native.CtrlAlt('L'); Wait(400);
+        }, settings: s => s["SlideshowSeconds"] = 10);
+
+        static nint DrawingLayer(ScpProcess scp) =>
+            Native.TopLevelWindows(scp.Id, visibleOnly: true).FirstOrDefault(h => Native.Title(h) == "ScreenCast Presenter: drawing");
+    }
+
+    /// <summary>
+    /// FR-62: an app on the never-show list (here the test windows' own app) can't be shown, by
+    /// favourite, by "the window I'm in" or by the command line.
+    /// </summary>
+    private static void NeverShowScenario()
+    {
+        Scenario("never-show list", (scp, host) =>
+        {
+            Native.CtrlAlt('1'); Wait(900);
+            Check(scp.OutputWindows().Count == 0, "never-show: a never-show app's window was shown by favourite");
+            host.Send($"front {host["SCP dark A"]}"); Wait(300);
+            Native.CtrlAlt('W'); Wait(900);
+            Check(scp.OutputWindows().Count == 0, "never-show: a never-show app's window was shown as the window I'm in");
+            (int code, _) = scp.RunCommandLine("--present", "SCP dark A");
+            Check(code == 1, $"never-show: the command line showed it (exit {code})");
+            Check(scp.OutputWindows().Count == 0, "never-show: the command line showed a never-show window");
+            Probe(scp, "after refusals");
+        }, settings: s => s["NeverShowApps"] = new System.Text.Json.Nodes.JsonArray("TestWindowHost"));
     }
 
     /// <summary>The output is a floating window (smaller than the output screen), not fullscreen.</summary>
@@ -480,12 +613,13 @@ internal static partial class Program
 
     private static IEnumerable<string> DarkSpecs() => ["dark:SCP dark A", "darker:SCP dark B", "normal:SCP test normal"];
 
-    private static void Scenario(string name, Action<ScpProcess, TestHost> body, string[]? specs = null, double memoryBudgetMb = MemoryBudgetMb)
+    private static void Scenario(string name, Action<ScpProcess, TestHost> body, string[]? specs = null, double memoryBudgetMb = MemoryBudgetMb,
+        Action<System.Text.Json.Nodes.JsonObject>? settings = null)
     {
         Console.WriteLine($"▶ {name}");
         int failuresBefore = Failures.Count;
         using var host = new TestHost(_hostExe, specs ?? [.. DarkSpecs()]);
-        using ScpProcess scp = ScpProcess.Start(_scpExe, _outputDevice, DarkFavourites);
+        using ScpProcess scp = ScpProcess.Start(_scpExe, _outputDevice, DarkFavourites, settings);
 
         // Warm up every feature once so first-use costs (JIT, WinForms type setup, font caches)
         // don't count as growth: present, switch, blank, picker, stop.

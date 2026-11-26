@@ -12,6 +12,10 @@ internal static class SavedFiles
     public static string DefaultScreenshotFolder =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Screenshots");
 
+    /// <summary>Documents\ScreenCast Presenter\Transcripts (FR-89).</summary>
+    public static string DefaultTranscriptFolder =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ScreenCast Presenter", "Transcripts");
+
     public static string DefaultRecordingFolder =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Screen Recordings");
 

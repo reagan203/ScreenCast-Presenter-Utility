@@ -18,9 +18,9 @@ internal sealed class RegionSelector : IDisposable
     private readonly double _scale;
     private readonly string _hint;
     private readonly InputLayer _input;
-    private readonly ShadeStrip[] _shade = new ShadeStrip[4];
-    private readonly ShadeStrip[] _edge = new ShadeStrip[4];
-    private readonly Readout _readout;
+    private readonly OverlayStrip[] _shade = new OverlayStrip[4];
+    private readonly OverlayStrip[] _edge = new OverlayStrip[4];
+    private readonly OverlayLabel _readout;
     private readonly TaskCompletionSource<Rectangle?> _result = new();
     private Rectangle _selection;
 
@@ -33,10 +33,10 @@ internal sealed class RegionSelector : IDisposable
         _input = new InputLayer(this, area);
         for (int i = 0; i < 4; i++)
         {
-            _shade[i] = new ShadeStrip(Color.Black, 140);
-            _edge[i] = new ShadeStrip(Theme.Current.Accent, 255);
+            _shade[i] = new OverlayStrip(Color.Black, 140);
+            _edge[i] = new OverlayStrip(Theme.Current.Accent, 255);
         }
-        _readout = new Readout(scale);
+        _readout = new OverlayLabel(scale);
     }
 
     /// <summary>The chosen rectangle in screen pixels, or null if cancelled.</summary>
@@ -51,8 +51,8 @@ internal sealed class RegionSelector : IDisposable
     {
         _input.Show();
         _input.Activate();
-        foreach (ShadeStrip s in _shade) s.Show();
-        foreach (ShadeStrip s in _edge) s.Show();
+        foreach (OverlayStrip s in _shade) s.Show();
+        foreach (OverlayStrip s in _edge) s.Show();
         _readout.Show();
         Layout();
     }
@@ -67,7 +67,7 @@ internal sealed class RegionSelector : IDisposable
         {
             _shade[0].Bounds = a;
             for (int i = 1; i < 4; i++) _shade[i].Visible = false;
-            foreach (ShadeStrip e in _edge) e.Visible = false;
+            foreach (OverlayStrip e in _edge) e.Visible = false;
         }
         else
         {
@@ -91,7 +91,7 @@ internal sealed class RegionSelector : IDisposable
         _readout.Location = new Point(x, y);
     }
 
-    private static void SetStrip(ShadeStrip strip, Rectangle r)
+    private static void SetStrip(OverlayStrip strip, Rectangle r)
     {
         if (r.Width <= 0 || r.Height <= 0)
         {
@@ -110,8 +110,8 @@ internal sealed class RegionSelector : IDisposable
     public void Dispose()
     {
         _input.Dispose();
-        foreach (ShadeStrip s in _shade) s.Dispose();
-        foreach (ShadeStrip s in _edge) s.Dispose();
+        foreach (OverlayStrip s in _shade) s.Dispose();
+        foreach (OverlayStrip s in _edge) s.Dispose();
         _readout.Dispose();
     }
 
@@ -265,65 +265,6 @@ internal sealed class RegionSelector : IDisposable
         {
             base.OnDeactivate(e);
             BeginInvoke(() => _owner.Finish(null)); // clicking another app cancels
-        }
-    }
-
-    /// <summary>A click-through rectangle of one colour at a fixed alpha.</summary>
-    private sealed class ShadeStrip : OverlayForm
-    {
-        private readonly byte _alpha;
-
-        public ShadeStrip(Color colour, byte alpha)
-        {
-            BackColor = colour;
-            _alpha = alpha;
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            PInvoke.SetLayeredWindowAttributes((HWND)Handle, default, _alpha, LAYERED_WINDOW_ATTRIBUTES_FLAGS.LWA_ALPHA);
-        }
-
-        protected override void OnPaintBackground(PaintEventArgs e) => e.Graphics.Clear(BackColor);
-    }
-
-    /// <summary>The size readout and instructions.</summary>
-    private sealed class Readout : OverlayForm
-    {
-        private readonly Font _font;
-        private readonly double _scale;
-        private string _text = "";
-
-        public Readout(double scale)
-        {
-            _scale = scale;
-            _font = Theme.PixelFont(13, scale);
-            BackColor = Theme.Current.Surface;
-        }
-
-        public void SetText(string text)
-        {
-            if (text == _text) return;
-            _text = text;
-            Size measured = TextRenderer.MeasureText(text, _font);
-            Size = new Size(measured.Width + (int)(28 * _scale), measured.Height + (int)(16 * _scale));
-            Invalidate();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.Clear(Theme.Current.Surface);
-            using var pen = new Pen(Theme.Current.Border);
-            e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
-            TextRenderer.DrawText(e.Graphics, _text, _font, ClientRectangle, Theme.Current.Text,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) _font.Dispose();
-            base.Dispose(disposing);
         }
     }
 }

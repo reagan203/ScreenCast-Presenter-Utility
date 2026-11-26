@@ -66,6 +66,65 @@ internal class OverlayForm : Form
     }
 }
 
+/// <summary>A click-through rectangle of one colour at a fixed alpha (selection shading and edges, highlights).</summary>
+internal sealed class OverlayStrip : OverlayForm
+{
+    private readonly byte _alpha;
+
+    public OverlayStrip(Color colour, byte alpha)
+    {
+        BackColor = colour;
+        _alpha = alpha;
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        PInvoke.SetLayeredWindowAttributes((HWND)Handle, default, _alpha, LAYERED_WINDOW_ATTRIBUTES_FLAGS.LWA_ALPHA);
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e) => e.Graphics.Clear(BackColor);
+}
+
+/// <summary>A one-line instruction or readout on the presenter's screen, click-through and hidden from capture.</summary>
+internal sealed class OverlayLabel : OverlayForm
+{
+    private readonly Font _font;
+    private readonly double _scale;
+    private string _text = "";
+
+    public OverlayLabel(double scale)
+    {
+        _scale = scale;
+        _font = Theme.PixelFont(13, scale);
+        BackColor = Theme.Current.Surface;
+    }
+
+    public void SetText(string text)
+    {
+        if (text == _text) return;
+        _text = text;
+        Size measured = TextRenderer.MeasureText(text, _font);
+        Size = new Size(measured.Width + (int)(28 * _scale), measured.Height + (int)(16 * _scale));
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Theme.Current.Surface);
+        using var pen = new Pen(Theme.Current.Border);
+        e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        TextRenderer.DrawText(e.Graphics, _text, _font, ClientRectangle, Theme.Current.Text,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _font.Dispose();
+        base.Dispose(disposing);
+    }
+}
+
 /// <summary>
 /// A per-pixel-alpha window (UpdateLayeredWindow): smooth rounded shapes and soft shadows that
 /// WinForms can't draw. Used by the presenting badge. Receives mouse input where it's not

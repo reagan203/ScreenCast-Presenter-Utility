@@ -56,6 +56,41 @@ internal sealed record TrayMenuState
     public IReadOnlyList<TrayFavourite> Favourites { get; init; } = [];
     public IReadOnlyList<TrayScreen> Screens { get; init; } = [];
     public bool WindowChosen { get; init; }
+
+    // What's on the TV besides the picture (FR-64–FR-72).
+    public bool Zoomed { get; init; }
+    public bool Drawing { get; init; }
+    public bool LaserOn { get; init; }
+    public bool ClicksShown { get; init; }
+    public bool HasInset { get; init; }
+    public bool Slideshow { get; init; }
+
+    // The stage tools (FR-74–FR-85).
+    public bool HasHiddenParts { get; init; }
+    public bool SpotlightOn { get; init; }
+    public bool CaptionOn { get; init; }
+    public bool HasQr { get; init; }
+    public bool LiveCaptions { get; init; }
+    public bool AudienceView { get; init; }
+
+    /// <summary>What's ready to show next (FR-76); null when nothing is.</summary>
+    public string? NextTitle { get; init; }
+
+    /// <summary>The second TV (FR-85): whether it's on, and whether one could be used.</summary>
+    public bool SecondTvOn { get; init; }
+    public bool SecondTvPossible { get; init; }
+
+    public IReadOnlyList<string> Rooms { get; init; } = [];
+
+    // Running the room (FR-86–FR-90).
+    /// <summary>Saved scenes by slot: (slot, name).</summary>
+    public IReadOnlyList<(int Slot, string Name)> Scenes { get; init; } = [];
+    public IReadOnlyList<string> Playlists { get; init; } = [];
+
+    /// <summary>A playlist is playing on some screen.</summary>
+    public bool PlaylistPlaying { get; init; }
+    public bool PhoneRemote { get; init; }
+    public bool AutoHide { get; init; }
 }
 
 /// <summary>
@@ -74,8 +109,9 @@ internal static class TrayMenuPlan
     /// </summary>
     public static IReadOnlySet<string> AppCommands { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
-        "help", "settings", "settings:output", "settings:appearance", "quit", "record-output", "record-picker",
+        "help", "settings", "settings:output", "settings:appearance", "settings:privacy", "quit", "record-output", "record-picker",
         "stop-recording", "pause-recording", "open-recordings", "output-window", "zoom", "stop-after:never", "show-again",
+        "settings:rooms", "stop-second-tv",
     };
 
     /// <summary>A command something will actually run (tests check every menu line and help topic).</summary>
@@ -83,7 +119,10 @@ internal static class TrayMenuPlan
         AppCommands.Contains(command)
         || ShortcutCatalog.Find(command) is not null
         || command.StartsWith("output:", StringComparison.Ordinal) && command.Length > "output:".Length
-        || command.StartsWith("stop-after:", StringComparison.Ordinal) && int.TryParse(command.AsSpan("stop-after:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _);
+        || command.StartsWith("room:", StringComparison.Ordinal) && command.Length > "room:".Length
+        || command.StartsWith("playlist:", StringComparison.Ordinal) && command.Length > "playlist:".Length
+        || command.StartsWith("stop-after:", StringComparison.Ordinal) && int.TryParse(command.AsSpan("stop-after:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _)
+        || command.StartsWith("countdown:", StringComparison.Ordinal) && int.TryParse(command.AsSpan("countdown:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _);
 
     public static IReadOnlyList<MenuEntry> Build(TrayMenuState s)
     {
@@ -103,7 +142,10 @@ internal static class TrayMenuPlan
                 menu.Add(new(s.Blanked ? $"Show {s.Where} again" : $"Blank {s.Where}", "blank", Shortcut: "blank"));
                 menu.Add(new(s.Frozen ? "Go live again" : $"Freeze {s.Where}", "freeze", Shortcut: "freeze"));
                 menu.Add(s.Cropped ? new("Show all of it again", "remove-crop", Shortcut: "remove-crop") : new("Show only part of it…", "crop", Shortcut: "crop"));
+                menu.Add(MenuEntry.Submenu($"On {s.Where}", OnTheTv(s)));
             }
+            if (s.NextTitle is { Length: > 0 } next) menu.Add(new($"Show “{Shorten(next, 30)}” now", "go", Shortcut: "go"));
+            menu.Add(new("See what the audience sees", "audience-view", Checked: s.AudienceView, Shortcut: "audience-view"));
             menu.Add(new("Stop showing", "stop", Shortcut: "stop"));
         }
 
@@ -115,6 +157,7 @@ internal static class TrayMenuPlan
         menu.Add(MenuEntry.Separator);
         menu.Add(MenuEntry.Submenu("Show on", ShowOn(s)));
         if (s.Favourites.Count > 0 || presenting) menu.Add(MenuEntry.Submenu("Favourites", Favourites(s, presenting)));
+        menu.Add(MenuEntry.Submenu("Rooms, scenes and playlists", Rooms(s, presenting)));
 
         menu.Add(MenuEntry.Separator);
         menu.Add(new("Search and help…", "help", Shortcut: "palette"));
@@ -151,10 +194,69 @@ internal static class TrayMenuPlan
         }
     }
 
+    /// <summary>Countdown lengths offered in the menu ("countdown:" + minutes).</summary>
+    public static readonly int[] CountdownMinutes = [1, 2, 5, 10, 15, 20];
+
+    /// <summary>
+    /// What can go on the TV besides the picture, while presenting: zoom, drawing, the laser, click
+    /// rings, a small picture in a corner, and blanking with a countdown.
+    /// </summary>
+    private static List<MenuEntry> OnTheTv(TrayMenuState s)
+    {
+        var countdown = CountdownMinutes.Select(m => new MenuEntry(m == 1 ? "1 minute" : $"{m} minutes", $"countdown:{m}")).ToList();
+        return
+        [
+            new(s.Zoomed ? "Zoom out" : "Zoom in around the mouse", "zoom-in", Shortcut: "zoom-in"),
+            new(s.Drawing ? "Stop drawing" : "Draw on it…", "draw", Shortcut: "draw"),
+            new("Laser", "laser", Checked: s.LaserOn, Shortcut: "laser"),
+            new("Show my clicks", "highlight-clicks", Checked: s.ClicksShown, Shortcut: "highlight-clicks"),
+            new(s.HasInset ? "Take the small picture off" : "Small picture in a corner…", "inset", Shortcut: "inset"),
+            new("Spotlight", "spotlight", Checked: s.SpotlightOn, Shortcut: "spotlight"),
+            new(s.CaptionOn ? "Take my name off" : "My name along the bottom", "caption", Shortcut: "caption"),
+            new(s.HasQr ? "Take the QR code off" : "A QR code (link or Wi-Fi)…", "qr", Shortcut: "qr"),
+            new("Live captions", "live-captions", Checked: s.LiveCaptions, Shortcut: "live-captions"),
+            MenuEntry.Separator,
+            new("Hide part of it…", "hide-part", Shortcut: "hide-part"),
+            new("Hide email addresses and numbers automatically", "auto-hide", Checked: s.AutoHide, Shortcut: "auto-hide"),
+            new("Show the hidden parts", "show-hidden", Enabled: s.HasHiddenParts, Shortcut: "show-hidden"),
+            MenuEntry.Separator,
+            MenuEntry.Submenu("Blank with a countdown", countdown),
+        ];
+    }
+
+    /// <summary>
+    /// Running the room: rooms (FR-82), scenes (FR-86), playlists (FR-87) and the phone remote
+    /// (FR-90), each one click; saving what's on as a room or a scene.
+    /// </summary>
+    private static List<MenuEntry> Rooms(TrayMenuState s, bool presenting)
+    {
+        var items = s.Rooms.Select(name => new MenuEntry(Shorten(name), "room:" + name)).ToList();
+        if (s.Scenes.Count > 0 || presenting)
+        {
+            if (items.Count > 0) items.Add(MenuEntry.Separator);
+            items.AddRange(s.Scenes.Select(sc => new MenuEntry($"{sc.Slot}   {Shorten(sc.Name, 34)}", ShortcutCatalog.SceneId(sc.Slot), Shortcut: ShortcutCatalog.SceneId(sc.Slot))));
+            if (presenting) items.Add(new("Save this as a scene…", "save-scene", Shortcut: "save-scene"));
+        }
+        if (s.Playlists.Count > 0)
+        {
+            items.Add(MenuEntry.Separator);
+            items.AddRange(s.Playlists.Select(p => new MenuEntry($"Play “{Shorten(p, 30)}”", "playlist:" + p)));
+            if (s.PlaylistPlaying) items.Add(new("Stop the playlist", "stop-playlist", Shortcut: "stop-playlist"));
+        }
+        items.Add(MenuEntry.Separator);
+        items.Add(new("Phone remote…", "phone-remote", Checked: s.PhoneRemote, Shortcut: "phone-remote"));
+        items.Add(new("Save this setup as a room…", "save-room", Shortcut: "save-room"));
+        items.Add(new("Rooms, scenes and playlists…", "settings:rooms"));
+        return items;
+    }
+
     private static List<MenuEntry> ShowOn(TrayMenuState s)
     {
         var items = s.Screens.Select(screen => new MenuEntry(screen.Text, "output:" + screen.DeviceName, Checked: !s.WindowChosen && screen.Chosen)).ToList();
         items.Add(new("A window (to share in a meeting)", "output-window", Checked: s.WindowChosen, Shortcut: "switch-output"));
+        items.Add(MenuEntry.Separator);
+        if (s.SecondTvOn) items.Add(new("Stop the second TV", "stop-second-tv"));
+        else items.Add(new("Second TV: show something…", "second-tv", Enabled: s.SecondTvPossible, Shortcut: "second-tv"));
         items.Add(MenuEntry.Separator);
         items.Add(new("How to share in Zoom or Teams…", "zoom"));
         return items;
@@ -165,6 +267,11 @@ internal static class TrayMenuPlan
         var items = s.Favourites.OrderBy(f => f.Slot)
             .Select(f => new MenuEntry($"{f.Slot}   {Shorten(f.Title)} · {f.AppName}", ShortcutCatalog.ShowFavouriteId(f.Slot), Shortcut: ShortcutCatalog.ShowFavouriteId(f.Slot)))
             .ToList();
+        if (s.Favourites.Count > 0)
+        {
+            items.Add(MenuEntry.Separator);
+            items.Add(new(s.Slideshow ? "Stop the slideshow" : "Show them one after another", "slideshow", Shortcut: "slideshow")); // FR-69
+        }
         if (!presenting) return items;
         if (items.Count > 0) items.Add(MenuEntry.Separator);
         var save = new List<MenuEntry>();

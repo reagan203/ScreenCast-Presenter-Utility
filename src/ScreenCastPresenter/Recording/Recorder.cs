@@ -309,6 +309,7 @@ internal sealed class Recorder : IDisposable
         {
             Rectangle dest = AspectFit.Fit(shown.Size, video);
             _dc.DrawBitmap(_heldBitmap!, ToRect(dest), 1f, InterpolationMode.HighQualityCubic, ToRect(shown), null);
+            CoverHiddenParts(area, shown, dest);
         }
         _dc.EndDraw().CheckError();
         _dc.Target = null;
@@ -504,6 +505,24 @@ internal sealed class Recorder : IDisposable
 
     private static Rect ToRect(Rectangle r) => new(r.X, r.Y, r.Width, r.Height);
 
+    private ID2D1SolidColorBrush? _hiddenBrush;
+
+    /// <summary>Parts hidden from the audience (FR-74) are covered with a solid box in the recording too.</summary>
+    private void CoverHiddenParts(Rectangle area, Rectangle shown, Rectangle dest)
+    {
+        if (_request.Hidden is not { Count: > 0 } hidden) return;
+        System.Drawing.Color fill = Core.EffectStyle.RedactFill;
+        _hiddenBrush ??= _dc!.CreateSolidColorBrush(new Color4(fill.R / 255f, fill.G / 255f, fill.B / 255f, 1));
+        foreach (Rectangle r in StillCapture.Covers(area, shown, hidden))
+        {
+            float sx = (float)dest.Width / shown.Width, sy = (float)dest.Height / shown.Height;
+            // Whole pixels outward, so not even an edge of what's under it shows.
+            float left = MathF.Floor(dest.X + r.X * sx), top = MathF.Floor(dest.Y + r.Y * sy);
+            float right = MathF.Ceiling(dest.X + r.Right * sx), bottom = MathF.Ceiling(dest.Y + r.Bottom * sy);
+            _dc!.FillRectangle(new Vortice.RawRectF(left, top, right, bottom), _hiddenBrush);
+        }
+    }
+
     private void Release()
     {
         StopAudio();
@@ -518,6 +537,7 @@ internal sealed class Recorder : IDisposable
         foreach (ID3D11Texture2D? t in _ring) t?.Dispose();
         _heldBitmap?.Dispose();
         _held?.Dispose();
+        _hiddenBrush?.Dispose();
         _dc?.Dispose();
         _d2dDevice?.Dispose();
         _d2dFactory?.Dispose();

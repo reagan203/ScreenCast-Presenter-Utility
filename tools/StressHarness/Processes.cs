@@ -15,11 +15,34 @@ internal sealed class ScpProcess : IDisposable
 
     private readonly Process _process;
     private readonly string _dir;
+    private readonly string _exe;
 
-    private ScpProcess(Process process, string dir)
+    private ScpProcess(Process process, string dir, string exe)
     {
         _process = process;
         _dir = dir;
+        _exe = exe;
+    }
+
+    public string SettingsPath => Path.Combine(_dir, "settings.json");
+
+    /// <summary>
+    /// Runs the exe as a command line (FR-43), as a script or a button deck would: it reaches this
+    /// running copy through its command pipe. The exit code and what it printed.
+    /// </summary>
+    public (int ExitCode, string Output) RunCommandLine(params string[] args)
+    {
+        var info = new ProcessStartInfo(_exe) { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true };
+        foreach (string a in args) info.ArgumentList.Add(a);
+        info.Environment["SCP_SETTINGS_PATH"] = SettingsPath;
+        using Process process = Process.Start(info) ?? throw new InvalidOperationException("Couldn't run the command line.");
+        string output = process.StandardOutput.ReadToEnd();
+        if (!process.WaitForExit(60_000))
+        {
+            process.Kill();
+            return (-1, "timed out");
+        }
+        return (process.ExitCode, output.Trim());
     }
 
     public int Id => _process.Id;
@@ -35,7 +58,8 @@ internal sealed class ScpProcess : IDisposable
     public int ExitCode => _process.ExitCode;
 
     /// <param name="favourites">Titles of TestWindowHost windows for favourite slots 1, 2, 3…</param>
-    public static ScpProcess Start(string exe, string? outputDevice, params string[] favourites)
+    /// <param name="configure">More settings for one scenario (e.g. a never-show list).</param>
+    public static ScpProcess Start(string exe, string? outputDevice, string[] favourites, Action<JsonObject>? configure = null)
     {
         if (Process.GetProcessesByName("ScreenCastPresenter").Length > 0)
             throw new InvalidOperationException("Close the running ScreenCast Presenter first: the harness needs its shortcuts.");
@@ -57,6 +81,7 @@ internal sealed class ScpProcess : IDisposable
             ["RecordSound"] = "App",
             ["Favourites"] = slots,
         };
+        configure?.Invoke(settings);
         string path = Path.Combine(dir, "settings.json");
         File.WriteAllText(path, settings.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 
@@ -64,7 +89,7 @@ internal sealed class ScpProcess : IDisposable
         info.Environment["SCP_SETTINGS_PATH"] = path;
         info.Environment["SCP_DIAG_LOG"] = Path.Combine(AppContext.BaseDirectory, "scp-diag.log");
         Process process = Process.Start(info) ?? throw new InvalidOperationException("Couldn't start SCP.");
-        var scp = new ScpProcess(process, dir);
+        var scp = new ScpProcess(process, dir, exe);
         scp.WaitUntilReady();
         return scp;
     }

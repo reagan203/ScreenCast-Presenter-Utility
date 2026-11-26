@@ -5,15 +5,29 @@ using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace ScreenCastPresenter.Interop;
 
-/// <summary>A window the user can choose to present.</summary>
+/// <summary>A camera, by Windows' id for it and its name (FR-68).</summary>
+internal sealed record CameraDevice(string Id, string Name);
+
 /// <summary>
-/// Something the user can present: a window (<see cref="Handle"/>) or a whole screen
-/// (<see cref="Screen"/>, FR-02), optionally cropped (<see cref="Crop"/>, FR-04).
+/// Something the user can present: a window (<see cref="Handle"/>), a whole screen
+/// (<see cref="Screen"/>, FR-02) or a camera (<see cref="Camera"/>, FR-68), optionally cropped
+/// (<see cref="Crop"/>, FR-04).
 /// </summary>
 internal sealed record SourceWindow(nint Handle, string Title, string AppName, bool IsMinimized)
 {
+    /// <summary>The app name a camera is listed under.</summary>
+    public const string CameraApp = "Camera";
+
     /// <summary>Set for a whole-screen source; then <see cref="Handle"/> is 0.</summary>
     public DisplayMonitor? Screen { get; init; }
+
+    /// <summary>Set for a camera (a webcam or document camera); then <see cref="Handle"/> is 0 and there's nothing on screen.</summary>
+    public CameraDevice? Camera { get; init; }
+
+    public bool IsCamera => Camera is not null;
+
+    /// <summary>A window: something on the presenter's screen with a handle (not a whole screen, not a camera).</summary>
+    public bool IsWindow => Screen is null && Camera is null;
 
     /// <summary>The part of the source to show; null shows all of it.</summary>
     public Core.CropRegion? Crop { get; init; }
@@ -22,10 +36,15 @@ internal sealed record SourceWindow(nint Handle, string Title, string AppName, b
 
     /// <summary>Same window or same screen, whatever the crop or title.</summary>
     public bool IsSameSource(SourceWindow? other) =>
-        other is not null && (IsScreen ? other.Screen?.DeviceName == Screen!.DeviceName && other.IsScreen : !other.IsScreen && other.Handle == Handle);
+        other is not null && (IsScreen ? other.Screen?.DeviceName == Screen!.DeviceName && other.IsScreen
+            : IsCamera ? other.Camera?.Id == Camera!.Id
+            : other.IsWindow && other.Handle == Handle);
 
     public static SourceWindow ForScreen(DisplayMonitor screen) =>
         new(0, $"{screen.Name} · {screen.ShortName}", "Screen", false) { Screen = screen };
+
+    public static SourceWindow ForCamera(CameraDevice camera) =>
+        new(0, camera.Name.Length > 0 ? camera.Name : "Camera", CameraApp, false) { Camera = camera };
 
     public override string ToString() => Title;
 }
@@ -96,6 +115,86 @@ internal static class WindowEnumerator
     }
 
     /// <summary>
+    /// Every visible top-level window on screen, front to back, with what clicking it would show
+    /// (FR-05). SCP's own windows (the click layer, the outline, the output) and click-through
+    /// overlays are left out: a click never lands on them. Minimised and cloaked windows aren't on screen.
+    /// </summary>
+    public static List<Core.PickTarget> GetPickTargets()
+    {
+        var handles = new List<HWND>();
+        PInvoke.EnumWindows((hwnd, _) =>
+        {
+            handles.Add(hwnd);
+            return true;
+        }, default);
+
+        uint ownPid = (uint)Environment.ProcessId;
+        HWND shell = PInvoke.GetShellWindow();
+        var appNames = new Dictionary<uint, string>();
+        var roots = new Dictionary<nint, SourceWindow?>();
+        var result = new List<Core.PickTarget>();
+        foreach (HWND hwnd in handles)
+        {
+            if (!PInvoke.IsWindowVisible(hwnd) || PInvoke.IsIconic(hwnd) || DwmHelpers.IsCloaked(hwnd)) continue;
+            PInvoke.GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == ownPid) continue;
+            var ex = (WINDOW_EX_STYLE)PInvoke.GetWindowLong(hwnd, WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE);
+            if (ex.HasFlag(WINDOW_EX_STYLE.WS_EX_TRANSPARENT)) continue; // clicks pass through it
+            Rectangle bounds = DwmHelpers.GetVisibleBounds(hwnd);
+            if (bounds.Width <= 0 || bounds.Height <= 0) continue;
+
+            HWND root = PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOTOWNER);
+            if (root.IsNull) root = hwnd;
+            if (!roots.TryGetValue(root, out SourceWindow? window))
+            {
+                WindowCandidate c = Describe(root, shell);
+                window = PInvoke.IsWindowVisible(root) && WindowFilter.IsPresentable(c, ownPid) ? ToSource(c, appNames) : null;
+                roots[root] = window;
+            }
+            result.Add(new Core.PickTarget(window, bounds));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Every top-level window that is on screen right now (visible, not minimised, not cloaked),
+    /// front to back, with its program name: main windows, dialogs, pop-ups and tool windows alike.
+    /// For the never-show check (NeverShow): a password manager's pop-up counts as much as its
+    /// main window. SCP's own windows are left out. <paramref name="names"/> caches program names
+    /// between calls (a process keeps its name).
+    /// </summary>
+    public static List<Core.VisibleWindow> GetVisibleWindows(Dictionary<uint, string> names)
+    {
+        var handles = new List<HWND>();
+        PInvoke.EnumWindows((hwnd, _) =>
+        {
+            handles.Add(hwnd);
+            return true;
+        }, default);
+
+        uint ownPid = (uint)Environment.ProcessId;
+        var result = new List<Core.VisibleWindow>();
+        foreach (HWND hwnd in handles)
+        {
+            if (!PInvoke.IsWindowVisible(hwnd) || PInvoke.IsIconic(hwnd) || DwmHelpers.IsCloaked(hwnd)) continue;
+            PInvoke.GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == ownPid) continue;
+            // The visible frame, not GetWindowRect: its invisible resize border reaches a few
+            // pixels onto a neighbouring screen and would blank that screen for nothing.
+            Rectangle bounds = DwmHelpers.GetVisibleBounds(hwnd);
+            if (bounds.Width <= 0 || bounds.Height <= 0) continue;
+            uint app = AppProcessId(hwnd, pid);
+            if (!names.TryGetValue(app, out string? name))
+            {
+                name = GetAppName(app);
+                names[app] = name;
+            }
+            result.Add(new Core.VisibleWindow(hwnd, name, bounds));
+        }
+        return result;
+    }
+
+    /// <summary>
     /// The top-level window the user is working in, if it can be presented (used by "Show the
     /// window I am in"). Returns null for SCP's own windows, the desktop and the taskbar.
     /// </summary>
@@ -120,6 +219,18 @@ internal static class WindowEnumerator
     }
 
     public static bool IsAlive(nint hwnd) => PInvoke.IsWindow((HWND)hwnd);
+
+    /// <summary>
+    /// The top-level window the pointer is over at <paramref name="point"/> (what a click would
+    /// land on), or 0. SCP's click-through overlays (the outline) are passed through.
+    /// </summary>
+    public static nint RootAt(Point point)
+    {
+        HWND hit = PInvoke.WindowFromPoint(point);
+        if (hit.IsNull) return 0;
+        HWND root = PInvoke.GetAncestor(hit, GET_ANCESTOR_FLAGS.GA_ROOT);
+        return root.IsNull ? hit : root;
+    }
 
     public static bool IsMinimized(nint hwnd) => PInvoke.IsIconic((HWND)hwnd);
 

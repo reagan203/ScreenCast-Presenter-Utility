@@ -30,7 +30,7 @@ namespace ScreenCastPresenter.Capture;
 /// aspect fit, letterbox and fade happen in one draw. Frames never touch CPU memory (rule 1).
 /// UI-thread calls just update a few fields and wake the thread.
 /// </summary>
-internal sealed class WgcEngine : ICaptureEngine
+internal sealed class WgcEngine : ICaptureEngine, IEffectsEngine
 {
     private static readonly TimeSpan FirstFrameTimeout = TimeSpan.FromMilliseconds(1500);
 
@@ -51,6 +51,21 @@ internal sealed class WgcEngine : ICaptureEngine
     private string? _message;
     private double _messageBrightness;
     private bool _dirty;
+    private bool _cursor;
+    private string? _logoPath;
+    private bool _logoChanged;
+
+    // Automatic hiding (FR-88): asked for under _sync, run on the render thread and a worker.
+    private SensitiveKinds _autoKinds;
+    private RedactStyle _autoStyle;
+    private bool _autoChanged;
+    private AutoRedactor? _auto;
+    private Rectangle _lastArea;
+    private string _autoWords = "";
+
+    // Marks over the picture (FR-65, FR-71): their own lock; a change wakes the render thread.
+    private readonly EffectsLayer _effects;
+    private bool _cursorApplied;
 
     // Render-thread only.
     private SourceWindow _source = null!;
@@ -69,21 +84,85 @@ internal sealed class WgcEngine : ICaptureEngine
     private IDWriteFactory? _dwrite;
     private IDWriteTextFormat? _textFormat;
     private ID2D1SolidColorBrush? _textBrush;
+    private ID2D1Bitmap1? _logo;
     private IDirect3DDevice? _winrtDevice;
     private GraphicsCaptureItem? _item;
     private Direct3D11CaptureFramePool? _pool;
     private GraphicsCaptureSession? _session;
     private SizeInt32 _poolSize;
     private volatile bool _itemClosed;
+    private CameraFeed? _camera; // a camera instead of screen capture (FR-68)
+
+    // The small picture (FR-72): asked for on any thread, set up and drawn on the render thread.
+    private (SourceWindow Source, InsetCorner Corner, int Percent)? _insetWanted;
+    private bool _insetChanged;
+    private InsetFeed? _inset;
+    private SourceWindow? _insetSource;
+    private InsetCorner _insetCorner;
+    private int _insetPercent = InsetLayout.DefaultSize;
+    private ID2D1SolidColorBrush? _insetBorder;
+
+    /// <summary>The small picture couldn't start or went away (closed, unplugged); it has been taken off.</summary>
+    public event EventHandler<string>? InsetFailed;
+
+    public void Inset(SourceWindow? source, InsetCorner corner, int percent) => Update(() =>
+    {
+        _insetWanted = source is null ? null : (source, corner, percent);
+        _insetChanged = true;
+    });
 
     /// <param name="showCursor">Include the mouse pointer in the picture (FR-24).</param>
     /// <param name="startFrozen">Freeze on the first frame (used to freeze a DWM-presented source seamlessly).</param>
-    public WgcEngine(bool showCursor, bool startFrozen = false)
+    /// <param name="autoHide">Automatic hiding from the start (FR-88): the first picture waits for the first scan.</param>
+    public WgcEngine(bool showCursor, bool startFrozen = false, SensitiveKinds autoHide = SensitiveKinds.None, RedactStyle autoStyle = RedactStyle.Solid)
     {
+        _autoKinds = autoHide;
+        _autoStyle = autoStyle;
+        _autoChanged = autoHide != SensitiveKinds.None;
         _showCursor = showCursor;
+        _cursor = showCursor;
+        _cursorApplied = showCursor;
         _frozen = startFrozen;
         StartFrozen = startFrozen;
+        _effects = new EffectsLayer(() => Update(() => { }));
     }
+
+    // ───────────────────────────── marks on the TV ─────────────────────────────
+
+    public void Click(PointF at, bool secondary) => _effects.Click(at, secondary);
+    public void Pointer(PointF? at) => _effects.Pointer(at);
+    public void Laser(PointF? at) => _effects.Laser(at);
+    public void InkStart(InkStroke stroke) => _effects.InkStart(stroke);
+    public void InkAdd(int id, IReadOnlyList<PointF> points) => _effects.InkAdd(id, points);
+    public void InkRemove(int id) => _effects.InkRemove(id);
+    public void InkClear() => _effects.InkClear();
+    public void InkSet(int id, IReadOnlyList<PointF> points) => _effects.InkSet(id, points);
+    public void Redact(IReadOnlyList<CropRegion> regions, RedactStyle style) => _effects.Redact(regions, style);
+    public void Spotlight(PointF? at) => _effects.Spotlight(at);
+    public void Caption(string? name, string? second) => _effects.Caption(name, second);
+    public void Qr(string? text, InsetCorner corner) => _effects.Qr(text, corner);
+    public void LiveCaption(string? text) => _effects.LiveCaption(text);
+    public void CaptionStyle(CaptionLook look) => _effects.CaptionStyle(look);
+
+    public void AutoHide(SensitiveKinds kinds, RedactStyle style) => Update(() =>
+    {
+        _autoKinds = kinds;
+        _autoStyle = style;
+        _autoChanged = true;
+    });
+
+    /// <summary>Automatic hiding covered something new (in words).</summary>
+    public event EventHandler<string>? AutoHidden;
+
+    public void Logo(string? path) => Update(() =>
+    {
+        if (string.Equals(path, _logoPath, StringComparison.OrdinalIgnoreCase)) return;
+        _logoPath = path;
+        _logoChanged = true;
+    });
+
+    /// <summary>Only if it was asked for at the start (the pointer setting): the laser can hide it, never add it.</summary>
+    public void ShowCursor(bool on) => Update(() => _cursor = on && _showCursor);
 
     public string Name => "Windows Graphics Capture";
     public bool SupportsFreeze => true;
@@ -139,26 +218,37 @@ internal sealed class WgcEngine : ICaptureEngine
             var clock = Stopwatch.StartNew();
             while (!_stop)
             {
-                _wake.WaitOne(_firstFrame.Task.IsCompleted ? 500 : 50);
+                bool animating = _effects.IsAnimating;
+                _wake.WaitOne(animating ? 16 : _firstFrame.Task.IsCompleted ? 500 : 50);
                 if (_stop) break;
                 if (_itemClosed)
                 {
                     Fail("The captured window or screen went away.");
                     return;
                 }
+                if (_camera?.Failure is { } cameraProblem)
+                {
+                    Fail(cameraProblem);
+                    return;
+                }
 
                 bool newFrame = TakeLatestFrame();
+                newFrame |= PullInset();
                 bool dirty;
                 lock (_sync)
                 {
                     dirty = _dirty;
                     _dirty = false;
                 }
-                if (newFrame || dirty || !_firstFrame.Task.IsCompleted) Render();
+                if (newFrame || dirty || animating || !_firstFrame.Task.IsCompleted) Render();
+                ScanForAutoHide(newFrame);
 
                 // First frame reached the compositor (or the source has nothing to show, e.g.
                 // it's minimised): the output may be revealed. It's drawn at opacity 0 = black.
-                if (!_firstFrame.Task.IsCompleted && (_heldBitmap is not null || clock.Elapsed > FirstFrameTimeout))
+                // With automatic hiding on, the first frame waits for its first scan (FR-88).
+                bool scanned = _auto?.FirstScanDone ?? true;
+                TimeSpan limit = FirstFrameTimeout + (_auto is not null ? AutoRedactor.FirstScanLimit : TimeSpan.Zero);
+                if (!_firstFrame.Task.IsCompleted && (_heldBitmap is not null && scanned || clock.Elapsed > limit))
                     _firstFrame.TrySetResult();
             }
             ClearToBlack(); // the output must never be left showing a stale picture
@@ -209,6 +299,14 @@ internal sealed class WgcEngine : ICaptureEngine
         _dwrite = DWrite.DWriteCreateFactory<IDWriteFactory>();
         _textBrush = _dc.CreateSolidColorBrush(new Color4(0x9A / 255f, 0x9A / 255f, 0xA2 / 255f, 1));
 
+        if (_source.Camera is { } camera)
+        {
+            // A camera: frames come from Windows' camera pipeline instead of screen capture.
+            _camera = CameraFeed.Start(camera.Id, () => _wake.Set());
+            ClearToBlack();
+            return;
+        }
+
         // Start capturing.
         _winrtDevice = Direct3D.CreateWinRTDevice(_device);
         _item = Direct3D.CreateItem(_source);
@@ -227,6 +325,54 @@ internal sealed class WgcEngine : ICaptureEngine
         ClearToBlack();
     }
 
+    /// <summary>On the render thread: applies a change to automatic hiding, then scans a new frame when one is due.</summary>
+    private void ScanForAutoHide(bool newFrame)
+    {
+        SensitiveKinds kinds;
+        RedactStyle style;
+        bool changed;
+        lock (_sync)
+        {
+            kinds = _autoKinds;
+            style = _autoStyle;
+            changed = _autoChanged;
+            _autoChanged = false;
+        }
+        if (changed)
+        {
+            if (kinds == SensitiveKinds.None)
+            {
+                _auto?.Dispose();
+                _auto = null;
+                _effects.AutoRedact([], style);
+                _autoWords = "";
+            }
+            else
+            {
+                _auto ??= new AutoRedactor(kinds, (regions, found) => OnAutoFound(regions, found));
+                _auto.Kinds = kinds;
+                _effects.AutoRedact(_effects.AutoRegions, style);
+                newFrame = true; // what to look for changed: scan again now
+            }
+        }
+        if (_auto is { } auto && _heldBitmap is not null && _target is not null && !IsFrozen)
+            auto.MaybeScan(_dc!, _heldBitmap, _lastArea, newFrame, _target);
+    }
+
+    /// <summary>On the scan's worker: what was found is covered on the next frame; something new is reported once.</summary>
+    private void OnAutoFound(List<CropRegion> regions, List<SensitiveMatch> found)
+    {
+        RedactStyle style;
+        lock (_sync) style = _autoStyle;
+        _effects.AutoRedact(regions, style);
+        string words = found.Count == 0 ? "" : SensitiveText.Words(found);
+        if (words == _autoWords) return;
+        _autoWords = words;
+        if (words.Length == 0) return;
+        if (_ui is { } ui) ui.Post(_ => AutoHidden?.Invoke(this, words), null);
+        else AutoHidden?.Invoke(this, words); // the capture helper: no UI thread
+    }
+
     private void CreateTarget()
     {
         using IDXGISurface backBuffer = _swapChain!.GetBuffer<IDXGISurface>(0);
@@ -242,6 +388,7 @@ internal sealed class WgcEngine : ICaptureEngine
     /// </summary>
     private bool TakeLatestFrame()
     {
+        if (_camera is not null) return TakeCameraFrame();
         Direct3D11CaptureFrame? latest = null;
         while (_pool!.TryGetNextFrame() is { } frame)
         {
@@ -272,6 +419,109 @@ internal sealed class WgcEngine : ICaptureEngine
         }
     }
 
+    /// <summary>
+    /// Starts, changes or stops the small picture as asked, and takes its newest frame (not while
+    /// frozen: the whole TV holds still). True when there's something new to draw.
+    /// </summary>
+    private bool PullInset()
+    {
+        (SourceWindow Source, InsetCorner Corner, int Percent)? wanted;
+        bool changed, frozen;
+        lock (_sync)
+        {
+            wanted = _insetWanted;
+            changed = _insetChanged;
+            _insetChanged = false;
+            frozen = _frozen;
+        }
+        if (changed)
+        {
+            if (_inset is not null && !(wanted is { } keep && keep.Source.IsSameSource(_insetSource)))
+            {
+                _inset.Dispose();
+                _inset = null;
+                _insetSource = null;
+            }
+            if (wanted is { } w)
+            {
+                _insetCorner = w.Corner;
+                _insetPercent = w.Percent;
+                if (_inset is null)
+                {
+                    try
+                    {
+                        _winrtDevice ??= Direct3D.CreateWinRTDevice(_device!); // a camera main picture has none of its own
+                        _inset = InsetFeed.Start(w.Source, _device!, _winrtDevice, _dc!, () => _wake.Set());
+                        _insetSource = w.Source;
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        ReportInset(ex.Message);
+                    }
+                }
+            }
+            return true;
+        }
+        if (_inset is null) return false;
+        if (_inset.Failure is { } reason)
+        {
+            _inset.Dispose();
+            _inset = null;
+            _insetSource = null;
+            lock (_sync) _insetWanted = null;
+            ReportInset(reason);
+            return true;
+        }
+        bool fresh = _inset.Pull(_context!, _winrtDevice, frozen);
+        if (_inset.Failure is { } problem) // e.g. a camera that couldn't start, found out just now
+        {
+            _inset.Dispose();
+            _inset = null;
+            _insetSource = null;
+            lock (_sync) _insetWanted = null;
+            ReportInset(problem);
+            return true;
+        }
+        return fresh;
+    }
+
+    private void ReportInset(string reason)
+    {
+        if (_ui is { } ui) ui.Post(_ => InsetFailed?.Invoke(this, reason), null);
+        else InsetFailed?.Invoke(this, reason); // the capture helper: no UI thread
+    }
+
+    /// <summary>The small picture in its corner, at the picture's brightness, with a faint edge so it stands apart.</summary>
+    private void DrawInset(Size canvas, double opacity)
+    {
+        if (_inset?.Bitmap is not { } bitmap || opacity <= 0.001) return;
+        Rectangle part = _inset.ContentArea;
+        System.Drawing.RectangleF place = InsetLayout.Place(canvas, part.Size, _insetCorner, _insetPercent);
+        if (place.IsEmpty) return;
+        var dest = new Rect(place.X, place.Y, place.Width, place.Height);
+        _dc!.DrawBitmap(bitmap, dest, (float)opacity, InterpolationMode.HighQualityCubic, ToRect(part), null);
+        _insetBorder ??= _dc.CreateSolidColorBrush(new Color4(1, 1, 1, 0.35f));
+        _insetBorder.Opacity = (float)opacity;
+        _dc.DrawRectangle(dest, _insetBorder, Math.Max(1.5f, canvas.Height / 540f));
+    }
+
+    /// <summary>The newest camera frame onto the GPU (unless frozen: then frames are dropped and the picture stays).</summary>
+    private bool TakeCameraFrame()
+    {
+        bool frozen;
+        lock (_sync) frozen = _frozen && _heldBitmap is not null;
+        if (frozen)
+        {
+            _camera!.TakeLatest((_, _, _) => { });
+            return false;
+        }
+        return _camera!.TakeLatest((pixels, stride, size) =>
+        {
+            if (_held is null || _heldSize != size) CreateHeldTexture(size);
+            _context!.UpdateSubresource<byte>(pixels, _held!, 0, (uint)stride, 0, null);
+        });
+    }
+
     private void CreateHeldTexture(Size size)
     {
         _heldBitmap?.Dispose();
@@ -300,27 +550,56 @@ internal sealed class WgcEngine : ICaptureEngine
         CropRegion? crop;
         string? message;
         double messageBrightness;
+        bool frozen, cursor, logoChanged;
+        string? logoPath;
         lock (_sync)
         {
+            logoChanged = _logoChanged;
+            _logoChanged = false;
+            logoPath = _logoPath;
             opacity = _opacity;
             output = _outputSize;
             crop = _crop;
             message = _message;
             messageBrightness = _messageBrightness;
+            frozen = _frozen;
+            cursor = _cursor;
         }
         if (output.Width <= 0 || output.Height <= 0) return;
+        if (logoChanged)
+        {
+            _logo?.Dispose();
+            _logo = LoadLogo(logoPath);
+        }
+        if (cursor != _cursorApplied && _session is not null)
+        {
+            try
+            {
+                _session.IsCursorCaptureEnabled = cursor;
+                _cursorApplied = cursor;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.Runtime.InteropServices.COMException)
+            {
+                Debug.WriteLine(ex); // the pointer just stays as it was
+                _cursorApplied = cursor;
+            }
+        }
 
         // Windows show their client area only (same as the DWM engine); screens show everything.
         Rectangle? shown = null;
+        Rectangle area = Rectangle.Empty;
         if (_heldBitmap is not null)
         {
-            Rectangle area = _source.IsScreen ? new Rectangle(Point.Empty, _heldSize) : Direct3D.ClientAreaInFrame(_source.Handle, _heldSize);
+            area = _source.IsWindow ? Direct3D.ClientAreaInFrame(_source.Handle, _heldSize) : new Rectangle(Point.Empty, _heldSize);
+            _lastArea = area;
             shown = crop is null ? area : Offset(crop.ToPixels(area.Size), area.Location);
         }
 
         // The swap chain only needs the source's own resolution; DWM stretches it to the screen.
         // A small window on a big TV then costs a few MB instead of two full-screen buffers (NFR-03).
-        Size canvas = CanvasSize(output, shown?.Size);
+        // Words, a code or a logo on top need enough pixels to stay sharp on the TV.
+        bool showsMessage = message is { Length: > 0 } && messageBrightness > 0.001;
+        Size canvas = CanvasSize(output, shown?.Size, _effects.HasOverlay || (showsMessage && _logo is not null) ? 0.5 : 0.25);
         if (Math.Abs(canvas.Width - _targetSize.Width) > 4 || Math.Abs(canvas.Height - _targetSize.Height) > 4) ResizeTarget(canvas);
         canvas = _targetSize;
 
@@ -332,8 +611,14 @@ internal sealed class WgcEngine : ICaptureEngine
         {
             Rectangle dest = AspectFit.Fit(part.Size, canvas);
             _dc.DrawBitmap(_heldBitmap!, ToRect(dest), (float)opacity, InterpolationMode.HighQualityCubic, ToRect(part), null);
+            _effects.Render(_dc, _d2dFactory!, _dwrite!, _heldBitmap!, area, part, dest, (float)opacity, frozen);
+            DrawInset(canvas, opacity);
         }
-        if (message is { Length: > 0 } && messageBrightness > 0.001) DrawMessage(message, messageBrightness, canvas);
+        if (showsMessage) DrawMessage(message!, messageBrightness, canvas);
+        // Words and codes on top show with the picture or the black screen's message, never on plain black.
+        float picture = shown is not null ? (float)opacity : 0;
+        float visibility = (float)Math.Max(picture, showsMessage ? messageBrightness : 0);
+        _effects.RenderOverlay(_dc, _d2dFactory!, _dwrite!, new System.Drawing.SizeF(canvas.Width, canvas.Height), visibility, picture);
 
         _dc.EndDraw().CheckError();
         _swapChain!.Present(1, PresentFlags.None).CheckError();
@@ -343,18 +628,19 @@ internal sealed class WgcEngine : ICaptureEngine
     /// Smallest canvas with the output's shape that still shows the source pixel-for-pixel (never
     /// bigger than the output). At least a quarter of the output, so the blank message stays sharp.
     /// </summary>
-    internal static Size CanvasSize(Size output, Size? shown)
+    internal static Size CanvasSize(Size output, Size? shown, double minimum = 0.25)
     {
-        double scale = 0.25;
+        double scale = minimum;
         if (shown is { Width: > 0, Height: > 0 } s)
         {
             Rectangle fit = AspectFit.Fit(s, output);
             if (fit.Width > 0 && fit.Height > 0) scale = Math.Max((double)s.Width / fit.Width, (double)s.Height / fit.Height);
         }
-        scale = Math.Clamp(scale, 0.25, 1);
+        scale = Math.Clamp(scale, Math.Clamp(minimum, 0.25, 1), 1);
         return new Size(Math.Max(1, (int)Math.Ceiling(output.Width * scale)), Math.Max(1, (int)Math.Ceiling(output.Height * scale)));
     }
 
+    /// <summary>The blank screen's message, with your logo above it (FR-80) when there is one.</summary>
     private void DrawMessage(string message, double brightness, Size output)
     {
         float size = Math.Max(9f, output.Height / 22f);
@@ -363,10 +649,38 @@ internal sealed class WgcEngine : ICaptureEngine
             _textFormat?.Dispose();
             _textFormat = _dwrite!.CreateTextFormat("Segoe UI", FontWeight.Normal, Vortice.DirectWrite.FontStyle.Normal, FontStretch.Normal, size);
             _textFormat.TextAlignment = TextAlignment.Center;
-            _textFormat.ParagraphAlignment = ParagraphAlignment.Center;
         }
+        var canvas = new System.Drawing.SizeF(output.Width, output.Height);
+        System.Drawing.RectangleF logo = _logo is null ? System.Drawing.RectangleF.Empty
+            : Layouts.Logo(canvas, new System.Drawing.SizeF(_logo.PixelSize.Width, _logo.PixelSize.Height), withMessage: true);
+        if (!logo.IsEmpty) _dc!.DrawBitmap(_logo!, new Rect(logo.X, logo.Y, logo.Width, logo.Height), (float)brightness, InterpolationMode.HighQualityCubic, null, null);
+        System.Drawing.RectangleF text = Layouts.Message(canvas, logo);
+        _textFormat.ParagraphAlignment = logo.IsEmpty ? ParagraphAlignment.Center : ParagraphAlignment.Near;
         _textBrush!.Opacity = (float)brightness;
-        _dc!.DrawText(message, _textFormat, new Rect(0, 0, output.Width, output.Height), _textBrush);
+        _dc!.DrawText(message, _textFormat, new Rect(text.X, text.Y, text.Width, text.Height), _textBrush);
+    }
+
+    /// <summary>The logo file onto the GPU; null when there's none or it can't be read (the blank screen just shows its message).</summary>
+    private ID2D1Bitmap1? LoadLogo(string? path)
+    {
+        using System.Drawing.Bitmap? image = LogoImage.Load(path);
+        if (image is null) return null;
+        System.Drawing.Imaging.BitmapData data = image.LockBits(new Rectangle(0, 0, image.Width, image.Height),
+            System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        try
+        {
+            return _dc!.CreateBitmap(new SizeI(image.Width, image.Height), data.Scan0, (uint)data.Stride,
+                new BitmapProperties1(new D2DPixelFormat(Format.B8G8R8A8_UNorm, D2DAlphaMode.Premultiplied), 96, 96, BitmapOptions.None));
+        }
+        catch (SharpGen.Runtime.SharpGenException ex)
+        {
+            Debug.WriteLine(ex);
+            return null;
+        }
+        finally
+        {
+            image.UnlockBits(data);
+        }
     }
 
     private void ResizeTarget(Size size)
@@ -413,13 +727,21 @@ internal sealed class WgcEngine : ICaptureEngine
 
     private void Release()
     {
+        _auto?.Dispose();
+        _auto = null;
+        _camera?.Dispose(); // the camera's light goes off with the picture
+        _inset?.Dispose();
+        _inset = null;
+        _insetBorder?.Dispose();
         _session?.Dispose();
         _pool?.Dispose();
         _item = null;
         _winrtDevice?.Dispose();
         if (_dc is not null) _dc.Target = null;
+        _effects.Dispose();
         _textFormat?.Dispose();
         _textBrush?.Dispose();
+        _logo?.Dispose();
         _dwrite?.Dispose();
         _heldBitmap?.Dispose();
         _held?.Dispose();
@@ -448,8 +770,13 @@ internal sealed class WgcEngine : ICaptureEngine
         _device?.Dispose();
     }
 
+    private bool _disposed;
+
+    /// <summary>Stops the render thread (which presents a last black frame). Safe to call twice.</summary>
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _stop = true;
         _wake.Set();
         if (_thread is not null && !_thread.Join(TimeSpan.FromSeconds(3)))

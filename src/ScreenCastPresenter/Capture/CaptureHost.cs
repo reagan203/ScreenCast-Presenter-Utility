@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Drawing.Imaging;
+using ScreenCastPresenter.Core;
 using ScreenCastPresenter.Interop;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -83,10 +84,13 @@ internal static class CaptureHost
         SourceWindow source = CaptureProtocol.ParseSource(start[2]) ?? throw new InvalidOperationException("That window or screen is gone.");
         source = source with { Crop = CaptureProtocol.ParseCrop(start[5]) };
         var size = new Size(CaptureProtocol.ParseInt(start[6]), CaptureProtocol.ParseInt(start[7]));
+        (SensitiveKinds autoHide, RedactStyle autoStyle) = start.Length > 9 ? CaptureProtocol.ParseAutoHide(start[8], start[9]) : (SensitiveKinds.None, RedactStyle.Solid);
 
         uint mainThread = PInvoke.GetCurrentThreadId();
         HWND child = CreateChild(parent, size);
-        using var engine = new WgcEngine(start[3] == "1", start[4] == "1");
+        using var engine = new WgcEngine(start[3] == "1", start[4] == "1", autoHide, autoStyle);
+        engine.InsetFailed += (_, reason) => Send("inset-failed " + reason);
+        engine.AutoHidden += (_, words) => Send("autohid " + words);
         engine.Failed += (_, reason) =>
         {
             Send("failed " + reason);
@@ -140,9 +144,93 @@ internal static class CaptureHost
                 case "stop":
                     PInvoke.PostThreadMessage(mainThread, WmStop, default, default);
                     return;
+                default:
+                    ApplyMark(engine, line);
+                    break;
             }
         }
         PInvoke.PostThreadMessage(mainThread, WmStop, default, default); // SCP went away
+    }
+
+    /// <summary>
+    /// One line about what's drawn over the picture (FR-65, FR-71 to FR-84) applied to
+    /// <paramref name="engine"/>. Anything malformed is ignored. False when the line isn't about marks.
+    /// </summary>
+    internal static bool ApplyMark(IEffectsEngine engine, string line)
+    {
+        string[] p = line.Split(' ', 3);
+        switch (p[0])
+        {
+            case "click" when p.Length > 2 && CaptureProtocol.ParsePoint(p[1]) is { } at: engine.Click(at, p[2] == "1"); return true;
+            case "pointer" when p.Length > 1: engine.Pointer(CaptureProtocol.ParsePoint(p[1])); return true;
+            case "laser" when p.Length > 1: engine.Laser(CaptureProtocol.ParsePoint(p[1])); return true;
+            case "cursor" when p.Length > 1: engine.ShowCursor(p[1] == "1"); return true;
+            case "ink-start" when ParseInkStart(line) is { } stroke: engine.InkStart(stroke); return true;
+            case "ink-add" when p.Length > 2: engine.InkAdd(CaptureProtocol.ParseInt(p[1]), CaptureProtocol.ParsePoints(p[2])); return true;
+            case "ink-set" when p.Length > 2: engine.InkSet(CaptureProtocol.ParseInt(p[1]), CaptureProtocol.ParsePoints(p[2])); return true;
+            case "redact":
+                var redact = p.Length > 1 ? CaptureProtocol.ParseRedact(line[7..]) : null;
+                engine.Redact(redact?.Regions ?? [], redact?.Style ?? RedactStyle.Solid);
+                return true;
+            case "spotlight" when p.Length > 1: engine.Spotlight(CaptureProtocol.ParsePoint(p[1])); return true;
+            case "caption" when p.Length > 1:
+                string captionText = line[8..];
+                if (captionText == "none") engine.Caption(null, null);
+                else
+                {
+                    int split = captionText.IndexOf(CaptureProtocol.LineSeparator);
+                    engine.Caption(split < 0 ? captionText : captionText[..split], split < 0 ? "" : captionText[(split + 1)..]);
+                }
+                return true;
+            case "logo" when p.Length > 1:
+                string logoPath = line[5..];
+                engine.Logo(logoPath == "none" ? null : logoPath);
+                return true;
+            case "qr" when p.Length > 1:
+                if (p[1] == "none") engine.Qr(null, InsetCorner.TopRight);
+                else if (p.Length > 2) engine.Qr(p[2], int.TryParse(p[1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int qc) && Enum.IsDefined((InsetCorner)qc) ? (InsetCorner)qc : InsetCorner.TopRight);
+                return true;
+            case "live": engine.LiveCaption(line.Length > 5 ? line[5..] : null); return true;
+            case "live-style" when p.Length > 2:
+                engine.CaptionStyle(new CaptionLook(
+                    int.TryParse(p[1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int size) && Enum.IsDefined((CaptionSize)size) ? (CaptionSize)size : CaptionSize.Normal,
+                    int.TryParse(p[2], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int place) && Enum.IsDefined((CaptionPlace)place) ? (CaptionPlace)place : CaptionPlace.Bottom));
+                return true;
+            case "autohide" when p.Length > 2:
+                (SensitiveKinds kinds, RedactStyle style) = CaptureProtocol.ParseAutoHide(p[1], p[2]);
+                engine.AutoHide(kinds, style);
+                return true;
+            case "ink-remove" when p.Length > 1: engine.InkRemove(CaptureProtocol.ParseInt(p[1])); return true;
+            case CaptureProtocol.InkClear: engine.InkClear(); return true;
+            case "inset" when p.Length > 1:
+                if (p[1] == "none") engine.Inset(null, InsetCorner.BottomRight, InsetLayout.DefaultSize);
+                else if (CaptureProtocol.ParseSource(p[1]) is { } inset)
+                {
+                    (InsetCorner corner, int percent) = CaptureProtocol.ParseInsetPlace(p.Length > 2 ? p[2] : "");
+                    engine.Inset(inset, corner, percent);
+                }
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>"ink-start id tool argb width [text]" → a new, empty mark; null if malformed (or text without words).</summary>
+    internal static Core.InkStroke? ParseInkStart(string line)
+    {
+        string[] p = line.Split(' ', 6);
+        if (p.Length < 5 || p[0] != "ink-start") return null;
+        int tool = CaptureProtocol.ParseInt(p[2]);
+        if (!Enum.IsDefined((Core.InkTool)tool)) return null;
+        double width = CaptureProtocol.ParseDouble(p[4]);
+        if (width <= 0) return null;
+        var stroke = new Core.InkStroke(CaptureProtocol.ParseInt(p[1]), (Core.InkTool)tool, CaptureProtocol.ParseInt(p[3]), (float)width);
+        if (stroke.Tool == Core.InkTool.Text)
+        {
+            if (p.Length < 6 || p[5].Trim().Length == 0) return null;
+            stroke.Text = p[5];
+        }
+        return stroke;
     }
 
     /// <summary>
@@ -214,23 +302,30 @@ internal static class CaptureHost
 
     // ───────────────────────────── screenshots ─────────────────────────────
 
-    /// <summary>--still &lt;source&gt; &lt;cursor&gt; &lt;crop&gt; &lt;png path&gt;: one frame to a PNG file. Exit 0 = saved.</summary>
+    /// <summary>
+    /// --still &lt;source&gt; &lt;cursor&gt; &lt;crop&gt; &lt;png path&gt; [&lt;hidden parts&gt;]: one frame to a PNG file,
+    /// with the parts hidden from the audience (FR-74) covered. Exit 0 = saved.
+    /// </summary>
     private static int RunStill(string[] args)
     {
         if (args.Length < 5) return 2;
         SourceWindow source = CaptureProtocol.ParseSource(args[1]) ?? throw new InvalidOperationException("That window or screen is gone.");
         source = source with { Crop = CaptureProtocol.ParseCrop(args[3]) };
-        using Bitmap? image = StillCapture.CaptureAsync(source, args[2] == "1", TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+        IReadOnlyList<CropRegion> hidden = args.Length > 5 && args[5].StartsWith("redact ", StringComparison.Ordinal)
+            ? CaptureProtocol.ParseRedact(args[5]["redact ".Length..])?.Regions ?? [] : [];
+        using Bitmap? image = StillCapture.CaptureAsync(source, args[2] == "1", TimeSpan.FromSeconds(3), hidden).GetAwaiter().GetResult();
         if (image is null) return 4;
         image.Save(args[4], ImageFormat.Png);
         return 0;
     }
 
     /// <summary>Runs the still helper from SCP. True when the PNG was written.</summary>
-    public static async Task<bool> CaptureStillToFileAsync(SourceWindow source, bool cursor, string path)
+    /// <param name="hidden">Parts hidden from the audience (FR-74): covered in the picture too.</param>
+    public static async Task<bool> CaptureStillToFileAsync(SourceWindow source, bool cursor, string path, IReadOnlyList<CropRegion>? hidden = null)
     {
         var info = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
-        foreach (string a in new[] { CaptureProtocol.StillSwitch, CaptureProtocol.SourceSpec(source), cursor ? "1" : "0", CaptureProtocol.Crop(source.Crop), path })
+        foreach (string a in new[] { CaptureProtocol.StillSwitch, CaptureProtocol.SourceSpec(source), cursor ? "1" : "0", CaptureProtocol.Crop(source.Crop), path,
+                     CaptureProtocol.Redact(hidden ?? [], RedactStyle.Solid) })
             info.ArgumentList.Add(a);
         using Process? helper = Process.Start(info);
         if (helper is null) return false;

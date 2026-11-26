@@ -52,15 +52,20 @@ public class CaptureProtocolTests
     {
         string start = CaptureProtocol.Start(4242, TestData.Window(77, "x") with { Crop = new CropRegion(0, 0, 0.5, 0.5) }, true, false, new Size(1920, 1080));
         string[] p = start.Split(' ');
-        Assert.Equal(["start", "4242", "window:77", "1", "0", "0,0,0.5,0.5", "1920", "1080"], p);
+        Assert.Equal(["start", "4242", "window:77", "1", "0", "0,0,0.5,0.5", "1920", "1080", "0", "0"], p); // automatic hiding off, solid
+        string withAutoHide = CaptureProtocol.Start(4242, TestData.Window(77, "x"), true, false, new Size(1920, 1080), SensitiveKinds.Emails | SensitiveKinds.Cards, RedactStyle.Blurred);
+        string[] q = withAutoHide.Split(' ');
+        Assert.Equal((SensitiveKinds.Emails | SensitiveKinds.Cards, RedactStyle.Blurred), CaptureProtocol.ParseAutoHide(q[8], q[9]));
     }
 
     [Fact]
     public void Message_with_spaces_and_newlines_stays_on_one_line()
     {
-        string line = CaptureProtocol.Message("We'll be\nright back", 0.5);
+        // The line break survives as U+2028, which the helper draws as a new line (a countdown under the message).
+        string line = CaptureProtocol.Message("We'll be\nright back\r\n4:59", 0.5);
         Assert.DoesNotContain('\n', line);
-        Assert.Equal("message 0.5 We'll be right back", line);
+        Assert.DoesNotContain('\r', line);
+        Assert.Equal("message 0.5 We'll be\u2028right back\u20284:59", line);
     }
 
     [Theory]

@@ -5,8 +5,12 @@ using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace ScreenCastPresenter.UI;
 
-/// <summary>What choosing a window does: show it on the TV, or record it (FR-52, FR-57).</summary>
-internal enum PickerMode { Show, Record }
+/// <summary>What choosing does: show it on the TV, record it (FR-52, FR-57), or show it small in a corner over what's shown (FR-72).</summary>
+/// <summary>
+/// What the picker chooses for: what to show, what to record, the small picture (FR-72), what's
+/// next (FR-76: made ready privately, shown with one key) or what the second TV shows (FR-85).
+/// </summary>
+internal enum PickerMode { Show, Record, Inset, Next, SecondTv }
 
 /// <summary>
 /// The picker (Ctrl+Alt+P, SRS 6.1): a centred panel over a dimmed screen with search, live
@@ -24,6 +28,7 @@ internal sealed class PickerOverlay : ThemedForm
     private readonly FlowLayoutPanel _outputs = new() { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
     private readonly PillButton _show = new("Show", PillKind.Primary);
     private readonly PillButton _crop = new("Crop…") { AccessibleName = "Crop the selected window, then show it" };
+    private readonly PillButton _clickPick = new("Click a window…") { AccessibleName = "Choose by clicking a window on your screen" };
     private readonly FlowLayoutPanel _screens = new();
     private readonly PillButton _theme = new("Light mode", PillKind.Secondary);
     private readonly PillButton _close = new("✕", PillKind.Ghost) { AccessibleName = "Close" };
@@ -37,6 +42,8 @@ internal sealed class PickerOverlay : ThemedForm
     private readonly Font _sectionFont = Theme.NewFont(8.5f, FontStyle.Bold);
     private List<SourceWindow> _all = [];
     private bool _dismissing;
+    private readonly Label _screensLabel = new() { Text = "WHOLE SCREENS", AutoSize = true, Tag = "dim" };
+    private int _cameraLoad;
     private PickerMode _mode;
 
     public PickerOverlay(ScpApp app, DisplayMonitor screen)
@@ -73,9 +80,16 @@ internal sealed class PickerOverlay : ThemedForm
             if (_grid.Selected is not { } w || !Visible || _dismissing) return;
             Dismiss();
             if (_mode == PickerMode.Record) await _app.RecordPartAsync(w);
+            else if (_mode != PickerMode.Show) await RouteAsync(w); // crop is hidden in these modes; kept safe anyway
             else await _app.CropAsync(w, present: true); // UC-04
         };
         _close.Click += (_, _) => Dismiss();
+        _clickPick.Click += (_, _) =>
+        {
+            if (!Visible || _dismissing) return;
+            Dismiss();
+            _ = _app.RunAsync("pick-window"); // FR-05
+        };
         _refresh.Tick += (_, _) => RefreshWindows();
         ApplyPalette(Theme.Current);
     }
@@ -136,16 +150,18 @@ internal sealed class PickerOverlay : ThemedForm
         _grid.Dock = DockStyle.Fill;
         _grid.Margin = new Padding(0);
 
-        var screensLabel = new Label { Text = "WHOLE SCREENS", AutoSize = true, Font = _sectionFont, Tag = "dim", Margin = new Padding(0, Px(14), 0, Px(8)) };
+        _screensLabel.Font = _sectionFont;
+        _screensLabel.Margin = new Padding(0, Px(14), 0, Px(8));
         _screens.AutoSize = true;
         _screens.WrapContents = true;
         _screens.Dock = DockStyle.Fill;
         _screens.Margin = new Padding(0);
 
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 5, Margin = new Padding(0, Px(14), 0, 0) };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 6, Margin = new Padding(0, Px(14), 0, 0) };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _footerLabel.Margin = new Padding(0, 0, Px(10), 0);
@@ -154,21 +170,26 @@ internal sealed class PickerOverlay : ThemedForm
         _crop.Radius = 10;
         _crop.Margin = new Padding(0, 0, Px(10), 0);
         _crop.Size = _crop.Measure();
+        _clickPick.Anchor = AnchorStyles.Right;
+        _clickPick.Radius = 10;
+        _clickPick.Margin = new Padding(0, 0, Px(10), 0);
+        _clickPick.Size = _clickPick.Measure();
         _hints.Tag = "faint";
         _hints.Margin = new Padding(0, Px(10), 0, 0);
         footer.Controls.Add(_footerLabel, 0, 0);
         footer.Controls.Add(_outputs, 1, 0);
-        footer.Controls.Add(_crop, 3, 0);
-        footer.Controls.Add(_show, 4, 0);
+        footer.Controls.Add(_clickPick, 3, 0);
+        footer.Controls.Add(_crop, 4, 0);
+        footer.Controls.Add(_show, 5, 0);
         footer.Controls.Add(_hints, 0, 1);
-        footer.SetColumnSpan(_hints, 5);
+        footer.SetColumnSpan(_hints, 6);
 
         root.Controls.Add(header, 0, 0);
         root.Controls.Add(_search, 0, 1);
         root.Controls.Add(_banner, 0, 2);
         root.Controls.Add(sectionRow, 0, 3);
         root.Controls.Add(_grid, 0, 4);
-        root.Controls.Add(screensLabel, 0, 5);
+        root.Controls.Add(_screensLabel, 0, 5);
         root.Controls.Add(_screens, 0, 6);
         root.Controls.Add(footer, 0, 7);
         Controls.Add(root);
@@ -206,7 +227,7 @@ internal sealed class PickerOverlay : ThemedForm
             // Recording the TV screen is fine, and so is showing your own screen in a floating window
             // (a private preview); only a full-screen output can't show the screen it covers.
             bool floating = _app.Session.State != SessionState.Off ? _app.Session.OutputIsFloating : _app.Settings.OutputInWindow;
-            bool isOutput = !record && !floating && output is not null && m.IsSameScreen(output);
+            bool isOutput = !record && (!floating && output is not null && m.IsSameScreen(output) || _app.IsSecondTvOutput(m, _mode == PickerMode.SecondTv));
             var pill = new PillButton(m.Name, PillKind.Secondary)
             {
                 Detail = isOutput ? "  · your presentation is shown here" : $"  · {m.ShortName} · {m.Bounds.Width} × {m.Bounds.Height}",
@@ -221,10 +242,53 @@ internal sealed class PickerOverlay : ThemedForm
                 if (!Visible || _dismissing) return;
                 Dismiss();
                 if (record) _app.RecordSource(SourceWindow.ForScreen(monitor));
-                else await _app.PresentAsync(SourceWindow.ForScreen(monitor));
+                else await RouteAsync(SourceWindow.ForScreen(monitor));
             };
             _screens.Controls.Add(pill);
         }
+        _screensLabel.Text = "WHOLE SCREENS";
+        if (!record) LoadCameras();
+    }
+
+    /// <summary>
+    /// FR-68: cameras (a webcam, a document camera) next to the screens. Asking Windows for them
+    /// takes a moment, so they're added when the answer comes, without holding up the picker.
+    /// </summary>
+    private async void LoadCameras()
+    {
+        int load = ++_cameraLoad;
+        List<CameraDevice> cameras;
+        try
+        {
+            cameras = await Cameras.ListAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+            return;
+        }
+        if (load != _cameraLoad || IsDisposed || !Visible || _dismissing || _mode == PickerMode.Record || cameras.Count == 0) return;
+        foreach (CameraDevice c in cameras)
+        {
+            CameraDevice camera = c;
+            var pill = new PillButton(camera.Name.Length > 0 ? camera.Name : "Camera", PillKind.Secondary)
+            {
+                Detail = "  · camera",
+                Radius = 10,
+                AccessibleName = $"Show the camera {camera.Name}",
+                Margin = new Padding(0, 0, LogicalToDeviceUnits(8), 0),
+            };
+            pill.Size = pill.Measure();
+            pill.Click += async (_, _) =>
+            {
+                if (!Visible || _dismissing) return;
+                Dismiss();
+                await RouteAsync(SourceWindow.ForCamera(camera));
+            };
+            _screens.Controls.Add(pill);
+        }
+        _screensLabel.Text = "WHOLE SCREENS AND CAMERAS";
+        ApplyPalette(Theme.Current);
     }
 
     protected override void ApplyPalette(Palette palette)
@@ -274,14 +338,19 @@ internal sealed class PickerOverlay : ThemedForm
         var clock = System.Diagnostics.Stopwatch.StartNew();
         RefreshWindows();
         ScpApp.Diag($"picker: enumerated {_all.Count} windows in {clock.ElapsedMilliseconds} ms");
-        bool record = _mode == PickerMode.Record;
-        _title.Text = record ? "Choose what to record" : "Choose what to show";
+        bool record = _mode == PickerMode.Record, inset = _mode == PickerMode.Inset, next = _mode == PickerMode.Next, second = _mode == PickerMode.SecondTv;
+        _title.Text = record ? "Choose what to record" : inset ? "Choose the small picture" : next ? "Choose what's next"
+            : second ? "Choose what the second TV shows" : "Choose what to show";
         Text = record ? "ScreenCast Presenter: record" : "ScreenCast Presenter picker";
-        _footerLabel.Text = record ? "Sound" : "Show on";
+        _footerLabel.Text = record ? "Sound" : inset ? "Corner" : second ? "Second TV" : "Show on";
         _crop.Text = record ? "Part of it…" : "Crop…";
         _crop.AccessibleName = record ? "Record part of the selected window" : "Crop the selected window, then show it";
         _crop.Size = _crop.Measure();
+        _clickPick.Visible = _mode == PickerMode.Show;
+        _crop.Visible = !inset && !next && !second;
         if (record) BuildSoundOptions();
+        else if (inset) BuildCornerOptions();
+        else if (second) BuildSecondTvOptions();
         else BuildOutputs();
         BuildScreens();
         UpdateShowButton();
@@ -411,6 +480,7 @@ internal sealed class PickerOverlay : ThemedForm
     private void RefreshWindows()
     {
         List<SourceWindow> windows = WindowEnumerator.GetPresentableWindows();
+        if (_mode != PickerMode.Record) windows.RemoveAll(_app.IsNeverShown); // never-show apps aren't offered to be shown, big or small
         if (windows.Count == _all.Count && windows.Zip(_all).All(p => p.First == p.Second)) return; // nothing changed
         _all = windows;
         ApplyFilter();
@@ -522,6 +592,72 @@ internal sealed class PickerOverlay : ThemedForm
         ApplyPalette(Theme.Current);
     }
 
+    /// <summary>The small picture's footer: which corner it goes in (remembered).</summary>
+    private void BuildCornerOptions()
+    {
+        foreach (Control old in _outputs.Controls.Cast<Control>().ToList()) old.Dispose();
+        InsetCorner chosen = InsetLayout.ParseCorner(_app.Settings.InsetCorner);
+        foreach (InsetCorner c in Enum.GetValues<InsetCorner>())
+        {
+            InsetCorner corner = c;
+            string words = InsetLayout.Words(corner);
+            var pill = new PillButton(char.ToUpperInvariant(words[0]) + words[1..], corner == chosen ? PillKind.Selected : PillKind.Secondary)
+            {
+                AccessibleName = $"Put the small picture {words}",
+                Margin = new Padding(0, 0, LogicalToDeviceUnits(6), 0),
+            };
+            pill.Size = pill.Measure();
+            pill.Click += (_, _) =>
+            {
+                _app.SetInsetPlace(corner, _app.Settings.InsetSize);
+                BuildCornerOptions();
+            };
+            _outputs.Controls.Add(pill);
+        }
+        ApplyPalette(Theme.Current);
+    }
+
+    /// <summary>The screens the second TV can be (FR-85): not the main TV, not the only screen you work on.</summary>
+    private void BuildSecondTvOptions()
+    {
+        foreach (Control old in _outputs.Controls.Cast<Control>().ToList()) old.Dispose();
+        IReadOnlyList<DisplayMonitor> candidates = _app.SecondTvCandidates();
+        DisplayMonitor? chosen = _app.SecondTvScreen;
+        if (candidates.Count == 0)
+        {
+            var none = new Label { AutoSize = true, Text = "Connect another TV or screen first", Tag = "dim", Margin = new Padding(0, LogicalToDeviceUnits(6), 0, 0) };
+            _outputs.Controls.Add(none);
+        }
+        foreach (DisplayMonitor m in candidates)
+        {
+            DisplayMonitor monitor = m;
+            var pill = new PillButton(m.Name, chosen is not null && m.IsSameScreen(chosen) ? PillKind.Selected : PillKind.Secondary)
+            {
+                Detail = $"  · {OutputLabel(m)}",
+                AccessibleName = $"Use {m.Label} as the second TV",
+                Margin = new Padding(0, 0, LogicalToDeviceUnits(6), 0),
+            };
+            pill.Size = pill.Measure();
+            pill.Click += (_, _) =>
+            {
+                _app.SetSecondTvScreen(monitor);
+                BuildSecondTvOptions();
+                UpdateShowButton();
+            };
+            _outputs.Controls.Add(pill);
+        }
+        ApplyPalette(Theme.Current);
+    }
+
+    /// <summary>A choice made in any mode but recording goes where the mode says.</summary>
+    private Task RouteAsync(SourceWindow source) => _mode switch
+    {
+        PickerMode.Inset => _app.SetInsetAsync(source),
+        PickerMode.Next => _app.GetReadyAsync(source),
+        PickerMode.SecondTv => _app.ShowOnSecondTvAsync(source),
+        _ => _app.PresentAsync(source),
+    };
+
     private static string OutputLabel(DisplayMonitor m) =>
         m.IsVirtual ? "Zoom screen" : m.IsTv ? "TV" : m.Connection == "Built-in" ? "This screen" : m.FriendlyName.Length > 0 ? m.FriendlyName : "Screen";
 
@@ -530,6 +666,9 @@ internal sealed class PickerOverlay : ThemedForm
         OutputOption current = _app.CurrentOutputOption;
         DisplayMonitor? output = current.Screen;
         string target = _mode == PickerMode.Record ? "● Start recording"
+            : _mode == PickerMode.Inset ? "Show it small"
+            : _mode == PickerMode.Next ? "Get it ready"
+            : _mode == PickerMode.SecondTv ? (_app.SecondTvScreen is { } second ? $"Show on {second.Name}" : "Show on the second TV")
             : current.IsWindow ? "Show in a window"
             : output is null ? "Show" : output.IsVirtual ? "Show on the Zoom screen" : output.IsTv ? "Show on TV"
             : _app.Monitors.Count < 2 ? "Show on this screen" : $"Show on {output.Name}";
@@ -544,6 +683,12 @@ internal sealed class PickerOverlay : ThemedForm
         string save = "Ctrl+1–9 saves a favourite";
         _hints.Text = _mode == PickerMode.Record
             ? "Arrow keys to move   ·   Enter to start recording   ·   It keeps recording while you work, even when the window is covered"
+            : _mode == PickerMode.Inset
+            ? "Arrow keys to move   ·   Enter to show it small in a corner, over what's shown   ·   A webcam works well"
+            : _mode == PickerMode.Next
+            ? $"Arrow keys to move   ·   Enter to get it ready: you see it privately   ·   {_app.ActiveShortcut("go")?.ToString() ?? "Go"} shows it"
+            : _mode == PickerMode.SecondTv
+            ? "Arrow keys to move   ·   Enter to show it on the second TV   ·   The first TV keeps showing what it shows"
             : $"Arrow keys to move   ·   Enter to show   ·   {save}   ·   {_app.ActiveShortcut("palette")?.ToString() ?? "The palette"} runs any action";
     }
 
@@ -552,7 +697,7 @@ internal sealed class PickerOverlay : ThemedForm
         if (!Visible || _dismissing) return;
         Dismiss(); // vanish first; it is excluded from capture anyway
         if (_mode == PickerMode.Record) _app.RecordSource(window);
-        else await _app.PresentAsync(window);
+        else await RouteAsync(window);
     }
 
     protected override void Dispose(bool disposing)

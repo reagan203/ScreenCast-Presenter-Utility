@@ -31,6 +31,9 @@ internal interface IOutputSurface : IDisposable
     /// </summary>
     void SetPrivatePreview(bool on);
 
+    /// <summary>Your logo above the black screen's message (FR-80), painted while nothing draws over the window; null for none.</summary>
+    void SetLogo(string? path) { }
+
     /// <summary>The user closed the floating window.</summary>
     event EventHandler? CloseRequested;
 
@@ -102,29 +105,36 @@ internal static class CaptureChoice
         isScreen || startFrozen || preferWgc || showPointer;
 }
 
-internal sealed class Win32SessionPlatform(Func<AppSettings> settings) : ISessionPlatform
+/// <param name="marksWanted">Marks on the TV are on (click rings, laser, drawing…): only the helper's engine can draw them.</param>
+internal sealed class Win32SessionPlatform(Func<AppSettings> settings, Func<bool>? marksWanted = null) : ISessionPlatform
 {
     public IOutputSurface CreateOutput(OutputPlacement placement) => new OutputWindow(placement);
 
     public ICaptureEngine CreateEngine(SourceWindow source, bool startFrozen = false)
     {
         AppSettings s = settings();
-        return CaptureChoice.DrawsPointerAndScreens(source.IsScreen, startFrozen, s.PreferWgc, s.ShowCursor)
-            ? new RemoteWgcEngine(s.ShowCursor, startFrozen)
+        // A camera has no window for the light way to show: always the helper (FR-68). So does
+        // anything with parts hidden from the audience: the light way can't cover them (FR-74).
+        return CaptureChoice.DrawsPointerAndScreens(!source.IsWindow, startFrozen, s.PreferWgc, s.ShowCursor || marksWanted?.Invoke() == true || HidesParts(s, source) || s.AutoHideKinds != SensitiveKinds.None)
+            ? new RemoteWgcEngine(s.ShowCursor, startFrozen) { StartAutoHide = s.AutoHideKinds, StartAutoStyle = s.HiddenPartStyle }
             : new DwmThumbnailEngine();
     }
 
+    private static bool HidesParts(AppSettings s, SourceWindow source) => Redactions.For(s, source).Count > 0;
+
     public ICaptureEngine? CreateFallbackEngine(SourceWindow source, ICaptureEngine failed) => failed switch
     {
-        RemoteWgcEngine when !source.IsScreen => new DwmThumbnailEngine(),
-        DwmThumbnailEngine when Direct3D.IsCaptureSupported => new RemoteWgcEngine(settings().ShowCursor, false),
+        // Never the light way for something with hidden parts: it would show them.
+        RemoteWgcEngine when source.IsWindow && !HidesParts(settings(), source) && settings().AutoHideKinds == SensitiveKinds.None => new DwmThumbnailEngine(),
+        DwmThumbnailEngine when Direct3D.IsCaptureSupported => new RemoteWgcEngine(settings().ShowCursor, false) { StartAutoHide = settings().AutoHideKinds, StartAutoStyle = settings().HiddenPartStyle },
         _ => null,
     };
 
-    public ISourceWatcher Watch(SourceWindow source) => source.IsScreen ? new ScreenWatcher() : new WindowWatcher(source.Handle);
+    /// <summary>A window is watched for closing and moving; a screen or a camera reports trouble through its engine.</summary>
+    public ISourceWatcher Watch(SourceWindow source) => source.IsWindow ? new WindowWatcher(source.Handle) : new ScreenWatcher();
 
-    public Size? ContentSize(SourceWindow source) =>
-        ContentSizeOf(source, WindowEnumerator.IsMinimized(source.Handle), WindowEnumerator.ClientSize(source.Handle));
+    public Size? ContentSize(SourceWindow source) => source.IsCamera ? null // its picture size isn't known here: the window keeps its shape
+        : ContentSizeOf(source, WindowEnumerator.IsMinimized(source.Handle), WindowEnumerator.ClientSize(source.Handle));
 
     /// <summary>
     /// A minimised window measures as the small strip Windows shrinks it to (apps that draw their

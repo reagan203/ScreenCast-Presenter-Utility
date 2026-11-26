@@ -13,7 +13,7 @@ namespace ScreenCastPresenter.UI;
 /// </summary>
 internal sealed class SettingsForm : ThemedForm
 {
-    public enum Section { General, Output, Recording, Appearance, Advanced }
+    public enum Section { General, Output, Recording, Privacy, Appearance, Rooms, Advanced }
 
     private readonly ScpApp _app;
     private readonly FlowLayoutPanel _nav = new() { Dock = DockStyle.Left, FlowDirection = FlowDirection.TopDown, WrapContents = false };
@@ -72,6 +72,8 @@ internal sealed class SettingsForm : ThemedForm
         Section.Output => Icons.Tv,
         Section.Recording => Icons.Video,
         Section.Appearance => Icons.Colour,
+        Section.Privacy => Icons.Lock,
+        Section.Rooms => Icons.People,
         Section.Advanced => Icons.Repair,
         _ => Icons.Settings,
     };
@@ -94,6 +96,16 @@ internal sealed class SettingsForm : ThemedForm
         ["Sharing in Zoom or Teams"] = Icons.Share,
         ["Zoom screen"] = Icons.Download,
         ["Dim the TV"] = Icons.Brightness,
+        ["Zoom"] = Icons.Search,
+        ["Countdown"] = Icons.Clock,
+        ["Slideshow"] = Icons.Next,
+        ["Small picture"] = Icons.OpenWindow,
+        ["Small picture size"] = Icons.OpenWindow,
+        ["When a TV is plugged in"] = Icons.Tv,
+        ["Talk timer"] = Icons.Clock,
+        ["Talk length"] = Icons.Clock,
+        ["Show my clicks"] = Icons.Mouse,
+        ["Ring around the mouse"] = Icons.Mouse,
         ["Blank screen message"] = Icons.Hide,
         ["Recordings folder"] = Icons.Folder,
         ["Screenshots folder"] = Icons.Camera,
@@ -104,8 +116,36 @@ internal sealed class SettingsForm : ThemedForm
         ["Text size"] = Icons.Font,
         ["How windows are shown"] = Icons.Window,
         ["Settings file"] = Icons.Folder,
+        ["Check for updates"] = Icons.Download,
         ["Privacy"] = Icons.Lock,
+        ["Never show these apps"] = Icons.Hide,
+        ["Add an app by name"] = Icons.Keyboard,
+        ["Remind me about notifications"] = Icons.Message,
         ["Version"] = Icons.Info,
+        ["Second TV"] = Icons.Tv,
+        ["Your name on the TV"] = Icons.Person,
+        ["Second line"] = Icons.Person,
+        ["Logo on the blank screen"] = Icons.Picture,
+        ["QR code corner"] = Icons.QrCode,
+        ["How hidden parts look"] = Icons.Hide,
+        ["Hidden parts"] = Icons.Hide,
+        ["Live captions"] = Icons.Captions,
+        ["Save this setup as a room"] = Icons.People,
+        ["Add a scheduled action"] = Icons.Calendar,
+        ["Next scheduled"] = Icons.Calendar,
+        ["Rooms"] = Icons.People,
+        ["Phone remote"] = Icons.Phone,
+        ["Remote's port"] = Icons.Phone,
+        ["Live captions on the TV"] = Icons.Captions,
+        ["Save a transcript"] = Icons.Captions,
+        ["Transcripts folder"] = Icons.Folder,
+        ["Caption size"] = Icons.Captions,
+        ["Where captions go"] = Icons.Captions,
+        ["Save this as a scene"] = Icons.Star,
+        ["Scenes"] = Icons.Star,
+        ["Make a playlist"] = Icons.List,
+        ["Playlists"] = Icons.List,
+        ["Play when ScreenCast Presenter starts"] = Icons.List,
     };
 
     private static string Label(Section s) => s switch
@@ -113,6 +153,8 @@ internal sealed class SettingsForm : ThemedForm
         Section.Output => "Where it shows",
         Section.Recording => "Recording & screenshots",
         Section.Appearance => "Appearance",
+        Section.Privacy => "Privacy",
+        Section.Rooms => "Rooms, scenes & playlists",
         Section.Advanced => "Advanced",
         _ => "General",
     };
@@ -149,6 +191,8 @@ internal sealed class SettingsForm : ThemedForm
             case Section.Output: BuildOutput(); break;
             case Section.Recording: BuildRecording(); break;
             case Section.Appearance: BuildAppearance(); break;
+            case Section.Privacy: BuildPrivacy(); break;
+            case Section.Rooms: BuildRooms(); break;
             case Section.Advanced: BuildAdvanced(); break;
         }
         _rows.ResumeLayout();
@@ -186,11 +230,22 @@ internal sealed class SettingsForm : ThemedForm
         AddGroup("Keyboard");
         AddToggle("Keyboard shortcuts", "Ctrl+Alt shortcuts work from any app.", s.ShortcutsEnabled, on => _app.SetShortcutsEnabled(on),
             ("Edit shortcuts…", _app.OpenShortcuts));
+        AddGroup("Phone remote");
+        AddToggle("Phone remote", "Use your phone as a clicker on the same Wi-Fi: next and previous slide, blank, freeze, favourites and scenes. Off unless you switch it on. Pairing happens with a code only you see, and every command is signed, so others on the network can't take control.",
+            s.PhoneRemote, on => _app.SetPhoneRemote(on), ("Pair a phone…", () => _ = _app.RunAsync("phone-remote")));
+        AddText("Remote's port", $"The network port the remote listens on (1024–65535; {Remote.RemoteServer.DefaultPort} unless changed). If it's in use, any free one is used.",
+            s.RemotePort.ToString(System.Globalization.CultureInfo.InvariantCulture), 5, text =>
+            {
+                if (int.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int port)) _app.SetRemotePort(port);
+            });
         AddGroup("On your screen while you present");
         AddToggle("Yellow outline", "Marks on your screen what the audience sees. Never on the TV.", s.ShowOutline, on => _app.SetShowOutline(on));
         AddToggle("Now-showing bar", "A small bar on top while you present or record, like Teams' sharing bar. Click it to go to what's shown.", s.ShowWidget, on => _app.SetShowWidget(on));
         AddToggle("Status pill", "When the now-showing bar is hidden, a pill at the top of your screen says what's on the TV. Messages always appear there.", s.ShowBadge, on => _app.SetShowBadge(on));
         AddToggle("Mouse pointer on the TV", "Show your pointer in what you present.", s.ShowCursor, on => _app.SetShowCursor(on));
+        AddToggle("Talk timer", "How long you've been presenting, in the now-showing bar. Only you see it.", s.ShowTalkTimer, _app.SetShowTalkTimer);
+        AddChoice("Talk length", "You're told two minutes before the end, and when time's up. Only you see it.",
+            [.. TalkTimer.Lengths.Select(m => (m == 0 ? "None" : $"{m} min", s.TalkMinutes == m, (Action)(() => _app.SetTalkMinutes(m))))]);
     }
 
     private void BuildOutput()
@@ -204,6 +259,7 @@ internal sealed class SettingsForm : ThemedForm
         AddChoice("Show on", "Full screen on a TV or projector, or in a window you can move and share in a meeting.", choices);
         AddToggle("Browsers: keep to the page you chose", "If you switch tabs or pages in a browser window you're showing, the audience sees black until you go back, instead of the new page.",
             s.KeepBrowserPage, on => _app.SetKeepBrowserPage(on));
+        AddToggle("When a TV is plugged in", "Offer to show the last thing you showed on it, in one click.", s.OfferNewScreen, _app.SetOfferNewScreen);
         AddToggle("Keep the window on top", "The window stays above every other window while you present, like Teams' sharing preview.", s.FloatingOnTop, on => _app.SetFloatingOnTop(on));
         bool zoomScreen = _app.Monitors.Any(m => m.IsVirtual);
         AddGroup("Meetings");
@@ -217,8 +273,69 @@ internal sealed class SettingsForm : ThemedForm
         AddGroup("On the TV");
         AddChoice("Dim the TV", "Softens a bright TV in a dark room.",
             [.. new[] { 0, 10, 20, 30, 40 }.Select(p => (p == 0 ? "Off" : $"{p}%", Math.Abs(s.Dim - p / 100.0) < 0.001, (Action)(() => _app.SetDim(p / 100.0))))]);
+        AddChoice("Zoom", $"How much closer zooming in brings the TV{Key("zoom-in")}. It follows your mouse over what you show.",
+            [.. ZoomView.Levels.Select(l => ($"{l:0.#}×", Math.Abs(s.ZoomLevel - l) < 0.001, (Action)(() => _app.SetZoomLevel(l))))]);
+        AddToggle("Show my clicks", $"A ring appears on the TV wherever you click on what you show{Key("highlight-clicks")}.", s.HighlightClicks, _app.SetHighlightClicks);
+        AddToggle("Ring around the mouse", $"A soft yellow ring follows your mouse on the TV, so a room can see it{Key("pointer-ring")}.", s.PointerRing, _app.SetPointerRing);
         string key = _app.ActiveShortcut("blank-message") is { } k ? $" ({k})" : "";
         AddText("Blank screen message", $"Shown on the TV when you blank it with a message{key}.", s.BlankMessage, AppSettings.MaxMessageLength, _app.SetBlankMessage);
+        AddChoice("Slideshow", $"How long each favourite shows when they take turns{Key("slideshow")}.",
+            [.. Slideshow.Seconds.Select(sec => (Slideshow.Words(sec), s.SlideshowSeconds == sec, (Action)(() => _app.SetSlideshowSeconds(sec))))]);
+        InsetCorner corner = InsetLayout.ParseCorner(s.InsetCorner);
+        AddChoice("Small picture", $"Where a small picture (like you on a webcam) sits over what you show{Key("inset")}.",
+            [.. Enum.GetValues<InsetCorner>().Select(c => (Capitalise(InsetLayout.Words(c)), c == corner, (Action)(() => _app.SetInsetPlace(c, s.InsetSize))))]);
+        AddChoice("Small picture size", "How wide it is on the TV.",
+            [.. InsetLayout.Sizes.Select(p => (p == InsetLayout.Sizes[0] ? "Small" : p == InsetLayout.Sizes[^1] ? "Large" : "Medium", s.InsetSize == p, (Action)(() => _app.SetInsetPlace(corner, p))))]);
+        AddChoice("Countdown", $"Blank with a countdown{Key("blank-countdown")} shows the message above and the time left. When it ends the TV stays blank until you show it again.",
+            [.. BlankCountdown.Minutes.Select(m => ($"{m} min", s.CountdownMinutes == m, (Action)(() => _app.SetCountdownMinutes(m))))]);
+        AddLogo(s.BlankLogo);
+        AddGroup("Live captions and transcripts");
+        AddToggle("Live captions on the TV", $"Live captions{Key("live-captions")} show what you say on the TV. Off: they only write the transcript.", s.CaptionsOnTv, _app.SetCaptionsOnTv);
+        AddToggle("Save a transcript", "Everything live captions hear is written to a text file as it's said, with subtitles (.srt) beside it when they stop. On this PC only.", s.SaveTranscript, _app.SetSaveTranscript);
+        AddFolder("Transcripts folder", s.TranscriptFolder ?? SavedFiles.DefaultTranscriptFolder, s.TranscriptFolder is null, _app.SetTranscriptFolder);
+        CaptionLook look = s.CaptionLook;
+        AddChoice("Caption size", "Bigger captions are easier to read from the back of the room, and fit fewer words.",
+        [
+            ("Normal", look.Size == CaptionSize.Normal, () => _app.SetCaptionLook(look with { Size = CaptionSize.Normal })),
+            ("Large", look.Size == CaptionSize.Large, () => _app.SetCaptionLook(look with { Size = CaptionSize.Large })),
+            ("Extra large", look.Size == CaptionSize.ExtraLarge, () => _app.SetCaptionLook(look with { Size = CaptionSize.ExtraLarge })),
+        ]);
+        AddChoice("Where captions go", "At the top they don't cover the bottom of slides, where subtitles and footers are.",
+        [
+            ("Bottom", look.Place == CaptionPlace.Bottom, () => _app.SetCaptionLook(look with { Place = CaptionPlace.Bottom })),
+            ("Top", look.Place == CaptionPlace.Top, () => _app.SetCaptionLook(look with { Place = CaptionPlace.Top })),
+        ]);
+        AddText("Your name on the TV", $"The name banner{Key("caption")} shows it along the bottom of the TV, like on the news.", s.CaptionName, NameCaption.MaxLength, _app.SetCaptionName);
+        AddText("Second line", "Under your name, e.g. your job or team. Optional.", s.CaptionSecond, NameCaption.MaxLength, _app.SetCaptionSecond);
+        InsetCorner qr = s.QrPlace;
+        AddChoice("QR code corner", $"Where a QR code{Key("qr")} sits. If the small picture is in that corner, the QR code moves to the other top corner.",
+            [.. Enum.GetValues<InsetCorner>().Select(c => (Capitalise(InsetLayout.Words(c)), c == qr, (Action)(() => _app.SetQrCorner(c))))]);
+        AddGroup("Second TV");
+        IReadOnlyList<DisplayMonitor> candidates = _app.SecondTvCandidates();
+        DisplayMonitor? second = _app.SecondTvScreen;
+        if (candidates.Count == 0)
+            AddInfo("Second TV", $"Connect another TV or screen to show something different on it{Key("second-tv")}. The first TV keeps showing what it shows.");
+        else
+            AddChoice("Second TV", $"Show something different on another TV{Key("second-tv")}: choose it from the tray menu under Show on. The first TV keeps showing what it shows.",
+                [.. candidates.Select(m => (m.IsTv ? $"TV ({m.Name})" : m.Name, second is not null && m.IsSameScreen(second), (Action)(() => _app.SetSecondTvScreen(m))))]);
+    }
+
+    /// <summary>Your logo above the blank screen's message (FR-80): choose a picture, or take it off.</summary>
+    private void AddLogo(string? current)
+    {
+        Row row = NewRow("Logo on the blank screen", current is null
+            ? "A picture (like your company's logo) above the message when you blank the TV with a message."
+            : $"Shows above the message when you blank the TV with a message. ({Path.GetFileName(current)})");
+        row.AddControl(Pill(current is null ? "Choose a picture…" : "Change…", () =>
+        {
+            using var dialog = new OpenFileDialog { Filter = LogoImage.Filter, Title = "Choose your logo", CheckFileExists = true };
+            if (dialog.ShowDialog(this) == DialogResult.OK && _app.SetBlankLogo(dialog.FileName)) Rebuild();
+        }));
+        if (current is not null) row.AddControl(Pill("Remove", () =>
+        {
+            _app.SetBlankLogo(null);
+            Rebuild();
+        }, PillKind.Ghost));
     }
 
     private void BuildRecording()
@@ -236,6 +353,271 @@ internal sealed class SettingsForm : ThemedForm
             ("None", sound == MeetingSound.None, () => _app.SetRecordSound(MeetingSound.None)),
         ]);
         AddToggle("Microphone", "Also record people in the room.", s.RecordMicrophone, on => _app.SetRecordMicrophone(on));
+    }
+
+    private void BuildPrivacy()
+    {
+        AddGroup("Never show");
+        AddAppList("Never show these apps",
+            "Their windows can't be chosen, and when you show a whole screen it turns black while one of them is open on it. Password managers inside a browser are part of the browser window, so they can't be told apart.",
+            _app.Settings.NeverShowApps);
+        AddText("Add an app by name", "The program's name, like “KeePass” for KeePass.exe. Press Enter to add it.", "", NeverShow.MaxNameLength, name =>
+        {
+            if (string.IsNullOrWhiteSpace(name)) return;
+            _app.AddNeverShow(name);
+            Rebuild();
+        });
+        AddGroup("Hidden parts");
+        RedactStyle look = _app.Settings.HiddenPartStyle;
+        AddChoice("How hidden parts look", $"Hide part of a window{Key("hide-part")} by dragging a box over it: the audience sees this there instead.",
+        [
+            ("Solid box", look == RedactStyle.Solid, () => _app.SetHiddenPartStyle(RedactStyle.Solid)),
+            ("Blurred", look == RedactStyle.Blurred, () => _app.SetHiddenPartStyle(RedactStyle.Blurred)),
+        ]);
+        AddHiddenParts(_app.Settings.HiddenParts);
+        AddGroup("Hide automatically");
+        SensitiveKinds auto = _app.Settings.AutoHideKinds;
+        AddInfo("Hide automatically", "Windows reads the text in what you show, on this PC, and what you tick is covered on the TV as soon as it's found. It's a moment behind what's shown, so hide parts you know about yourself, and keep private apps on the never-show list.");
+        foreach ((SensitiveKinds kind, string title, string description) in new[]
+        {
+            (SensitiveKinds.Emails, "Email addresses", "name@example.com"),
+            (SensitiveKinds.Phones, "Phone numbers", "Numbers written like phone numbers: +44 20 7946 0958, (555) 010-9999."),
+            (SensitiveKinds.Cards, "Card numbers", "Payment card numbers (checked, so ordinary long numbers aren't covered)."),
+            (SensitiveKinds.Ibans, "Bank account numbers", "IBANs (checked the same way)."),
+            (SensitiveKinds.IdNumbers, "ID numbers", "US Social Security and UK National Insurance numbers."),
+        })
+        {
+            SensitiveKinds k = kind;
+            AddToggle(title, description, auto.HasFlag(k), on => _app.SetAutoHide(on ? _app.Settings.AutoHideKinds | k : _app.Settings.AutoHideKinds & ~k));
+        }
+        AddGroup("Notifications");
+        AddToggle("Remind me about notifications", "Windows' pop-up notifications appear on your main screen. When you show or record all of it, you're reminded to turn on Do not disturb.",
+            _app.Settings.RemindDoNotDisturb, _app.SetRemindDoNotDisturb);
+        AddGroup("Microphone");
+        AddInfo("Live captions", $"Live captions{Key("live-captions")} listen to your microphone only while they're on. Windows' own speech recognition works out the words on this PC; nothing is recorded or sent anywhere.");
+        AddInfo("Privacy", PrivacyText);
+    }
+
+    /// <summary>The apps and screens with hidden parts: each as a pill, click to forget its boxes.</summary>
+    private void AddHiddenParts(IReadOnlyDictionary<string, List<CropRegion>> parts)
+    {
+        Row row = NewRow("Hidden parts", parts.Count == 0
+            ? "Nothing is hidden yet. While you show something, hide part of it from the tray menu or with the shortcut."
+            : "Kept for these apps and screens, and covered whenever they're shown. Click one to show everything in it again.");
+        if (parts.Count == 0) return;
+        var pills = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = new Padding(0, 8, 0, 0), MaximumSize = new Size(560, 0) };
+        foreach ((string key, List<CropRegion> boxes) in parts.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            string name = key.StartsWith("screen:", StringComparison.Ordinal) ? _app.Monitors.FirstOrDefault(m => m.DeviceName == key["screen:".Length..])?.Name ?? "A screen" : key;
+            string forget = key;
+            PillButton pill = Pill($"{name} ({boxes.Count})   ✕", () =>
+            {
+                _app.ForgetHiddenParts(forget);
+                Rebuild();
+            }, PillKind.Selected);
+            pill.AccessibleName = $"{name} has {boxes.Count} hidden parts. Click to show everything in it again.";
+            pills.Controls.Add(pill);
+        }
+        row.AddBelow(pills);
+    }
+
+    /// <summary>Room profiles (FR-82) and schedules (FR-83).</summary>
+    private void BuildRooms()
+    {
+        AppSettings s = _app.Settings;
+        AddGroup("Rooms");
+        AddButton("Save this setup as a room", "Set things up for a room (the TV, dimming, extras, the blank screen, your name, favourites), then save it here. Next time, choose it from the tray menu under Rooms.",
+            "Save as a room…", () =>
+            {
+                _app.SaveRoom();
+                Rebuild();
+            });
+        if (s.Rooms.Count == 0) AddInfo("Rooms", "No rooms yet.");
+        foreach (RoomProfile room in s.Rooms)
+        {
+            string name = room.Name;
+            Row row = NewRow(name, RoomWords(room));
+            row.AddControl(Pill("Use it", () => _ = _app.ApplyRoomAsync(name)));
+            row.AddControl(Pill("Remove", () =>
+            {
+                _app.DeleteRoom(name);
+                Rebuild();
+            }, PillKind.Ghost));
+        }
+
+        AddGroup("Scenes");
+        AddButton("Save this as a scene", "What's shown and everything around it (the part shown, the small picture, your name, a QR code for a link, the spotlight, dimming), on Ctrl+Alt+F1 to F9.",
+            "Save as a scene…", () =>
+            {
+                _ = _app.RunAsync("save-scene");
+                Rebuild();
+            });
+        bool anyScene = false;
+        for (int i = 0; i < _app.Scenes.Count; i++)
+        {
+            if (_app.Scenes[i] is not { } scene) continue;
+            anyScene = true;
+            int slot = i + 1;
+            Row row = NewRow($"{slot}   {scene.Title(slot)}", scene.Words() + Key(ShortcutCatalog.SceneId(slot)));
+            row.AddControl(Pill("Show it", () => _ = _app.RunAsync(ShortcutCatalog.SceneId(slot))));
+            row.AddControl(Pill("Remove", () =>
+            {
+                _app.DeleteScene(slot);
+                Rebuild();
+            }, PillKind.Ghost));
+        }
+        if (!anyScene) AddInfo("Scenes", "No scenes yet.");
+
+        AddGroup("Playlists");
+        AddButton("Make a playlist", "Favourites and scenes taking turns on the TV or the second TV, round and round: a lobby or waiting-room screen.", "Make one…", () =>
+        {
+            _app.MakePlaylist();
+            Rebuild();
+        });
+        foreach (Playlist playlist in s.Playlists)
+        {
+            string name = playlist.Name;
+            Row row = NewRow(name, $"{(playlist.Where == PlaylistScreen.Second ? "Second TV" : "TV")} · " + string.Join(", ", playlist.Items.Select(item => item.Words())));
+            row.AddControl(Pill("Play", () => _ = _app.StartPlaylistAsync(name)));
+            row.AddControl(Pill("Remove", () =>
+            {
+                _app.DeletePlaylist(name);
+                Rebuild();
+            }, PillKind.Ghost));
+        }
+        if (s.Playlists.Count == 0) AddInfo("Playlists", "No playlists yet.");
+        else
+            AddChoice("Play when ScreenCast Presenter starts", "For a screen that runs itself: with “Start with Windows” on, the PC starting up starts the playlist.",
+                [("None", s.PlaylistAtStart is null, () => _app.SetPlaylistAtStart(null)), .. s.Playlists.Select(p => (p.Name, string.Equals(p.Name, s.PlaylistAtStart, StringComparison.OrdinalIgnoreCase), (Action)(() => _app.SetPlaylistAtStart(p.Name))))]);
+
+        AddGroup("Schedule");
+        AddButton("Add a scheduled action", "Start the lobby slideshow at 8:00, stop it at 18:00, switch rooms… Uses this PC's clock; ScreenCast Presenter must be running (it can start with Windows).",
+            "Add…", AddScheduleEntry);
+        for (int i = 0; i < s.Schedule.Count; i++)
+        {
+            int index = i;
+            ScheduleEntry entry = s.Schedule[i];
+            Row row = NewRow(entry.Words(FavouriteName), entry.Enabled ? "On" : "Off");
+            var toggle = new ToggleSwitch { Checked = entry.Enabled, AccessibleName = entry.Words() };
+            toggle.CheckedChanged += (_, _) => _app.Guard(() =>
+            {
+                _app.SetScheduleEntryEnabled(index, toggle.Checked);
+                Rebuild();
+            });
+            row.AddControl(toggle);
+            row.AddControl(Pill("Remove", () =>
+            {
+                _app.RemoveScheduleEntry(index);
+                Rebuild();
+            }, PillKind.Ghost));
+        }
+        if (Scheduler.Next(s.Schedule, DateTime.Now) is { } next)
+            AddInfo("Next scheduled", $"{next.When.ToString("ddd HH:mm", System.Globalization.CultureInfo.CurrentCulture)}: {next.Entry.WhatWords(FavouriteName)}");
+    }
+
+    private string FavouriteName(int slot) =>
+        slot >= 1 && slot <= _app.Settings.Favourites.Length && _app.Settings.Favourites[slot - 1] is { } f ? $"favourite {slot} (“{TrayMenuPlan.Shorten(f.Title, 30)}”)" : $"favourite {slot}";
+
+    /// <summary>"TV (Screen 2) · dimmed 20% · clicks · 4 favourites".</summary>
+    private string RoomWords(RoomProfile room)
+    {
+        var parts = new List<string>();
+        if (room.OutputMode == "Window") parts.Add("in a window");
+        else if (room.OutputDevice is { } device) parts.Add(_app.Monitors.FirstOrDefault(m => m.DeviceName == device)?.Name ?? "a screen not connected now");
+        if (room.Dim > 0) parts.Add($"dimmed {room.Dim:P0}");
+        if (room.HighlightClicks) parts.Add("clicks");
+        if (room.PointerRing) parts.Add("ring around the mouse");
+        if (room.CaptionName.Length > 0) parts.Add($"name: {room.CaptionName}");
+        if (room.BlankLogo is not null) parts.Add("logo");
+        if (room.Favourites is { } favs) parts.Add($"{favs.Count(f => f is not null)} favourites");
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>A time, the days and what to do.</summary>
+    private void AddScheduleEntry()
+    {
+        if (_app.Settings.Schedule.Count >= ScheduleEntry.Max)
+        {
+            ConfirmForm.Tell("The schedule is full", $"It holds up to {ScheduleEntry.Max} actions. Remove one first.");
+            return;
+        }
+        IReadOnlyList<(string Words, ScheduleAction Action, int Slot, string? Room)> actions = ScheduleChoices.Actions(_app.Settings.Favourites, _app.Settings.Rooms, _app.Settings.Scenes, _app.Settings.Playlists);
+        using var form = new FieldsForm("Do something at a set time", "This PC's clock is used. If the PC is asleep at that time, it's skipped rather than done late.", "Add it");
+        (_, TextBox time) = form.AddField("Time (24-hour clock)", "08:00", 5, "08:00");
+        ComboBox days = form.AddList("Days", [.. ScheduleChoices.Days.Select(d => d.Words)], 0);
+        ComboBox what = form.AddList("What to do", [.. actions.Select(a => a.Words)], 0);
+        form.Check = () => ScheduleEntry.ParseTime(time.Text) is null ? "Type the time like 08:00 or 18:30." : null;
+        if (!form.Ask()) return;
+        var chosen = actions[Math.Max(0, what.SelectedIndex)];
+        _app.AddScheduleEntry(new ScheduleEntry
+        {
+            Time = ScheduleEntry.ParseTime(time.Text)!.Value.ToString("hh\\:mm", System.Globalization.CultureInfo.InvariantCulture),
+            Days = ScheduleChoices.Days[Math.Max(0, days.SelectedIndex)].Days,
+            Action = chosen.Action.ToString(),
+            Slot = chosen.Slot,
+            Room = chosen.Action == ScheduleAction.Room ? chosen.Room : null,
+            Playlist = chosen.Action == ScheduleAction.StartPlaylist ? chosen.Room : null,
+        });
+        Rebuild();
+    }
+
+    /// <summary>What ScreenCast Presenter does and doesn't do with data.</summary>
+    private const string PrivacyText = "ScreenCast Presenter sends no data anywhere and collects nothing about you. Recordings and screenshots stay on this PC. It only goes online when you ask: setting up a Zoom screen downloads the driver through Windows, and “Check for updates” (Advanced, off unless you switch it on) asks GitHub once a day which version is the newest.";
+
+    /// <summary>
+    /// The never-show list: each app as a pill (click to take it off), then "Add an app…" with the
+    /// apps open now, and "Add the usual password managers" when some are missing.
+    /// </summary>
+    private void AddAppList(string title, string description, IReadOnlyList<string> apps)
+    {
+        Row row = NewRow(title, description);
+        var pills = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = new Padding(0, 8, 0, 0), MaximumSize = new Size(560, 0) };
+        foreach (string app in apps)
+        {
+            string name = app;
+            PillButton pill = Pill($"{name}   ✕", () =>
+            {
+                _app.RemoveNeverShow(name);
+                Rebuild();
+            }, PillKind.Selected);
+            pill.AccessibleName = $"{name} is never shown. Click to take it off the list.";
+            pills.Controls.Add(pill);
+        }
+        PillButton add = Pill("Add an app…", () => { });
+        add.Click += (_, _) => ShowAddAppMenu(add);
+        pills.Controls.Add(add);
+        if (NeverShow.Defaults.Any(d => !NeverShow.IsBlocked(apps, d)))
+            pills.Controls.Add(Pill("Add the usual password managers", () =>
+            {
+                _app.RestoreNeverShowDefaults();
+                Rebuild();
+            }, PillKind.Ghost));
+        row.AddBelow(pills);
+    }
+
+    /// <summary>The apps with a window open now, not yet on the list.</summary>
+    private void ShowAddAppMenu(Control anchor)
+    {
+        var menu = new ContextMenuStrip { Font = Theme.UiFont };
+        ThemedMenuRenderer.ApplyPopupChrome(menu);
+        var open = WindowEnumerator.GetPresentableWindows()
+            .GroupBy(w => w.AppName, StringComparer.OrdinalIgnoreCase)
+            .Where(g => !NeverShow.IsBlocked(_app.Settings.NeverShowApps, g.Key))
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        foreach (IGrouping<string, SourceWindow> app in open)
+        {
+            string name = app.Key;
+            string example = TrayMenuPlan.Shorten(app.First().Title, 40);
+            menu.Items.Add($"{name}   ·   {example}", null, (_, _) => _app.Guard(() =>
+            {
+                _app.AddNeverShow(name);
+                Rebuild();
+            }));
+        }
+        if (open.Count == 0) menu.Items.Add(new ToolStripMenuItem("No other apps are open. Type a name below.") { Enabled = false });
+        menu.Closed += (_, _) => BeginInvoke(menu.Dispose);
+        menu.Show(anchor, new Point(0, anchor.Height));
     }
 
     private void BuildAppearance()
@@ -267,10 +649,16 @@ internal sealed class SettingsForm : ThemedForm
             ("Automatic", !wgc, () => _app.SetCaptureEngine(false)),
             ("Always show the pointer", wgc, () => _app.SetCaptureEngine(true)),
         ]);
+        AddToggle("Check for updates", "Once a day, ask GitHub whether a newer version is out, and say so here. Only that question is sent: nothing about you or this PC. Nothing is downloaded or installed for you.",
+            _app.Settings.CheckForUpdates, _app.SetCheckForUpdates, ("Check now", () => _ = _app.CheckForUpdatesAsync(manual: true)));
         AddButton("Settings file", _app.SettingsFilePath, "Show in folder", () => _app.ShowInFolder(_app.SettingsFilePath));
-        AddInfo("Privacy", "ScreenCast Presenter makes no network connections and sends no data anywhere. Recordings and screenshots stay on this PC. Setting up a Zoom screen downloads the driver through Windows, only when you ask.");
         AddInfo("Version", _app.VersionText);
     }
+
+    private static string Capitalise(string text) => text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
+
+    /// <summary>" (Ctrl+Alt+Z)" when that shortcut works; nothing otherwise.</summary>
+    private string Key(string actionId) => _app.ActiveShortcut(actionId) is { } k ? $" ({k})" : "";
 
     // ───────────────────────────── rows ─────────────────────────────
 

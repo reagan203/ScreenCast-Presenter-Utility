@@ -11,6 +11,7 @@ namespace ScreenCastPresenter.Tests;
 /// window in front of the presented one covers the outline too. Around a whole screen it stays on top.
 /// Uses real windows for a moment in a corner of the main screen.
 /// </summary>
+[Collection(DesktopWindowsCollection.Name)]
 public class OutlineStackingTests
 {
     [Theory]

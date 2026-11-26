@@ -4,6 +4,19 @@ using ScreenCastPresenter.Interop;
 
 namespace ScreenCastPresenter.Core;
 
+/// <summary>
+/// Why the picture is held black, apart from Blank (which the presenter controls). Each reason is
+/// independent: the picture comes back only when none is left.
+/// </summary>
+internal enum HoldReason
+{
+    /// <summary>The shown browser moved to another tab or page (BrowserTab).</summary>
+    OtherPage,
+
+    /// <summary>A never-show app is on the screen being shown (NeverShow).</summary>
+    PrivateApp,
+}
+
 internal enum SessionState
 {
     /// <summary>No output window.</summary>
@@ -66,41 +79,152 @@ internal sealed class SessionController : IDisposable
     /// <summary>The active engine's name, for Settings › Advanced and the palette (FR-32).</summary>
     public string? EngineName => _engine?.Name;
 
+    /// <summary>
+    /// The part shown while zoomed in (FR-64), as fractions of the whole content, always inside the
+    /// crop; null when not zoomed. Cleared whenever something else is shown or the crop changes.
+    /// </summary>
+    public CropRegion? View { get; private set; }
+
+    /// <summary>Marks on the TV (FR-65, FR-71) for the engine showing now; null for the DWM engine, which can't draw them.</summary>
+    public IEffectsEngine? Effects => _engine as IEffectsEngine;
+
+    /// <summary>A different engine took over (something new shown, a fallback, freezing): marks on the TV must be sent to it again.</summary>
+    public event EventHandler? EngineChanged;
+
+    /// <summary>
+    /// Moves the zoomed view this instant, with no fade: the view following the pointer. Ignored
+    /// when nothing is shown or not zoomed in through <see cref="SetViewAsync"/>.
+    /// </summary>
+    public void SetView(CropRegion? view)
+    {
+        if (Source is not { } source || _engine is not { } engine || View is null || view is null || view == View) return;
+        View = view;
+        engine.SetCrop(view);
+    }
+
+    /// <summary>Zooms in to <paramref name="view"/>, or back out (null), through black like a crop.</summary>
+    public async Task SetViewAsync(CropRegion? view)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (Source is not { } source || _engine is null || view == View) return;
+            await FadeAsync(0, SwitchFadeOut);
+            View = view;
+            _engine?.SetCrop(view ?? source.Crop);
+            SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
+            if (_engine is not null && !HidesWhenMinimized) await FadeAsync(TargetOpacity, SwitchFadeIn);
+            SetState(State);
+        }
+        catch (Exception ex)
+        {
+            RecoverFromError(ex);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Parts of a source hidden from the audience (FR-74): asked whenever an engine is about to
+    /// show it, and covered before anything fades in. A source with hidden parts is never shown by
+    /// an engine that can't cover them.
+    /// </summary>
+    public Func<SourceWindow, HiddenParts?>? HiddenPartsFor { get; set; }
+
+    /// <summary>The hidden parts were changed for what's showing: covers them now (or uncovers them), with no fade.</summary>
+    /// <returns>False when the engine showing it can't cover anything: it must be shown again with one that can.</returns>
+    public bool UpdateHiddenParts()
+    {
+        if (Source is not { } source || _engine is not { } engine) return true;
+        return HideParts(engine, source, clearWhenNone: true);
+    }
+
+    /// <summary>
+    /// Covers what must not be seen of <paramref name="source"/> on <paramref name="engine"/>
+    /// before it shows anything. False when there is something to cover and the engine can't.
+    /// </summary>
+    private bool HideParts(ICaptureEngine engine, SourceWindow source, bool clearWhenNone = false)
+    {
+        HiddenParts? parts = HiddenPartsFor?.Invoke(source);
+        if (parts is not { Regions.Count: > 0 } p)
+        {
+            if (clearWhenNone && engine is IEffectsEngine fx) fx.Redact([], RedactStyle.Solid);
+            return true;
+        }
+        if (engine is not IEffectsEngine effects) return false;
+        effects.Redact(p.Regions, p.Style);
+        return true;
+    }
+
+    private string? _logo;
+
+    /// <summary>Your logo above the black screen's message (FR-80); null for none.</summary>
+    public string? Logo => _logo;
+
+    /// <summary>Sets the logo shown above the black screen's message, now and for everything shown later.</summary>
+    public void SetLogo(string? path)
+    {
+        _logo = path;
+        if (_output is { IsAlive: true } output) output.SetLogo(path);
+        (_engine as IEffectsEngine)?.Logo(path);
+    }
+
     /// <summary>Text for "blank with a message" (FR-27).</summary>
     public string BlankMessage { get; set; } = "We'll be right back";
 
-    /// <summary>The brightness the source is shown at: 0 when blanked, else 1 minus dimming (NFR-15).</summary>
-    public double TargetOpacity => IsBlanked || IsAwayFromPage ? 0 : 1 - _dim;
+    /// <summary>The brightness the source is shown at: 0 when blanked or held, else 1 minus dimming (NFR-15).</summary>
+    public double TargetOpacity => IsBlanked || IsHeld ? 0 : 1 - _dim;
+
+    private readonly HashSet<HoldReason> _holds = [];
+
+    /// <summary>The picture is held black for at least one reason (<see cref="HoldReason"/>).</summary>
+    public bool IsHeld => _holds.Count > 0;
+
+    public bool IsHeldFor(HoldReason reason) => _holds.Contains(reason);
 
     /// <summary>
     /// The shown browser moved off the page that was chosen (another tab or page): the picture is
     /// black until it comes back (BrowserTab). Separate from Blank, which the presenter controls.
     /// </summary>
-    public bool IsAwayFromPage { get; private set; }
+    public bool IsAwayFromPage => IsHeldFor(HoldReason.OtherPage);
+
+    /// <summary>
+    /// Asked just before something new fades in: a reason to start it held black (a never-show app
+    /// already on the screen about to be shown), so it is never seen even for the length of a fade.
+    /// </summary>
+    public Func<SourceWindow, HoldReason?>? HoldCheck { get; set; }
+
+    /// <summary>The browser moved to another page: <see cref="CutAway(HoldReason)"/> for that reason.</summary>
+    public void CutAway() => CutAway(HoldReason.OtherPage);
 
     /// <summary>
     /// Cuts the picture to black this instant, with no fade and without waiting for anything else
-    /// in progress: the new page must not be seen even for a moment. A fade that is running can't
+    /// in progress: what appeared must not be seen even for a moment. A fade that is running can't
     /// bring it back (FadeAsync keeps it at 0).
     /// </summary>
-    public void CutAway()
+    public void CutAway(HoldReason reason)
     {
-        if (State != SessionState.Presenting || _engine is not { } engine || IsAwayFromPage) return;
-        IsAwayFromPage = true;
+        if (State != SessionState.Presenting || _engine is not { } engine || !_holds.Add(reason)) return;
         _opacity = 0;
         engine.SetOpacity(0);
         SetState(State);
     }
 
     /// <summary>Back on the chosen page (or the presenter chose to show the new one): fade the picture back in.</summary>
-    public async Task ComeBackAsync()
+    public Task ComeBackAsync() => ComeBackAsync(HoldReason.OtherPage);
+
+    /// <summary>One reason to hold the picture black is gone; it fades back in if no other is left.</summary>
+    public async Task ComeBackAsync(HoldReason reason)
     {
         await _gate.WaitAsync();
         try
         {
-            if (!IsAwayFromPage) return;
-            IsAwayFromPage = false;
-            if (_engine is not null && !HidesWhenMinimized && !IsBlanked) await FadeAsync(TargetOpacity, SwitchFadeIn);
+            // Checked again now: whatever held it may have come back while this waited (a never-show app reopened).
+            if (Source is { } source && HoldCheck?.Invoke(source) == reason) return;
+            if (!_holds.Remove(reason)) return;
+            if (_engine is not null && !HidesWhenMinimized && !IsBlanked && !IsHeld) await FadeAsync(TargetOpacity, SwitchFadeIn);
             SetState(State);
         }
         catch (Exception ex)
@@ -132,13 +256,18 @@ internal sealed class SessionController : IDisposable
     public Task PresentAsync(SourceWindow source, DisplayMonitor monitor, bool topMost) =>
         PresentAsync(source, new OutputPlacement(monitor, topMost));
 
-    public async Task PresentAsync(SourceWindow source, OutputPlacement placement)
+    /// <param name="onlyIfLive">
+    /// Skip it if, by the time it runs, the TV is blank, frozen or held black (or a blank is
+    /// queued): a slideshow's switch must never undo what the presenter just did (FR-69).
+    /// </param>
+    public async Task PresentAsync(SourceWindow source, OutputPlacement placement, bool onlyIfLive = false)
     {
         int version = Interlocked.Increment(ref _presentVersion);
         await _gate.WaitAsync();
         try
         {
             if (version != Volatile.Read(ref _presentVersion)) return; // superseded by a newer request (FR-28)
+            if (onlyIfLive && (IsBlanked || IsFrozen || IsHeld || _desiredBlank == true)) return;
             await PresentCoreAsync(source, placement);
         }
         finally
@@ -180,12 +309,13 @@ internal sealed class SessionController : IDisposable
             IsBlanked = false;
 
             (ICaptureEngine engine, ISourceWatcher watcher) = await StartEngineAsync(source, output);
-            Attach(engine, watcher);
-
             if (previous is not null && !previous.IsSameSource(source)) PreviousSource = previous;
             Source = source;
+            Attach(engine, watcher);
             UpdatePrivatePreview();
             UpdateContentShape(); // before it's seen: a floating window takes the source's shape
+            // Checked just before it can be seen: a reason to keep it black starts it held.
+            if (HoldCheck?.Invoke(source) is { } hold) _holds.Add(hold);
             output.Reveal();
             SetState(SessionState.Presenting);
             SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
@@ -199,7 +329,56 @@ internal sealed class SessionController : IDisposable
         {
             Debug.WriteLine(ex);
             ScpApp.Diag("present failed: " + ex);
-            RecoverToIdle($"Couldn't show “{source.Title}”. It may have closed.");
+            // A camera says why in plain words (no access, in use by another app, unplugged).
+            RecoverToIdle(ex is HiddenPartsException ? ex.Message
+                : source.IsCamera && ex is InvalidOperationException { Message.Length: > 0 }
+                ? $"Couldn't show “{source.Title}”. {ex.Message}"
+                : $"Couldn't show “{source.Title}”. It may have closed.");
+        }
+    }
+
+    /// <summary>
+    /// Shows the same thing again with a newly chosen engine, through black, so a changed way of
+    /// showing it (the pointer, marks on the TV, the Advanced choice) applies at once rather than
+    /// from the next thing shown. Blank, holds, the zoomed view and the black screen's text carry
+    /// over. Not while frozen: the frozen picture would be lost.
+    /// </summary>
+    public async Task RestartEngineAsync()
+    {
+        // Not a switch: it never supersedes one. A switch asked for meanwhile chooses its engine afresh, so this isn't needed.
+        int version = Volatile.Read(ref _presentVersion);
+        await _gate.WaitAsync();
+        try
+        {
+            if (version != Volatile.Read(ref _presentVersion)) return;
+            if (State != SessionState.Presenting || IsFrozen || Source is not { } source || _output is not { IsAlive: true } output) return;
+            bool blanked = IsBlanked;
+            var holds = new List<HoldReason>(_holds);
+            CropRegion? view = View;
+            await FadeAsync(0, SwitchFadeOut);
+            StopEngine();
+            (ICaptureEngine engine, ISourceWatcher watcher) = await StartEngineAsync(source, output);
+            Attach(engine, watcher);
+            foreach (HoldReason hold in holds) _holds.Add(hold);
+            if (view is not null)
+            {
+                View = view;
+                engine.SetCrop(view);
+            }
+            if (_idleMessage is { } message) engine.SetIdleMessage(message, 1);
+            IsBlanked = blanked;
+            SetState(State);
+            SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
+            if (!watcher.IsMinimized) await FadeAsync(TargetOpacity, SwitchFadeIn);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(ex);
+            RecoverToIdle($"Couldn't show “{Source?.Title}” again. It may have closed.");
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 
@@ -232,6 +411,12 @@ internal sealed class SessionController : IDisposable
             throw;
         }
 
+        if (!HideParts(engine, source))
+        {
+            engine.Dispose();
+            throw new HiddenPartsException($"“{source.Title}” has parts hidden from the audience, and they couldn't be covered, so it isn't shown. Try again, or show it without them.");
+        }
+
         try
         {
             return (engine, _platform.Watch(source));
@@ -254,6 +439,8 @@ internal sealed class SessionController : IDisposable
         watcher.Changed += OnSourceChanged;
         watcher.Minimized += OnSourceMinimized;
         watcher.Restored += OnSourceRestored;
+        (engine as IEffectsEngine)?.Logo(_logo);
+        EngineChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Fades out and closes the output.</summary>
@@ -328,6 +515,60 @@ internal sealed class SessionController : IDisposable
         }
     }
 
+    /// <summary>
+    /// Blanks (if it isn't already) and shows <paramref name="message"/> on the black screen: the
+    /// start of a countdown (FR-66). Already blank with a message: the text just changes.
+    /// </summary>
+    public async Task BlankWithMessageAsync(string message)
+    {
+        Interlocked.Increment(ref _blankVersion); // a blank press queued before this one is outdated
+        _desiredBlank = null;
+        await _gate.WaitAsync();
+        try
+        {
+            if (State == SessionState.Off)
+            {
+                Message?.Invoke(this, "Nothing is being shown right now.");
+                return;
+            }
+            if (!IsBlanked)
+            {
+                IsBlanked = true;
+                await FadeAsync(0, BlankFade);
+            }
+            if (_idleMessage is null) await ShowIdleMessageAsync(message);
+            else UpdateIdleMessage(message);
+            SetState(State);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(ex);
+            RecoverToIdle("Something went wrong, so the TV is showing a blank screen.");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>The text on the black screen right now (null when there is none).</summary>
+    public string? IdleMessage => _idleMessage;
+
+    /// <summary>
+    /// Changes the text on the black screen at once, at full brightness (a countdown ticking). Does
+    /// nothing when no text is showing or while it fades in or out.
+    /// </summary>
+    public void UpdateIdleMessage(string message)
+    {
+        if (_idleMessage is null || _messageFading || message == _idleMessage || _output is not { IsAlive: true } output) return;
+        _idleMessage = message;
+        output.SetIdleMessage(message, 1);
+        _engine?.SetIdleMessage(message, 1);
+    }
+
+    /// <summary>True while the black screen's text fades in or out.</summary>
+    private bool _messageFading;
+
     private async Task UnblankCoreAsync()
     {
         await HideIdleMessageAsync();
@@ -378,7 +619,15 @@ internal sealed class SessionController : IDisposable
                 Message?.Invoke(this, "Couldn't freeze this window.");
                 return;
             }
+            if (!HideParts(frozen, source))
+            {
+                frozen.Dispose();
+                Message?.Invoke(this, "Couldn't freeze this window.");
+                return;
+            }
+            (frozen as IEffectsEngine)?.Logo(_logo);
             frozen.SetIdleMessage(_idleMessage, _idleMessage is null ? 0 : 1);
+            if (View is { } view) frozen.SetCrop(view);
             frozen.SetOpacity(_opacity);
             DwmHelpersFlush();
             ICaptureEngine old = _engine;
@@ -387,6 +636,7 @@ internal sealed class SessionController : IDisposable
             _engine = frozen;
             frozen.Failed += OnEngineFailed;
             IsFrozen = true;
+            EngineChanged?.Invoke(this, EventArgs.Empty);
             SetState(State);
         }
         finally
@@ -429,6 +679,7 @@ internal sealed class SessionController : IDisposable
         if (Source is not { } source || _engine is not { } engine || source.Crop == crop) return;
         double target = TargetOpacity;
         await FadeAsync(0, SwitchFadeOut);
+        View = null; // a new crop ends zooming in
         engine.SetCrop(crop);
         Source = source with { Crop = crop };
         UpdateContentShape();
@@ -537,7 +788,7 @@ internal sealed class SessionController : IDisposable
         if (engine is null || Math.Abs(_opacity - to) < 0.001) return Task.CompletedTask;
         return _platform.Fade(_opacity, to, duration, value =>
         {
-            if (IsAwayFromPage) value = 0; // cut away mid-fade: stays black
+            if (IsHeld) value = 0; // cut away mid-fade: stays black
             _opacity = value;
             engine.SetOpacity(value);
         });
@@ -548,11 +799,19 @@ internal sealed class SessionController : IDisposable
         if (_output is not { IsAlive: true } output) return;
         _idleMessage = message;
         ICaptureEngine? engine = _engine;
-        await _platform.Fade(0, 1, MessageFade, b =>
+        _messageFading = true;
+        try
         {
-            output.SetIdleMessage(message, b);
-            engine?.SetIdleMessage(message, b);
-        });
+            await _platform.Fade(0, 1, MessageFade, b =>
+            {
+                output.SetIdleMessage(message, b);
+                engine?.SetIdleMessage(message, b);
+            });
+        }
+        finally
+        {
+            _messageFading = false;
+        }
     }
 
     private async Task HideIdleMessageAsync()
@@ -563,11 +822,19 @@ internal sealed class SessionController : IDisposable
             return;
         }
         ICaptureEngine? engine = _engine;
-        await _platform.Fade(1, 0, MessageFade, b =>
+        _messageFading = true;
+        try
         {
-            output.SetIdleMessage(message, b);
-            engine?.SetIdleMessage(message, b);
-        });
+            await _platform.Fade(1, 0, MessageFade, b =>
+            {
+                output.SetIdleMessage(message, b);
+                engine?.SetIdleMessage(message, b);
+            });
+        }
+        finally
+        {
+            _messageFading = false;
+        }
         output.SetIdleMessage(null);
         engine?.SetIdleMessage(null, 0);
         _idleMessage = null;
@@ -653,10 +920,14 @@ internal sealed class SessionController : IDisposable
                 try
                 {
                     await fallback.StartAsync(source, output.Handle, output.ClientSize);
+                    if (!HideParts(fallback, source)) throw new HiddenPartsException("The other way of showing it can't cover its hidden parts.");
+                    (fallback as IEffectsEngine)?.Logo(_logo);
                     _engine = fallback;
                     fallback.Failed += OnEngineFailed;
                     _opacity = 0;
                     IsFrozen = false;
+                    if (View is { } view) fallback.SetCrop(view);
+                    EngineChanged?.Invoke(this, EventArgs.Empty);
                     if (!IsBlanked && !HidesWhenMinimized) await FadeAsync(TargetOpacity, SwitchFadeIn);
                     SetState(State);
                     return;
@@ -667,7 +938,9 @@ internal sealed class SessionController : IDisposable
                     fallback.Dispose();
                 }
             }
-            RecoverToIdle($"Capturing “{source.Title}” stopped working, so the TV is showing a blank screen.");
+            RecoverToIdle(source.IsCamera
+                ? $"{reason} The TV is showing a blank screen."
+                : $"Capturing “{source.Title}” stopped working, so the TV is showing a blank screen.");
         }
         catch (Exception ex)
         {
@@ -757,7 +1030,8 @@ internal sealed class SessionController : IDisposable
 
     private void StopEngine()
     {
-        IsAwayFromPage = false; // a new source (or none) starts on its own page
+        _holds.Clear(); // a new source (or none) starts on its own page, and is checked again before it shows
+        View = null;
         if (_watcher is { } watcher)
         {
             watcher.Closed -= OnSourceClosed;
@@ -784,6 +1058,7 @@ internal sealed class SessionController : IDisposable
         _output.CloseRequested += OnOutputCloseRequested;
         _output.MinimizedChanged += OnOutputMinimizedChanged;
         _output.DoubleClicked += OnOutputDoubleClicked;
+        _output.SetLogo(_logo);
         _output.ShowCloaked();
     }
 

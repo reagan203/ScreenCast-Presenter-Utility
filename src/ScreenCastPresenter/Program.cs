@@ -15,17 +15,125 @@ internal static class Program
         // Dispatch before anything touches WinForms, so the helper never loads it.
         if (args.Length > 0 && (args[0] == CaptureProtocol.HostSwitch || args[0] == CaptureProtocol.StillSwitch || args[0] == Recording.RecordingProtocol.RecordSwitch))
             return CaptureHost.Run(args);
+        // FR-90: the phone remote's network code runs in its own process, never in the app.
+        if (args.Length > 0 && args[0] == Remote.RemoteHost.Switch) return Remote.RemoteHost.Run();
+        // FR-84: live captions listen to the microphone in their own process, on the PC itself.
+        if (args.Length > 0 && args[0] == LiveCaptions.Switch) return CaptionsHost.Run();
+        // FR-73: the opt-in update check runs as its own process, so the app never uses the network.
+        if (args.Length > 0 && args[0] == UpdateCheck.Switch) return UpdateHelper.Run();
         // Settings › Apps › Uninstall runs the installed exe with this switch.
         if (args.Contains(Installer.UninstallSwitch)) return RunUninstall();
-        RunApp(startedByWindows: args.Contains(StartupRegistration.StartupSwitch));
+        // FR-43: "--present PowerPoint --output 2" and friends.
+        if (CommandLine.IsRequest(args)) return RunCommandLine(args);
+        // Started for a command line (below): quiet, and never opening the picker in a copy that beat it to it.
+        bool quiet = args.Contains(CommandLine.QuietStartSwitch);
+        RunApp(startedByWindows: quiet || args.Contains(StartupRegistration.StartupSwitch), openPickerInRunningCopy: !quiet);
         return 0;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void RunApp(bool startedByWindows)
+    /// <summary>
+    /// FR-43: a command-line request. A mistake is reported (exit code 2) without starting
+    /// anything; otherwise it goes to the running copy, whose answer is printed (exit code 0 or
+    /// 1). If none is running, ScreenCast Presenter is started as its own process first and the
+    /// request goes to it the same way, so a script gets its answer at once rather than when the
+    /// app is eventually closed.
+    /// </summary>
+    private static int RunCommandLine(string[] args)
     {
-        // FR-29: a second launch just opens the picker in the running copy.
-        using SingleInstance? instance = SingleInstance.TryAcquire();
+        (CliRequest? request, string? error) = CommandLine.Parse(args);
+        if (request is null)
+        {
+            Report(error + Environment.NewLine + Environment.NewLine + CommandLine.Usage, "That command wasn't understood", problem: true);
+            return 2;
+        }
+        if (request.Help)
+        {
+            Report(CommandLine.Usage, "Command line", problem: false);
+            return 0;
+        }
+        if (SingleInstance.IsRunning) return SendToRunningCopy(args, TimeSpan.FromSeconds(8));
+        if (!StartRunningCopy())
+        {
+            Report("ScreenCast Presenter couldn't be started.", "Command line", problem: true);
+            return 1;
+        }
+        return SendToRunningCopy(args, TimeSpan.FromSeconds(30)); // a first start can take a few seconds
+    }
+
+    /// <summary>
+    /// Starts ScreenCast Presenter as its own process, quietly. Through the shell, so it doesn't
+    /// inherit this launch's console or output pipes: a script reading this launch's output must
+    /// not wait for the app to close.
+    /// </summary>
+    private static bool StartRunningCopy()
+    {
+        try
+        {
+            using Process? started = Process.Start(new ProcessStartInfo(Environment.ProcessPath ?? "", CommandLine.QuietStartSwitch) { UseShellExecute = true });
+            return started is not null;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Debug.WriteLine(ex);
+            return false;
+        }
+    }
+
+    private static int SendToRunningCopy(string[] args, TimeSpan connectTimeout)
+    {
+        // A copy that is still starting may need a moment to open its end of the pipe.
+        CliReply reply = CommandChannel.SendAsync(args, connectTimeout, TimeSpan.FromSeconds(60)).GetAwaiter().GetResult()
+            ?? new CliReply(false, "ScreenCast Presenter is running but didn't answer. Try again in a moment.");
+        // The running copy shows its own message by the clock; the text here is for scripts.
+        if (reply.Message.Length > 0) WriteToConsole(reply.Message);
+        return reply.Ok ? 0 : 1;
+    }
+
+    /// <summary>
+    /// Prints to the console the command came from (a GUI exe has none of its own, so it borrows
+    /// its parent's). Launched from a shortcut or a button deck there is no console: problems are
+    /// then shown in a small window instead, so they don't go unseen.
+    /// </summary>
+    private static void Report(string text, string title, bool problem)
+    {
+        if (WriteToConsole(text) || !problem && !Environment.UserInteractive) return;
+        InitializeUi();
+        try
+        {
+            ConfirmForm.Tell(title, text);
+        }
+        finally
+        {
+            Theme.Shutdown();
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool AttachConsole(int processId);
+
+    private static bool WriteToConsole(string text)
+    {
+        bool redirected = Console.IsOutputRedirected;
+        if (!redirected && !AttachConsole(-1)) return false; // ATTACH_PARENT_PROCESS
+        try
+        {
+            using var output = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
+            output.WriteLine();
+            output.WriteLine(text);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RunApp(bool startedByWindows, bool openPickerInRunningCopy)
+    {
+        // FR-29: a second launch just opens the picker in the running copy (not one started for a
+        // command line: that command reaches the running copy through its pipe instead).
+        using SingleInstance? instance = SingleInstance.TryAcquire(openPicker: openPickerInRunningCopy);
         if (instance is null) return;
 
         SettingsStore store = InitializeUi();

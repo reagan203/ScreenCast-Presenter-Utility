@@ -1,5 +1,6 @@
 using System.Globalization;
 using ScreenCastPresenter.Capture;
+using ScreenCastPresenter.Core;
 using ScreenCastPresenter.Interop;
 
 namespace ScreenCastPresenter.Recording;
@@ -18,7 +19,8 @@ internal enum MeetingSound
 }
 
 /// <summary>Everything the recording helper needs to start.</summary>
-internal sealed record RecordingRequest(SourceWindow Source, bool Cursor, MeetingSound Sound, bool Microphone, string Path);
+/// <param name="Hidden">Parts hidden from the audience (FR-74), covered in the recording too.</param>
+internal sealed record RecordingRequest(SourceWindow Source, bool Cursor, MeetingSound Sound, bool Microphone, string Path, IReadOnlyList<CropRegion>? Hidden = null);
 
 /// <summary>Why a recording ended.</summary>
 internal enum RecordingEnd
@@ -38,7 +40,7 @@ internal enum RecordingEnd
 
 /// <summary>
 /// The line protocol between SCP and the recording helper (same exe, --record). One line each.
-/// SCP → helper: "record &lt;source&gt; &lt;cursor&gt; &lt;crop&gt; &lt;sound&gt; &lt;mic&gt; &lt;path…&gt;", then pause / resume / stop.
+/// SCP → helper: "record &lt;source&gt; &lt;cursor&gt; &lt;crop&gt; &lt;sound&gt; &lt;mic&gt; &lt;hidden parts&gt; &lt;path…&gt;", then pause / resume / stop.
 /// Helper → SCP: started &lt;w&gt; &lt;h&gt; · progress &lt;seconds&gt; &lt;bytes&gt; &lt;paused&gt; · warning &lt;code&gt; &lt;text&gt; ·
 /// finished &lt;end&gt; &lt;seconds&gt; &lt;bytes&gt; &lt;text&gt; · failed &lt;text&gt;.
 /// The helper runs on its own (FR-61): if SCP goes away it finishes the file and exits.
@@ -51,16 +53,23 @@ internal static class RecordingProtocol
 
     /// <summary>The path goes last so it may contain spaces.</summary>
     public static string Start(RecordingRequest r) =>
-        string.Create(Inv, $"record {CaptureProtocol.SourceSpec(r.Source)} {(r.Cursor ? 1 : 0)} {CaptureProtocol.Crop(r.Source.Crop)} {r.Sound.ToString().ToLowerInvariant()} {(r.Microphone ? 1 : 0)} {r.Path}");
+        string.Create(Inv, $"record {CaptureProtocol.SourceSpec(r.Source)} {(r.Cursor ? 1 : 0)} {CaptureProtocol.Crop(r.Source.Crop)} {r.Sound.ToString().ToLowerInvariant()} {(r.Microphone ? 1 : 0)} {Hidden(r.Hidden)} {r.Path}");
+
+    /// <summary>The hidden parts as one word: "-" for none, else boxes separated by ";".</summary>
+    private static string Hidden(IReadOnlyList<CropRegion>? hidden) =>
+        hidden is not { Count: > 0 } ? "-" : string.Join(';', hidden.Take(Redactions.MaxPerSource).Select(CaptureProtocol.Crop));
+
+    private static List<CropRegion> ParseHidden(string text) =>
+        text == "-" ? [] : [.. text.Split(';').Select(CaptureProtocol.ParseCrop).OfType<CropRegion>().Take(Redactions.MaxPerSource)];
 
     public static RecordingRequest? ParseStart(string? line, IReadOnlyList<DisplayMonitor>? monitors = null)
     {
-        string[] p = (line ?? "").TrimStart('\uFEFF').TrimEnd('\r').Split(' ', 7); // tolerate a byte-order mark and CRLF
-        if (p.Length < 7 || p[0] != "record" || p[6].Trim().Length == 0) return null;
+        string[] p = (line ?? "").TrimStart('\uFEFF').TrimEnd('\r').Split(' ', 8); // tolerate a byte-order mark and CRLF
+        if (p.Length < 8 || p[0] != "record" || p[7].Trim().Length == 0) return null;
         SourceWindow? source = CaptureProtocol.ParseSource(p[1], monitors);
         if (source is null) return null;
         if (!Enum.TryParse(p[4], ignoreCase: true, out MeetingSound sound) || !Enum.IsDefined(sound)) return null;
-        return new RecordingRequest(source with { Crop = CaptureProtocol.ParseCrop(p[3]) }, p[2] == "1", sound, p[5] == "1", p[6]);
+        return new RecordingRequest(source with { Crop = CaptureProtocol.ParseCrop(p[3]) }, p[2] == "1", sound, p[5] == "1", p[7], ParseHidden(p[6]));
     }
 
     public static string Started(int width, int height) => string.Create(Inv, $"started {width} {height}");

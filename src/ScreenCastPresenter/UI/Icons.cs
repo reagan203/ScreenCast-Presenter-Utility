@@ -48,12 +48,21 @@ internal static class Icons
     public const char Clock = '\uE823';
     public const char Check = '\uE73E';
     public const char Next = '\uE72A';
+    public const char QrCode = '\uED14';
+    public const char Captions = '\uE7F0';
+    public const char Spotlight = '\uEA80';
+    public const char Person = '\uE77B';
+    public const char People = '\uE716';
+    public const char Calendar = '\uE787';
+    public const char Picture = '\uE8B9';
+    public const char List = '\uE8FD';
+    public const char Phone = '\uE8EA';
 
     public static IReadOnlyList<char> All { get; } =
     [
         Play, Stop, Pause, Hide, View, Crop, Camera, Record, Video, Folder, Settings, Help, Search, Power, Tv, Window, Share, Star,
         Keyboard, Colour, Font, Microphone, Volume, Brightness, Mouse, Pin, Download, Delete, Lock, Info, Back, ChevronRight,
-        OpenWindow, Message, Repair, Home, Highlight, Clock, Check, Next,
+        OpenWindow, Message, Repair, Home, Highlight, Clock, Check, Next, QrCode, Captions, Spotlight, Person, People, Calendar, Picture, List, Phone,
     ];
 
     /// <summary>The icon for a command or action id (tray menu, search results); null for none.</summary>
@@ -61,10 +70,35 @@ internal static class Icons
     {
         null => null,
         "picker" or "present-active" => Play,
+        "pick-window" or "highlight-clicks" or "pointer-ring" => Mouse,
+        "zoom-in" or "zoom-in-more" => Search,
+        "laser" or "draw" => Highlight,
+        "inset" => OpenWindow,
+        "hide-part" or "show-hidden" => Hide,
+        "audience-view" => View,
+        "get-ready" => List,
+        "go" => Play,
+        "spotlight" => Spotlight,
+        "caption" => Person,
+        "qr" => QrCode,
+        "live-captions" => Captions,
+        "second-tv" or "stop-second-tv" => Tv,
+        "save-room" => People,
+        _ when command.StartsWith("room:", StringComparison.Ordinal) => People,
+        "save-scene" => Star,
+        "next-slide" => Next,
+        "previous-slide" => Back,
+        "stop-playlist" => Stop,
+        "phone-remote" => Phone,
+        "auto-hide" => Hide,
+        _ when command.StartsWith("scene-", StringComparison.Ordinal) => Star,
+        _ when command.StartsWith("playlist:", StringComparison.Ordinal) => List,
+        "check-updates" => Download,
         "show-again" or "previous-source" or "previous-window" => Back,
-        "next-window" => Next,
+        "next-window" or "slideshow" => Next,
         "blank" => Hide,
         "blank-message" => Message,
+        "blank-countdown" or "restart-timer" => Clock,
         "freeze" => Pause,
         "crop" or "remove-crop" => Crop,
         "stop" or "stop-recording" => Stop,
@@ -85,7 +119,7 @@ internal static class Icons
         "toggle-theme" => Colour,
         _ when command.StartsWith("settings", StringComparison.Ordinal) => Settings,
         _ when command.StartsWith("output:", StringComparison.Ordinal) => Tv,
-        _ when command.StartsWith("stop-after:", StringComparison.Ordinal) => Clock,
+        _ when command.StartsWith("stop-after:", StringComparison.Ordinal) || command.StartsWith("countdown:", StringComparison.Ordinal) => Clock,
         _ when command.StartsWith("favourite-", StringComparison.Ordinal) || command.StartsWith("save-favourite-", StringComparison.Ordinal) => Star,
         _ => null,
     };

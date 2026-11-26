@@ -14,11 +14,14 @@ internal sealed class Favourite
     /// <summary>Set when the favourite is a whole screen (FR-02): its device name, e.g. "\\.\DISPLAY1".</summary>
     public string? ScreenDevice { get; set; }
 
-    /// <summary>The same source: the same screen, or the same app with the same or a similar title.</summary>
+    /// <summary>Set when the favourite is a camera (FR-68): Windows' id for it; <see cref="Title"/> is its name.</summary>
+    public string? CameraId { get; set; }
+
+    /// <summary>The same source: the same screen, the same camera, or the same app with the same or a similar title.</summary>
     public bool Matches(Favourite other) =>
-        ScreenDevice is not null || other.ScreenDevice is not null
-            ? ScreenDevice == other.ScreenDevice
-            : string.Equals(AppName, other.AppName, StringComparison.OrdinalIgnoreCase) && (Title == other.Title || FavouriteMatcher.IsSimilar(Title, other.Title));
+        ScreenDevice is not null || other.ScreenDevice is not null ? ScreenDevice == other.ScreenDevice
+        : CameraId is not null || other.CameraId is not null ? CameraId == other.CameraId
+        : string.Equals(AppName, other.AppName, StringComparison.OrdinalIgnoreCase) && (Title == other.Title || FavouriteMatcher.IsSimilar(Title, other.Title));
 }
 
 /// <summary>Everything SCP remembers (FR-40/41). Unknown JSON fields are ignored, missing ones get defaults.</summary>
@@ -109,6 +112,155 @@ internal sealed class AppSettings
     /// <summary>Record the microphone too (people in the room, FR-53).</summary>
     public bool RecordMicrophone { get; set; }
 
+    /// <summary>
+    /// Apps never shown (by program name): their windows can't be chosen, and a whole screen goes
+    /// black while one is open on it. Starts with common password managers; a file from before
+    /// this setting existed gets them too.
+    /// </summary>
+    public List<string> NeverShowApps { get; set; } = [.. NeverShow.Defaults];
+
+    /// <summary>Remind to switch on Do not disturb when the whole main screen is shown or recorded.</summary>
+    public bool RemindDoNotDisturb { get; set; } = true;
+
+    /// <summary>How much closer zooming in on the pointer brings the TV (FR-64): 1.5, 2, 3 or 4.</summary>
+    public double ZoomLevel { get; set; } = Core.ZoomView.DefaultLevel;
+
+    /// <summary>A ring on the TV where you click (FR-65).</summary>
+    public bool HighlightClicks { get; set; }
+
+    /// <summary>A soft ring around the pointer on the TV, so a room can follow it (FR-65).</summary>
+    public bool PointerRing { get; set; }
+
+    /// <summary>"Blank with a countdown" counts down from this many minutes (FR-66).</summary>
+    public int CountdownMinutes { get; set; } = BlankCountdown.DefaultMinutes;
+
+    /// <summary>How long you've been presenting, in the now-showing bar (FR-67).</summary>
+    public bool ShowTalkTimer { get; set; } = true;
+
+    /// <summary>The talk's length in minutes, for warnings two minutes before and at the end; 0 = none.</summary>
+    public int TalkMinutes { get; set; }
+
+    /// <summary>How long each favourite shows in a slideshow (FR-69).</summary>
+    public int SlideshowSeconds { get; set; } = Slideshow.DefaultSeconds;
+
+    /// <summary>Offer to show something when a TV or projector is plugged in (FR-70).</summary>
+    public bool OfferNewScreen { get; set; } = true;
+
+    /// <summary>The small picture's corner (FR-72): BottomRight, BottomLeft, TopRight or TopLeft.</summary>
+    public string InsetCorner { get; set; } = nameof(Core.InsetCorner.BottomRight);
+
+    /// <summary>The small picture's width, in percent of the TV's width: 20, 28 or 36.</summary>
+    public int InsetSize { get; set; } = InsetLayout.DefaultSize;
+
+    /// <summary>Once a day, ask GitHub whether a newer version is out (FR-73). Off unless switched on.</summary>
+    public bool CheckForUpdates { get; set; }
+
+    /// <summary>When it last asked (UTC); null = never.</summary>
+    public DateTime? LastUpdateCheckUtc { get; set; }
+
+    /// <summary>A version the user chose to skip ("v1.2.0"): not announced again, though a newer one is.</summary>
+    public string? SkippedVersion { get; set; }
+
+    /// <summary>Parts of windows and screens hidden from the audience (FR-74): app name (or "screen:" and a device) → boxes.</summary>
+    public Dictionary<string, List<CropRegion>> HiddenParts { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>How hidden parts look on the TV: "Solid" (the default, nothing shows through) or "Blurred".</summary>
+    public string HiddenPartLook { get; set; } = nameof(RedactStyle.Solid);
+
+    /// <summary>The name banner's two lines (FR-79), e.g. "Jane Doe" and "Head of Sales".</summary>
+    public string CaptionName { get; set; } = "";
+    public string CaptionSecond { get; set; } = "";
+
+    /// <summary>Your logo above the blank screen's message (FR-80): a copy kept next to these settings; null for none.</summary>
+    public string? BlankLogo { get; set; }
+
+    /// <summary>The last link put on the TV as a QR code (FR-81), offered again next time.</summary>
+    public string? QrLink { get; set; }
+
+    /// <summary>The last Wi-Fi network put on the TV as a QR code; its password is never kept.</summary>
+    public string? QrWifiName { get; set; }
+
+    /// <summary>The QR code's corner: TopRight (the default), TopLeft, BottomRight or BottomLeft.</summary>
+    public string QrCorner { get; set; } = nameof(Core.InsetCorner.TopRight);
+
+    /// <summary>Room profiles (FR-82): one click sets the screen, dimming, extras and favourites for a room.</summary>
+    public List<RoomProfile> Rooms { get; set; } = [];
+
+    /// <summary>Things done at set times (FR-83), e.g. the lobby slideshow from 8:00 to 18:00 on weekdays.</summary>
+    public List<ScheduleEntry> Schedule { get; set; } = [];
+
+    /// <summary>The second TV (FR-85): its screen's device name; null for none.</summary>
+    public string? SecondOutputDevice { get; set; }
+
+    /// <summary>Where the "what the audience sees" window was (physical pixels); null = beside the bar.</summary>
+    public WindowBounds? StudioWindow { get; set; }
+
+    /// <summary>Scenes 1–9 (FR-86): what's shown and everything around it, one key each.</summary>
+    public Scene?[] Scenes { get; set; } = new Scene?[Scene.Slots];
+
+    /// <summary>Playlists (FR-87): favourites and scenes taking turns on a TV.</summary>
+    public List<Playlist> Playlists { get; set; } = [];
+
+    /// <summary>A playlist to start when ScreenCast Presenter starts (a lobby screen that runs itself); null for none.</summary>
+    public string? PlaylistAtStart { get; set; }
+
+    /// <summary>What automatic hiding covers (FR-88), e.g. "Emails, Phones"; "None" (the default) is off.</summary>
+    public string AutoHide { get; set; } = nameof(SensitiveKinds.None);
+
+    /// <summary>Live captions on the TV (FR-84); off still allows a transcript (FR-89).</summary>
+    public bool CaptionsOnTv { get; set; } = true;
+
+    /// <summary>Save what live captions hear as a transcript, with subtitles (FR-89).</summary>
+    public bool SaveTranscript { get; set; }
+
+    /// <summary>Where transcripts go; null = Documents\ScreenCast Presenter\Transcripts.</summary>
+    public string? TranscriptFolder { get; set; }
+
+    /// <summary>Live captions' size and place on the TV (FR-89).</summary>
+    public string CaptionSize { get; set; } = nameof(Core.CaptionSize.Normal);
+    public string CaptionPlace { get; set; } = nameof(Core.CaptionPlace.Bottom);
+
+    /// <summary>The phone remote (FR-90): off unless switched on.</summary>
+    public bool PhoneRemote { get; set; }
+
+    /// <summary>The port the phone remote listens on (it falls back to any free port when this one is taken).</summary>
+    public int RemotePort { get; set; } = Remote.RemoteServer.DefaultPort;
+
+    /// <summary>The phone remote's pairing key, encrypted for this Windows user (DPAPI); null = not paired.</summary>
+    public string? RemoteKey { get; set; }
+
+    [JsonIgnore]
+    public SensitiveKinds AutoHideKinds
+    {
+        get => Enum.TryParse(AutoHide, ignoreCase: true, out SensitiveKinds k) ? k & SensitiveKinds.All : SensitiveKinds.None;
+        set => AutoHide = (value & SensitiveKinds.All).ToString();
+    }
+
+    [JsonIgnore]
+    public CaptionLook CaptionLook
+    {
+        get => new(Core.CaptionLook.ParseSize(CaptionSize), Core.CaptionLook.ParsePlace(CaptionPlace));
+        set
+        {
+            CaptionSize = value.Size.ToString();
+            CaptionPlace = value.Place.ToString();
+        }
+    }
+
+    [JsonIgnore]
+    public RedactStyle HiddenPartStyle
+    {
+        get => Enum.TryParse(HiddenPartLook, ignoreCase: true, out RedactStyle style) && Enum.IsDefined(style) ? style : RedactStyle.Solid;
+        set => HiddenPartLook = value.ToString();
+    }
+
+    [JsonIgnore]
+    public InsetCorner QrPlace
+    {
+        get => InsetLayout.ParseCorner(QrCorner, Core.InsetCorner.TopRight);
+        set => QrCorner = value.ToString();
+    }
+
     [JsonIgnore]
     public Recording.MeetingSound MeetingSound
     {
@@ -161,6 +313,34 @@ internal sealed class AppSettings
         RecordSound = MeetingSound.ToString();
         OutputMode = OutputInWindow ? "Window" : "Screen";
         if (FloatingWindow is { Width: <= 0 } or { Height: <= 0 } or { Width: > 20_000 } or { Height: > 20_000 }) FloatingWindow = null;
+        NeverShowApps = NeverShow.Normalize(NeverShowApps);
+        ZoomLevel = Core.ZoomView.Normalize(ZoomLevel);
+        CountdownMinutes = BlankCountdown.Normalize(CountdownMinutes);
+        TalkMinutes = TalkTimer.Normalize(TalkMinutes);
+        SlideshowSeconds = Slideshow.Normalize(SlideshowSeconds);
+        InsetCorner = InsetLayout.ParseCorner(InsetCorner).ToString();
+        InsetSize = InsetLayout.Normalize(InsetSize);
+        HiddenParts = Redactions.NormalizeAll(HiddenParts);
+        HiddenPartLook = HiddenPartStyle.ToString();
+        CaptionName = NameCaption.Tidy(CaptionName);
+        CaptionSecond = NameCaption.Tidy(CaptionSecond);
+        if (string.IsNullOrWhiteSpace(BlankLogo)) BlankLogo = null;
+        QrLink = string.IsNullOrWhiteSpace(QrLink) ? null : QrLink.Trim();
+        QrWifiName = string.IsNullOrWhiteSpace(QrWifiName) ? null : QrWifiName.Trim();
+        QrCorner = QrPlace.ToString();
+        Rooms = RoomProfile.NormalizeAll(Rooms);
+        Schedule = ScheduleEntry.NormalizeAll(Schedule);
+        if (string.IsNullOrWhiteSpace(SecondOutputDevice)) SecondOutputDevice = null;
+        if (StudioWindow is { Width: <= 0 } or { Height: <= 0 } or { Width: > 20_000 } or { Height: > 20_000 }) StudioWindow = null;
+        Scenes = Scene.NormalizeAll(Scenes);
+        Playlists = Playlist.NormalizeAll(Playlists);
+        if (Playlist.Find(Playlists, PlaylistAtStart) is not { } atStart) PlaylistAtStart = null;
+        else PlaylistAtStart = atStart.Name;
+        AutoHide = AutoHideKinds.ToString();
+        if (string.IsNullOrWhiteSpace(TranscriptFolder)) TranscriptFolder = null;
+        CaptionLook = CaptionLook;
+        if (RemotePort is < 1024 or > 65535) RemotePort = Remote.RemoteServer.DefaultPort;
+        if (string.IsNullOrWhiteSpace(RemoteKey)) RemoteKey = null;
         BlankMessage = string.IsNullOrWhiteSpace(BlankMessage) ? "We'll be right back" : BlankMessage.Trim();
         if (BlankMessage.Length > MaxMessageLength) BlankMessage = BlankMessage[..MaxMessageLength];
         return this;

@@ -24,10 +24,23 @@ internal sealed class SingleInstance : IDisposable
         _quit = quit;
     }
 
+    /// <summary>True when a copy is running in this Windows session.</summary>
+    public static bool IsRunning
+    {
+        get
+        {
+            if (!Mutex.TryOpenExisting(MutexName, out Mutex? running)) return false;
+            running.Dispose();
+            return true;
+        }
+    }
+
     /// <summary>
-    /// Returns the instance owner, or null after signalling the copy that's already running.
+    /// Returns the instance owner, or null after signalling the copy that's already running
+    /// (to open its picker, unless <paramref name="openPicker"/> is false: a command-line request
+    /// goes to it through the command pipe instead).
     /// </summary>
-    public static SingleInstance? TryAcquire()
+    public static SingleInstance? TryAcquire(bool openPicker = true)
     {
         var mutex = new Mutex(initiallyOwned: true, MutexName, out bool createdNew);
         if (!createdNew)
@@ -46,7 +59,7 @@ internal sealed class SingleInstance : IDisposable
             if (!owned)
             {
                 mutex.Dispose();
-                if (EventWaitHandle.TryOpenExisting(SignalName, out EventWaitHandle? existing))
+                if (openPicker && EventWaitHandle.TryOpenExisting(SignalName, out EventWaitHandle? existing))
                 {
                     existing.Set();
                     existing.Dispose();

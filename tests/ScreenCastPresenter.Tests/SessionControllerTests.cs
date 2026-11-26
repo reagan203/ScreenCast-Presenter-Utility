@@ -691,6 +691,12 @@ internal sealed class FakePlatform : ISessionPlatform
     /// <summary>Whether a fallback engine is offered when one fails.</summary>
     public bool OfferFallback { get; set; } = true;
 
+    /// <summary>Engines draw marks on the TV (like the helper's), so hidden parts can be covered.</summary>
+    public bool EnginesDrawMarks { get; set; }
+
+    /// <summary>The fallback engine draws marks too (normally it's the light way, which can't).</summary>
+    public bool FallbackDrawsMarks { get; set; }
+
     /// <summary>What every source "is" in size (before its crop); null: unknown.</summary>
     public Size? SourceSize { get; set; } = new Size(1600, 900);
 
@@ -706,7 +712,10 @@ internal sealed class FakePlatform : ISessionPlatform
 
     public ICaptureEngine CreateEngine(SourceWindow source, bool startFrozen = false)
     {
-        var engine = new FakeEngine(FailNextEngine, supportsFreeze: EnginesSupportFreeze || startFrozen || source.IsScreen) { StartFrozen = startFrozen };
+        bool freeze = EnginesSupportFreeze || startFrozen || source.IsScreen;
+        FakeEngine engine = EnginesDrawMarks
+            ? new FakeMarksEngine(FailNextEngine, freeze) { StartFrozen = startFrozen }
+            : new FakeEngine(FailNextEngine, freeze) { StartFrozen = startFrozen };
         FailNextEngine = false;
         Engines.Add(engine);
         return engine;
@@ -715,7 +724,9 @@ internal sealed class FakePlatform : ISessionPlatform
     public ICaptureEngine? CreateFallbackEngine(SourceWindow source, ICaptureEngine failed)
     {
         if (!OfferFallback) return null;
-        var engine = new FakeEngine(false, supportsFreeze: !((FakeEngine)failed).SupportsFreeze) { IsFallback = true };
+        FakeEngine engine = FallbackDrawsMarks
+            ? new FakeMarksEngine(false, !((FakeEngine)failed).SupportsFreeze) { IsFallback = true }
+            : new FakeEngine(false, supportsFreeze: !((FakeEngine)failed).SupportsFreeze) { IsFallback = true };
         Engines.Add(engine);
         return engine;
     }
@@ -803,6 +814,11 @@ internal sealed class FakeOutput(DisplayMonitor monitor) : IOutputSurface
 
     public void SetPrivatePreview(bool on) => PrivatePreview = on;
 
+    /// <summary>The logo it was last given (FR-80).</summary>
+    public string? Logo { get; private set; }
+
+    public void SetLogo(string? path) => Logo = path;
+
     public void SetMinimized(bool minimized)
     {
         IsMinimized = minimized;
@@ -821,7 +837,7 @@ internal sealed class FakeOutput(DisplayMonitor monitor) : IOutputSurface
     public void Dispose() => Disposed = true;
 }
 
-internal sealed class FakeEngine(bool fail, bool supportsFreeze) : ICaptureEngine
+internal class FakeEngine(bool fail, bool supportsFreeze) : ICaptureEngine
 {
     public List<double> Opacities { get; } = [];
     public bool Disposed { get; private set; }

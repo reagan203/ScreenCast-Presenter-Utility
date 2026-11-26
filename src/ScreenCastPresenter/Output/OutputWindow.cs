@@ -263,6 +263,18 @@ internal sealed class OutputWindow : Form, IOutputSurface
         if (IsAlive) DwmHelpers.SetCloaked((HWND)Handle, true);
     }
 
+    private Bitmap? _logo;
+    private string? _logoPath;
+
+    public void SetLogo(string? path)
+    {
+        if (string.Equals(path, _logoPath, StringComparison.OrdinalIgnoreCase) && (_logo is not null || path is null)) return;
+        _logoPath = path;
+        _logo?.Dispose();
+        _logo = LogoImage.Load(path);
+        if (IsAlive) Invalidate();
+    }
+
     public void SetIdleMessage(string? message, double brightness = 1)
     {
         _message = message;
@@ -283,8 +295,19 @@ internal sealed class OutputWindow : Form, IOutputSurface
             Lerp(Theme.OutputBlack.B, target.B, _messageBrightness));
 
         _messageFont ??= new Font(Theme.UiFont.FontFamily, Math.Max(18f, ClientSize.Height / 22f), FontStyle.Regular, GraphicsUnit.Pixel);
-        TextRenderer.DrawText(e.Graphics, _message, _messageFont, ClientRectangle, colour,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+        var canvas = new SizeF(ClientSize.Width, ClientSize.Height);
+        RectangleF logo = _logo is null ? RectangleF.Empty : Layouts.Logo(canvas, _logo.Size, withMessage: true);
+        if (!logo.IsEmpty)
+        {
+            // Your logo above the message (FR-80), fading in with it.
+            e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            using var fade = new System.Drawing.Imaging.ImageAttributes();
+            fade.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = (float)_messageBrightness });
+            e.Graphics.DrawImage(_logo!, Rectangle.Round(logo), 0, 0, _logo!.Width, _logo.Height, GraphicsUnit.Pixel, fade);
+        }
+        Rectangle text = Rectangle.Round(Layouts.Message(canvas, logo));
+        TextRenderer.DrawText(e.Graphics, _message, _messageFont, text, colour,
+            TextFormatFlags.HorizontalCenter | (logo.IsEmpty ? TextFormatFlags.VerticalCenter : TextFormatFlags.Top) | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
     }
 
     private static int Lerp(int a, int b, double t) => (int)Math.Round(a + (b - a) * t);
@@ -340,6 +363,7 @@ internal sealed class OutputWindow : Form, IOutputSurface
         {
             _messageFont?.Dispose();
             _fitTimer?.Dispose();
+            _logo?.Dispose();
         }
         base.Dispose(disposing);
     }

@@ -209,3 +209,27 @@ DWM_SYSTEMBACKDROP_TYPE
 AlphaBlend
 PatBlt
 SystemParametersInfo
+
+// Zoom, click highlights, pointer ring (FR-64, FR-65)
+WindowFromPoint
+GetAsyncKeyState
+
+// Live captions (FR-84): Windows' offline speech recognizer (SAPI)
+ISpRecognizer
+ISpRecoContext
+ISpRecoGrammar
+ISpRecoResult
+SpInprocRecognizer
+SPEVENT
+SPEVENTENUM
+SpMMAudioIn
+SPLOADOPTIONS
+SPRULESTATE
+SPRECOSTATE
+
+// Phone remote (FR-90): next / previous slide, like a presenter clicker
+SendInput
+INPUT
+KEYBDINPUT
+VIRTUAL_KEY
+MapVirtualKey

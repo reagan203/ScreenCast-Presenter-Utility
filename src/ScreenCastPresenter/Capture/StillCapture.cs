@@ -17,12 +17,42 @@ namespace ScreenCastPresenter.Capture;
 /// </summary>
 internal static class StillCapture
 {
-    /// <summary>The source (its client area for windows, cropped if it has a crop), or null if no frame came in time.</summary>
-    public static Task<Bitmap?> CaptureAsync(SourceWindow source, bool includeCursor, TimeSpan timeout) =>
-        Task.Run(() => Capture(source, includeCursor, timeout));
+    /// <summary>
+    /// The source (its client area for windows, cropped if it has a crop), or null if no frame came
+    /// in time. Parts hidden from the audience (FR-74) are covered with a solid box: a screenshot of
+    /// what's shown never holds what the audience was kept from seeing.
+    /// </summary>
+    public static Task<Bitmap?> CaptureAsync(SourceWindow source, bool includeCursor, TimeSpan timeout, IReadOnlyList<Core.CropRegion>? hidden = null) =>
+        Task.Run(() => Cover(Capture(source, includeCursor, timeout, out Rectangle client, out Rectangle shown), client, shown, hidden));
 
-    private static Bitmap? Capture(SourceWindow source, bool includeCursor, TimeSpan timeout)
+    /// <summary>Where each hidden box falls in a picture of <paramref name="shown"/> (part of a client area <paramref name="client"/>).</summary>
+    internal static List<Rectangle> Covers(Rectangle client, Rectangle shown, IReadOnlyList<Core.CropRegion> hidden)
     {
+        var covers = new List<Rectangle>();
+        foreach (Core.CropRegion box in hidden)
+        {
+            Rectangle r = box.ToPixels(client.Size);
+            r.Offset(client.Location);
+            r.Intersect(shown);
+            if (r.Width <= 0 || r.Height <= 0) continue;
+            r.Offset(-shown.X, -shown.Y);
+            covers.Add(r);
+        }
+        return covers;
+    }
+
+    private static Bitmap? Cover(Bitmap? image, Rectangle client, Rectangle shown, IReadOnlyList<Core.CropRegion>? hidden)
+    {
+        if (image is null || hidden is not { Count: > 0 }) return image;
+        using Graphics g = Graphics.FromImage(image);
+        using var brush = new SolidBrush(Core.EffectStyle.RedactFill);
+        foreach (Rectangle r in Covers(client, shown, hidden)) g.FillRectangle(brush, r);
+        return image;
+    }
+
+    private static Bitmap? Capture(SourceWindow source, bool includeCursor, TimeSpan timeout, out Rectangle client, out Rectangle shown)
+    {
+        client = shown = Rectangle.Empty;
         using ID3D11Device device = Direct3D.CreateDevice();
         ID3D11DeviceContext context = device.ImmediateContext;
         var winrt = Direct3D.CreateWinRTDevice(device);
@@ -44,6 +74,7 @@ internal static class StillCapture
             if (content.Width <= 0 || content.Height <= 0) return null;
 
             Rectangle area = source.IsScreen ? new Rectangle(Point.Empty, content) : Direct3D.ClientAreaInFrame(source.Handle, content);
+            client = area;
             if (source.Crop is { } crop)
             {
                 Rectangle part = crop.ToPixels(area.Size);
@@ -51,6 +82,7 @@ internal static class StillCapture
                 area = part;
             }
 
+            shown = area;
             using ID3D11Texture2D texture = Direct3D.TextureOf(frame.Surface);
             return ReadPixels(device, context, texture, area);
         }

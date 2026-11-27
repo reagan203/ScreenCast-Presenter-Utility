@@ -202,11 +202,20 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
         return _firstFrame.Task;
     }
 
-    public void SetOpacity(double opacity) => Update(() => _opacity = Math.Clamp(opacity, 0, 1));
-    public void OnSourceChanged() => Update(() => { });
+    public void SetOpacity(double opacity)
+    {
+        Update(() => _opacity = Math.Clamp(opacity, 0, 1));
+        OnOpacityForVideo(Math.Clamp(opacity, 0, 1));
+    }
+
+    public void OnSourceChanged() => Update(() => _pictureCheck = true);
     public void OnOutputResized(Size outputClientSize) => Update(() => _outputSize = outputClientSize);
     public void SetCrop(CropRegion? crop) => Update(() => _crop = crop);
-    public void SetFrozen(bool frozen) => Update(() => _frozen = frozen);
+    public void SetFrozen(bool frozen)
+    {
+        Update(() => _frozen = frozen);
+        _video?.SetHeld(frozen); // frozen: a video pauses, and plays on from there
+    }
 
     public void SetIdleMessage(string? message, double brightness) => Update(() =>
     {
@@ -331,6 +340,14 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
                 picture.UnlockBits(data);
             }
             _pictureFresh = true;
+            try { _pictureWritten = File.GetLastWriteTimeUtc(file); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Debug.WriteLine(ex); }
+            ClearToBlack();
+            return;
+        }
+        if (_source.Video is { } videoFile)
+        {
+            // A video (FR-116): Windows' media player decodes it; its first frame arrives once it has opened.
+            StartVideo(videoFile);
             ClearToBlack();
             return;
         }
@@ -430,9 +447,10 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
     private bool TakeLatestFrame()
     {
         if (_camera is not null) return TakeCameraFrame();
+        if (_video is not null) return TakeVideoFrame();
         if (_source.IsPicture)
         {
-            bool fresh = _pictureFresh;
+            bool fresh = _pictureFresh | ReloadPictureIfChanged();
             _pictureFresh = false;
             return fresh;
         }
@@ -543,16 +561,12 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
     {
         if (_inset?.Bitmap is not { } bitmap || opacity <= 0.001) return;
         if (_insetCover is { FirstScanDone: false } || _insetSource is not null && !_insetSource.IsSameSource(_insetCoverSource) && _paneKinds != SensitiveKinds.None) return; // not looked at yet
-        Rectangle part = _inset.ContentArea;
-        System.Drawing.RectangleF place = InsetLayout.Place(canvas, part.Size, _insetCorner, _insetPercent);
-        if (place.IsEmpty) return;
-        var dest = new Rect(place.X, place.Y, place.Width, place.Height);
-        _dc!.DrawBitmap(bitmap, dest, (float)opacity, InterpolationMode.HighQualityCubic, ToRect(part), null);
-        if (_insetSource is not null) DrawCoversOn(_insetSource, _insetCover, bitmap, part, place, opacity);
-        _insetBorder ??= _dc.CreateSolidColorBrush(new Color4(1, 1, 1, 0.35f));
-        _insetBorder.Opacity = (float)opacity;
-        _dc.DrawRectangle(dest, _insetBorder, Math.Max(1.5f, canvas.Height / 540f));
+        DrawInsetShaped(bitmap, _inset.WholeArea, _inset.ContentArea, new System.Drawing.SizeF(canvas.Width, canvas.Height), opacity, _insetShapeNow);
     }
+
+    // What the frame being drawn uses (render thread), taken under the lock at its start.
+    private NightMode _nightNow;
+    private InsetShape _insetShapeNow;
 
     /// <summary>The newest camera frame onto the GPU (unless frozen: then frames are dropped and the picture stays).</summary>
     private bool TakeCameraFrame()
@@ -571,7 +585,8 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
         });
     }
 
-    private void CreateHeldTexture(Size size)
+    /// <param name="drawInto">Something draws into it on the GPU (a video's frames), not just copies.</param>
+    private void CreateHeldTexture(Size size, bool drawInto = false)
     {
         _heldBitmap?.Dispose();
         _held?.Dispose();
@@ -584,7 +599,7 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
             Format = Format.B8G8R8A8_UNorm,
             SampleDescription = new SampleDescription(1, 0),
             Usage = ResourceUsage.Default,
-            BindFlags = BindFlags.ShaderResource,
+            BindFlags = drawInto ? BindFlags.ShaderResource | BindFlags.RenderTarget : BindFlags.ShaderResource,
         });
         using IDXGISurface surface = _held.QueryInterface<IDXGISurface>();
         _heldBitmap = _dc!.CreateBitmapFromDxgiSurface(surface,
@@ -603,6 +618,8 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
         string? logoPath;
         lock (_sync)
         {
+            _nightNow = _night;
+            _insetShapeNow = _insetShape;
             logoChanged = _logoChanged;
             _logoChanged = false;
             logoPath = _logoPath;
@@ -660,7 +677,7 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
         {
             List<System.Drawing.RectangleF>? cells = SplitCells(canvas);
             Rectangle dest = cells is null ? AspectFit.Fit(part.Size, canvas) : Rectangle.Round(SplitScreen.Fit(part.Size, cells[0]));
-            _dc.DrawBitmap(_heldBitmap!, ToRect(dest), (float)opacity, InterpolationMode.HighQualityCubic, ToRect(part), null);
+            DrawPicture(_heldBitmap!, part, dest, opacity, _nightNow);
             _effects.Render(_dc, _d2dFactory!, _dwrite!, _heldBitmap!, area, part, dest, (float)opacity, frozen);
             if (cells is not null) DrawPanes(cells, opacity);
             else DrawInset(canvas, opacity);
@@ -778,6 +795,7 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
 
     private void Release()
     {
+        StopVideoQuickly(); // its sound stops now; the player itself is let go last (it can take a moment)
         _cover?.Dispose();
         _cover = null;
         DisposePanes();
@@ -820,6 +838,7 @@ internal sealed partial class WgcEngine : ICaptureEngine, IEffectsEngine
         }
         _context?.Dispose();
         _device?.Dispose();
+        ReleaseExtras(); // after the swap chain: a new engine on the same window can start at once
     }
 
     private bool _disposed;

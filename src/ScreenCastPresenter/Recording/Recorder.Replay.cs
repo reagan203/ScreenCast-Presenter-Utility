@@ -94,13 +94,15 @@ internal sealed partial class Recorder
         _part++;
         _partStart = elapsed;
         _partAudioStart = audioFrames;
+        bool finished = false;
         try
         {
             old.Finish(); // its frames in flight are written before the ring is drawn into again
+            finished = true;
         }
         catch (COMException ex)
         {
-            Debug.WriteLine(ex);
+            Debug.WriteLine(ex); // e.g. a part with nothing in it: it's no use, and a save must never trip over it
         }
         finally
         {
@@ -108,7 +110,8 @@ internal sealed partial class Recorder
         }
         lock (_partsLock)
         {
-            _parts.Add((oldPath, length));
+            if (finished) _parts.Add((oldPath, length));
+            else TryDelete(oldPath);
             while (_parts.Count > ReplayBuffer.Keep(_request.ReplaySeconds) && !_partsInUse.Contains(_parts[0].Path))
             {
                 TryDelete(_parts[0].Path);
@@ -137,7 +140,10 @@ internal sealed partial class Recorder
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                TimeSpan length = Mp4Joiner.Join([.. use.Select(u => u.Path)], target, [.. use.Select(u => u.Length)]);
+                // A part Windows can't read back is left out, so the rest is still saved rather than nothing.
+                List<(string Path, TimeSpan Length)> readable = [.. use.Where(u => Readable(u.Path))];
+                if (readable.Count == 0) throw new InvalidDataException("No part of the replay can be read.");
+                TimeSpan length = Mp4Joiner.Join([.. readable.Select(u => u.Path)], target, [.. readable.Select(u => u.Length)]);
                 _send(RecordingProtocol.ReplaySaved(length, target));
             }
             catch (Exception ex) when (ex is COMException or IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
@@ -151,6 +157,20 @@ internal sealed partial class Recorder
                 lock (_partsLock) _partsInUse.ExceptWith(use.Select(u => u.Path));
             }
         });
+    }
+
+    /// <summary>Whether Windows can open a finished part to read it back.</summary>
+    private static bool Readable(string part)
+    {
+        try
+        {
+            return Mp4Info.Read(part).HasVideo;
+        }
+        catch (Exception ex) when (ex is COMException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Debug.WriteLine($"replay part {part} can't be read: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>Stopping: a save in progress finishes; an encoder made ahead is let go.</summary>

@@ -8,7 +8,14 @@ internal static class FavouriteMatcher
     private static readonly string[] TitleSeparators = [" - ", " — ", " – ", " | "];
 
     public static Favourite FromSource(SourceWindow source) =>
-        new() { AppName = source.AppName, Title = source.Title, ScreenDevice = source.Screen?.DeviceName, CameraId = source.Camera?.Id, PicturePath = source.Picture };
+        new()
+        {
+            AppName = source.AppName, Title = source.Title, ScreenDevice = source.Screen?.DeviceName, CameraId = source.Camera?.Id,
+            // A PDF page, the whiteboard and the room sign are made again when shown: what they're made from is kept.
+            PicturePath = source.IsDocument || source.IsBoard || source.IsRoomSign ? null : source.Picture,
+            VideoPath = source.Video, DocumentPath = source.Document, DocumentPage = Math.Max(1, source.Page),
+            Special = source.IsBoard ? Favourite.WhiteboardSpecial : source.IsRoomSign ? Favourite.RoomSignSpecial : null,
+        };
 
     /// <summary>
     /// Best match among <paramref name="windows"/> (z-order, most recent first):

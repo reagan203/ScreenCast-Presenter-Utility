@@ -54,7 +54,7 @@ internal sealed partial class WgcEngine
     /// <summary>Hidden parts (FR-74) of another picture (a pane or the small picture), by its source; an empty list uncovers it.</summary>
     public void HiddenFor(SourceWindow source, IReadOnlyList<CropRegion> regions, RedactStyle style) => Update(() =>
     {
-        string key = CaptureProtocol.SourceSpec(source);
+        string key = CaptureProtocol.CoverKey(source);
         if (regions.Count == 0) _hiddenFor.Remove(key);
         else _hiddenFor[key] = ([.. regions.Take(Redactions.MaxPerSource)], style);
     });
@@ -171,9 +171,9 @@ internal sealed partial class WgcEngine
             _insetCoverSource = _insetSource;
             _insetCover = Recover(null, _insetSource);
         }
-        if (_insetCover is { } insetCover && _inset?.Bitmap is { } insetBitmap) insetCover.MaybeScan(_dc, insetBitmap, _inset.ContentArea, true, _target);
+        if (_insetCover is { } insetCover && _inset?.Bitmap is { } insetBitmap) insetCover.MaybeScan(_dc, insetBitmap, _inset.WholeArea, true, _target);
         foreach (Pane pane in _panes)
-            if (pane.Cover is { } cover && pane.Feed.Bitmap is { } bitmap) cover.MaybeScan(_dc, bitmap, pane.Feed.ContentArea, pane.Fresh, _target);
+            if (pane.Cover is { } cover && pane.Feed.Bitmap is { } bitmap) cover.MaybeScan(_dc, bitmap, pane.Feed.WholeArea, pane.Fresh, _target);
     }
 
     /// <summary>Every other picture has had its first look (for the first frame of something new).</summary>
@@ -193,23 +193,25 @@ internal sealed partial class WgcEngine
             Rectangle part = pane.Feed.ContentArea;
             System.Drawing.RectangleF dest = SplitScreen.Fit(part.Size, cells[i + 1]);
             if (dest.IsEmpty) continue;
-            _dc!.DrawBitmap(bitmap, new Rect(dest.X, dest.Y, dest.Width, dest.Height), (float)opacity, InterpolationMode.HighQualityCubic, ToRect(part), null);
-            DrawCoversOn(pane.Source, pane.Cover, bitmap, part, dest, opacity);
+            DrawPicture(bitmap, part, Rectangle.Round(dest), opacity, _nightNow); // the night filter on the pictures beside it too
+            DrawCoversOn(pane.Source, pane.Cover, bitmap, pane.Feed.WholeArea, part, dest, opacity);
         }
     }
 
     /// <summary>Another picture's hidden parts and what its automatic hiding found, over it.</summary>
-    private void DrawCoversOn(SourceWindow source, AutoCover? cover, ID2D1Bitmap1 bitmap, Rectangle area, System.Drawing.RectangleF dest, double opacity)
+    /// <param name="area">All of the other picture (hidden parts are parts of it).</param>
+    /// <param name="shown">The part of it shown (a screen's taskbar left out).</param>
+    private void DrawCoversOn(SourceWindow source, AutoCover? cover, ID2D1Bitmap1 bitmap, Rectangle area, Rectangle shown, System.Drawing.RectangleF dest, double opacity)
     {
         _frameCovers.Clear();
         lock (_sync)
         {
-            if (_hiddenFor.TryGetValue(CaptureProtocol.SourceSpec(source), out (List<CropRegion> Regions, RedactStyle Style) hidden))
+            if (_hiddenFor.TryGetValue(CaptureProtocol.CoverKey(source), out (List<CropRegion> Regions, RedactStyle Style) hidden))
                 foreach (CropRegion r in hidden.Regions) _frameCovers.Add((r, hidden.Style));
         }
         if (cover is not null) _frameCovers.AddRange(cover.Covers());
         if (_frameCovers.Count == 0) return;
-        _effects.RenderCovers(_dc!, _d2dFactory!, bitmap, area, area, dest, _frameCovers, (float)opacity);
+        _effects.RenderCovers(_dc!, _d2dFactory!, bitmap, area, shown, dest, _frameCovers, (float)opacity);
     }
 
     private void DisposePanes()

@@ -74,13 +74,14 @@ internal static partial class Program
             case "stage": Stage(); break;
             case "speed": Speed(); break;
             case "room": RoomRunning(); break;
+            case "rev10": Rev10(); break;
             case "quick":
                 Smoke(); Picker(20); Ui(10); Switches(200); Storm(2000); Flood(300); Hostile(50); Pressure(60); Flash(100); Record(); FloatingWindow(); Widget();
-                CommandLine(20); Extras(); NeverShowScenario(); Stage(); Speed(); RoomRunning();
+                CommandLine(20); Extras(); NeverShowScenario(); Stage(); Speed(); RoomRunning(); Rev10();
                 break;
             case "full":
                 Smoke(); Picker(50); Ui(30); Switches(1000); Storm(10000); Flood(300); Hostile(1000); Pressure(300); Flash(100); Record(); FloatingWindow(); Widget();
-                CommandLine(200); Extras(); NeverShowScenario(); Stage(); Speed(); RoomRunning();
+                CommandLine(200); Extras(); NeverShowScenario(); Stage(); Speed(); RoomRunning(); Rev10();
                 break;
             default:
                 Console.WriteLine("Unknown scenario.");

@@ -285,3 +285,32 @@ internal static class MediaFoundation
         }
     }
 }
+
+/// <summary>
+/// Opening a video file to read it back (joining the last minute, making a GIF, checking a
+/// recording). Media Foundation's own way of opening a file refuses to share it with a writer
+/// that hasn't let go yet (a recorder finishing its file a moment late, another app still
+/// writing), which shows up as an unhelpful "unspecified error". This opens it for reading while
+/// allowing others to keep writing.
+/// </summary>
+internal static class MediaFiles
+{
+    public static Windows.Win32.Foundation.HRESULT OpenReader(string path, Windows.Win32.Media.MediaFoundation.IMFAttributes? attributes, out Windows.Win32.Media.MediaFoundation.IMFSourceReader reader)
+    {
+        reader = null!;
+        Windows.Win32.Foundation.HRESULT hr = Windows.Win32.PInvoke.MFCreateFile(
+            Windows.Win32.Media.MediaFoundation.MF_FILE_ACCESSMODE.MF_ACCESSMODE_READ,
+            Windows.Win32.Media.MediaFoundation.MF_FILE_OPENMODE.MF_OPENMODE_FAIL_IF_NOT_EXIST,
+            Windows.Win32.Media.MediaFoundation.MF_FILE_FLAGS.MF_FILEFLAGS_ALLOW_WRITE_SHARING,
+            path, out Windows.Win32.Media.MediaFoundation.IMFByteStream stream);
+        if (hr.Failed) return hr;
+        try
+        {
+            return Windows.Win32.PInvoke.MFCreateSourceReaderFromByteStream(stream, attributes, out reader);
+        }
+        finally
+        {
+            System.Runtime.InteropServices.Marshal.ReleaseComObject(stream); // the reader holds its own reference
+        }
+    }
+}

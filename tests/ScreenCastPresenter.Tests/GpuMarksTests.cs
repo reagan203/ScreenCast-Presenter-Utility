@@ -191,7 +191,9 @@ public class GpuMarksTests
             engine.SetFrozen(false);
             engine.Split(SplitLayout.Grid, []);
             engine.Inset(other, InsetCorner.BottomLeft, 28);
-            await Task.Delay(800);
+            // Starting the small picture comes first on the render thread (measured: up to ~0.9 s on a
+            // busy PC), so wait for the panes to go rather than a fixed time.
+            for (int i = 0; i < 50 && engine.PanesShown != 0; i++) await Task.Delay(100);
             Assert.Equal(0, engine.PanesShown);
             engine.Inset(null, InsetCorner.BottomLeft, 28);
             engine.HiddenFor(other, [], RedactStyle.Solid);

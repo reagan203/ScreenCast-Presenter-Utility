@@ -62,7 +62,7 @@ internal sealed partial class ScpApp : IDisposable
         _updateTimer.Tick += (_, _) => _ = GuardAsync(OnUpdateTimerAsync);
         _arrivals = new ScreenArrivals(_monitors.Select(m => m.DeviceName));
         _session.EngineChanged += (_, _) => Guard(OnEngineChanged);
-        _session.HoldCheck = source => PrivateAppOn(source) is not null ? HoldReason.PrivateApp : null;
+        _session.HoldCheck = source => PrivateAppOn(source) is not null ? HoldReason.PrivateApp : FileBoxOn(source) is not null ? HoldReason.FileBox : null;
         _session.Message += (_, message) =>
         {
             Diag("session: " + message);
@@ -86,6 +86,7 @@ internal sealed partial class ScpApp : IDisposable
             TrimMemory();
         };
         StartStage();
+        StartExtras();
     }
 
     /// <summary>
@@ -164,6 +165,7 @@ internal sealed partial class ScpApp : IDisposable
     public void Start(bool startedByWindows = false, string[]? commandLine = null)
     {
         _ = _session.SetDimAsync(Settings.Dim);
+        RepairDesktopIcons(); // a crash last time left the desktop's icons hidden
         ApplyShortcuts(reportProblems: true);
         if (_store.LoadProblem is { } problem) _badge.ShowMessage(problem, BadgeDot.Warning);
         CheckDuplicateDisplay();
@@ -200,6 +202,7 @@ internal sealed partial class ScpApp : IDisposable
         try
         {
             CliReply reply = await RunCommandLineAsync(request);
+            if (request.Actions.Any(a => a.StartsWith("cli:is:", StringComparison.Ordinal))) return reply; // "off" is an answer, not a problem to show
             return shown.Contains(reply.Message) ? reply : Told(reply);
         }
         catch (Exception ex)
@@ -227,10 +230,50 @@ internal sealed partial class ScpApp : IDisposable
         if (request.Output is { } output && await ApplyCommandOutputAsync(output) is { } outputProblem) return new CliReply(false, outputProblem);
         if (request.Show is { } show && await ShowFromCommandLineAsync(show) is { } showProblem) return new CliReply(false, showProblem);
 
+        bool status = false;
         foreach (string action in request.Actions)
         {
             switch (action)
             {
+                // rev 10 (FR-129 and the new sources)
+                case "cli:status":
+                    status = true; // answered last, after everything else asked for
+                    break;
+                case string ask when ask.StartsWith("cli:is:", StringComparison.Ordinal):
+                {
+                    bool on = IsSwitchOn(ask["cli:is:".Length..]);
+                    return new CliReply(on, on ? "on" : "off");
+                }
+                case string pdf when pdf.StartsWith("cli:pdf:", StringComparison.Ordinal):
+                    if (!await ShowDocumentAsync(pdf["cli:pdf:".Length..], 1)) return new CliReply(false, LastCommandMessage("The PDF couldn't be shown."));
+                    break;
+                case string pdfPage when pdfPage.StartsWith("cli:pdf-page:", StringComparison.Ordinal):
+                {
+                    string rest = pdfPage["cli:pdf-page:".Length..];
+                    int colon = rest.IndexOf(':', StringComparison.Ordinal);
+                    int page = int.Parse(rest[..colon], System.Globalization.CultureInfo.InvariantCulture);
+                    if (!await ShowDocumentAsync(rest[(colon + 1)..], page)) return new CliReply(false, LastCommandMessage("The PDF couldn't be shown."));
+                    break;
+                }
+                case string video when video.StartsWith("cli:video:", StringComparison.Ordinal):
+                    if (!await ShowVideoAsync(video["cli:video:".Length..])) return new CliReply(false, LastCommandMessage("The video couldn't be shown."));
+                    break;
+                case string gif when gif.StartsWith("cli:gif:", StringComparison.Ordinal):
+                    _ = GuardAsync(() => MakeGifAsync(gif["cli:gif:".Length..])); // takes a while: said when it's done
+                    break;
+                case "cli:timer-off":
+                    StopTimer(null);
+                    break;
+                case string timer when timer.StartsWith("timer:", StringComparison.Ordinal):
+                    if (_session.State == SessionState.Off) return new CliReply(false, "Show something first, then put a timer on it.");
+                    await RunCommandAsync(timer);
+                    break;
+                case string night when night.StartsWith("night:", StringComparison.Ordinal):
+                    await RunCommandAsync(night);
+                    break;
+                case "copy-text" or "show-whiteboard" or "room-sign":
+                    await RunCommandAsync(action);
+                    break;
                 case "cli:blank-on" or "cli:blank-off":
                     if (_session.State == SessionState.Off) return new CliReply(false, "Nothing is being shown right now.");
                     if (_session.IsBlanked != (action == "cli:blank-on")) await _session.ToggleBlankAsync(withMessage: false);
@@ -304,7 +347,7 @@ internal sealed partial class ScpApp : IDisposable
                     break;
             }
         }
-        return new CliReply(true, CommandStatus());
+        return new CliReply(true, status ? StatusJson() : CommandStatus());
     }
 
     /// <summary>"--output 2 | window | zoom". Null when done, else why not.</summary>
@@ -574,6 +617,21 @@ internal sealed partial class ScpApp : IDisposable
                 case "screenshot": await TakeScreenshotAsync(); break;
                 case "record": ToggleRecording(); break;
                 case "pause-recording": TogglePauseRecording(); break;
+                // rev 10
+                case "follow-me": ToggleFollowMe(); break;
+                case "timer": AskTimer(); break;
+                case "night-filter": CycleNightFilter(); break;
+                case "inset-shape": SetInsetShape((InsetShape)(((int)Settings.InsetShapeMode + 1) % 3)); break;
+                case "speaker-screen": ToggleSpeakerScreen(); break;
+                case "rehearse": ToggleRehearsal(); break;
+                case "cast": CastToWirelessTv(); break;
+                case "copy-text": await CopyTextAsync(); break;
+                case "make-gif": await ChooseGifSourceAsync(); break;
+                case "show-pdf": await ChooseDocumentAsync(); break;
+                case "show-video": await ChooseVideoAsync(); break;
+                case "show-whiteboard": await ToggleWhiteboardAsync(); break;
+                case "room-sign": await ShowRoomSignAsync(); break;
+                case "clicker-keys": SetClickerKeys(!Settings.ClickerKeys, Settings.ClickerArrows); Message(Settings.ClickerKeys ? "Page Down and Page Up now go to what's shown while you present, wherever you're working." : "Page Down and Page Up work as usual again."); break;
                 default:
                     if (TrySlot(id, "scene-", out int scene)) await ShowSceneAsync(scene);
                     else if (TrySlot(id, "save-favourite-", out int save)) SaveFavourite(save);
@@ -648,12 +706,25 @@ internal sealed partial class ScpApp : IDisposable
             savedCrop = true;
         }
 
+        if (source.IsScreen)
+        {
+            // FR-112: the taskbar is left out, whatever part was chosen.
+            if (LeaveOutTaskbar(source) is not { } clear)
+            {
+                Message("That part of the screen is its taskbar, which is never shown. Choose another part.");
+                return;
+            }
+            source = clear;
+        }
+        else if (!savedCrop) source = await ShowOnlyThePageAsync(source); // FR-133: a browser shows only its page
+
         CheckDuplicateDisplay();
         bool onlyScreen = _monitors.Count < 2 && !placement.IsFloating;
         bool wasOff = _session.State == SessionState.Off;
         // The slideshow's own switch is skipped if the TV went blank, frozen or black meanwhile (checked as it runs).
         await _session.PresentAsync(source, placement, onlyIfLive: _slideshowSwitching || _playlistSwitching);
         if (_session.State != SessionState.Presenting) return;
+        AfterPresenterShowed(source); // Follow me learns the app (FR-119); time budgets start (FR-121)
         if (savedCrop)
             Message("Showing the same part as last time.", BadgeDot.Accent, Button("Show all of it", RemoveCropAsync));
         if (onlyScreen)
@@ -698,8 +769,19 @@ internal sealed partial class ScpApp : IDisposable
             Save();
         }
 
-        if (present) await PresentAsync(source with { Crop = crop });
-        else await _session.SetCropAsync(crop);
+        if (present) await PresentAsync(source with { Crop = crop, AutoCrop = null });
+        else if (source.IsScreen)
+        {
+            // FR-112: the part chosen, kept clear of the taskbar.
+            if (LeaveOutTaskbar(source with { Crop = crop }) is not { } clear)
+            {
+                Message("That part is the screen's taskbar, which is never shown. Choose another part.");
+                return;
+            }
+            await _session.SetAutoCropAsync(clear.Crop, clear.AutoCrop, fade: true);
+        }
+        else await _session.SetAutoCropAsync(crop, null, fade: true); // a crop of their own: a browser's page is left to it
+        UpdatePageWatch();
         if (crop is not null) Message($"Showing part of “{Shorten(source.Title, 40)}”.", BadgeDot.Accent, Button("Show all of it", RemoveCropAsync));
     }
 
@@ -770,13 +852,23 @@ internal sealed partial class ScpApp : IDisposable
             return;
         }
         if (source.IsWindow && Settings.SavedCrops.Remove(source.AppName)) Save();
-        if (source.Crop is null)
+        if (source.ChosenCrop is null)
         {
-            Message("All of it is already showing.");
+            Message("All of it is already showing" + AutoCropWords(source) + ".");
             return;
         }
-        await _session.SetCropAsync(null);
-        Message($"Showing all of “{source.Title}”.");
+        if (source.IsScreen)
+        {
+            SourceWindow whole = LeaveOutTaskbar(source with { Crop = null }) ?? source with { Crop = null };
+            await _session.SetAutoCropAsync(whole.Crop, whole.AutoCrop, fade: true);
+        }
+        else
+        {
+            SourceWindow whole = await ShowOnlyThePageAsync(source with { Crop = null, AutoCrop = null });
+            await _session.SetAutoCropAsync(whole.Crop, whole.AutoCrop, fade: true);
+        }
+        UpdatePageWatch();
+        Message($"Showing all of “{source.Title}”{AutoCropWords(_session.Source ?? source)}.");
     }
 
     /// <summary>
@@ -1217,6 +1309,10 @@ internal sealed partial class ScpApp : IDisposable
         {
             title = source.IsScreen && source.Screen is { } screen ? $"{screen.Name} (whole screen)"
                 : source.IsCamera ? $"{source.Title} (camera)"
+                : source.IsDocument ? source.Title
+                : source.IsBoard ? "the whiteboard"
+                : source.IsRoomSign ? "the room sign"
+                : source.IsVideo ? $"{source.Title} (video)"
                 : source.IsPicture ? $"{source.Title} (picture)"
                 : source.Title.Length > 0 ? source.Title : source.AppName;
             if (source.IsWindow)
@@ -1587,9 +1683,31 @@ internal sealed partial class ScpApp : IDisposable
 
     private async Task ShowFavouriteAsync(int slot)
     {
+        try
+        {
+            await ShowFavouriteCoreAsync(slot);
+        }
+        finally
+        {
+            _pendingSection = null; // shown or not, its budget never sticks to whatever is shown next
+        }
+    }
+
+    private async Task ShowFavouriteCoreAsync(int slot)
+    {
         if (Settings.Favourites[slot - 1] is not { } favourite)
         {
             Message($"Favourite {slot} is empty. Show something, then save it from the tray menu under Favourites.");
+            return;
+        }
+        _pendingSection = ($"favourite:{slot}", TrayMenuPlan.Shorten(favourite.Title.Length > 0 ? favourite.Title : favourite.AppName, 40), favourite.Minutes);
+        if (favourite.PicturePath is not null || favourite.VideoPath is not null || favourite.DocumentPath is not null || favourite.Special is not null)
+        {
+            // A picture, a video or a PDF (FR-103, FR-115, FR-116): shown from its file.
+            SourceWindow? file = favourite.PicturePath is { } picture ? PictureSource.Problem(picture) is null ? SourceWindow.ForPicture(picture, favourite.Title) : null : await ResolveFileAsync(favourite);
+            if (file is null) Message($"Favourite {slot} (“{favourite.Title}”) can't be shown: its file can't be found.");
+            else await PresentAsync(file);
+            _pendingSection = null;
             return;
         }
         if (favourite.ScreenDevice is { } device)
@@ -1607,6 +1725,7 @@ internal sealed partial class ScpApp : IDisposable
         SourceWindow? match = FavouriteMatcher.FindBest(favourite, WindowEnumerator.GetPresentableWindows());
         if (match is null) Message($"{favourite.AppName} isn't open, so favourite {slot} can't be shown.");
         else await PresentAsync(match);
+        _pendingSection = null;
     }
 
     private void SaveFavourite(int slot)
@@ -2063,6 +2182,22 @@ internal sealed partial class ScpApp : IDisposable
                 case "stop-after:never": SetRecordingStopAfter(null); return;
                 case "stop-at": AskRecordingStopAt(); return;
             }
+            if (command.StartsWith("timer:", StringComparison.Ordinal)
+                && int.TryParse(command.AsSpan("timer:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int timerMinutes))
+            {
+                StartTimer(timerMinutes);
+                return;
+            }
+            if (command.StartsWith("night:", StringComparison.Ordinal))
+            {
+                SetNightFilter(NightFilter.Parse(command["night:".Length..]));
+                return;
+            }
+            if (command.StartsWith("inset-shape:", StringComparison.Ordinal))
+            {
+                SetInsetShape(InsetShapes.Parse(command["inset-shape:".Length..]));
+                return;
+            }
             if (command.StartsWith("countdown:", StringComparison.Ordinal)
                 && int.TryParse(command.AsSpan("countdown:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int countdown))
             {
@@ -2221,7 +2356,7 @@ internal sealed partial class ScpApp : IDisposable
     private long _outlineTicks;
 
     /// <summary>Marks on the TV are on, so what is shown must go through the helper, which can draw them.</summary>
-    private bool MarksWanted => PointerWanted || StageWantsHelper;
+    private bool MarksWanted => PointerWanted || StageWantsHelper || ExtrasWantHelper;
 
     /// <summary>Marks that follow the pointer, so the pointer check must run (about 60 times a second).</summary>
     private bool PointerWanted => Settings.HighlightClicks || Settings.PointerRing || _laserOn || _spotlightOn || _drawing is not null || _inset is not null;
@@ -2259,7 +2394,8 @@ internal sealed partial class ScpApp : IDisposable
         _sentPointer = null;
         _sentLaser = null;
         if (_session.Effects is not { } effects) return;
-        if (_laserOn) effects.ShowCursor(false);
+        _pictureCursorSent = null;
+        ApplyPictureCursor(); // a new engine starts with the pointer as the setting says: hide it if it shouldn't be there
         _drawing?.Replay(effects);
         effects.InsetFailed -= OnInsetFailed;
         effects.InsetFailed += OnInsetFailed;
@@ -2416,7 +2552,7 @@ internal sealed partial class ScpApp : IDisposable
         if (on == _laserOn) return;
         _laserOn = on;
         ApplyMarksChange();
-        _session.Effects?.ShowCursor(!on);
+        ApplyPictureCursor(force: true); // the laser stands in for the pointer while it's on
         if (!on)
         {
             _session.Effects?.Laser(null);
@@ -2443,9 +2579,9 @@ internal sealed partial class ScpApp : IDisposable
             Message("Show something first, then draw on it.");
             return;
         }
-        if (source.IsOffScreen)
+        if (source.IsOffScreen && !(source.IsBoard && BoardOut))
         {
-            Message("Drawing works on windows and screens: a camera's picture or a picture file isn't on your screen to draw over.");
+            Message("Drawing works on windows, screens and the whiteboard: a camera's picture, a picture file or a video isn't on your screen to draw over.");
             return;
         }
         if (source.IsWindow && WindowEnumerator.IsMinimized(source.Handle))
@@ -2459,7 +2595,7 @@ internal sealed partial class ScpApp : IDisposable
             return;
         }
         if (_laserOn) SetLaser(false);
-        _drawing = new InkDrawing();
+        _drawing = source.IsBoard ? _boardInk ??= new InkDrawing() : new InkDrawing(); // the board keeps its drawing between sessions
         _drawingSource = source;
         ApplyMarksChange(); // shown the light way: shown again through the helper, which can draw
         var overlay = new DrawingOverlay(_drawing, () => _session.Effects, DrawingGeometry, PresenterScreen()?.Scale ?? 1);
@@ -2468,6 +2604,8 @@ internal sealed partial class ScpApp : IDisposable
         _drawingOverlay = overlay;
         overlay.Show();
         if (_drawing is null) return; // it closed at once (nothing left to draw on)
+        _board?.ShowDrawing(true);
+        if (source.IsBoard) return; // the board says how it works itself
         Message($"Draw on what you show: the audience sees it as you draw. Press Esc or Done to stop{OrPress("draw")}; that clears the drawing.", BadgeDot.Accent);
     }
 
@@ -2477,6 +2615,8 @@ internal sealed partial class ScpApp : IDisposable
     /// </summary>
     private (Rectangle Area, Rectangle Shown)? DrawingGeometry()
     {
+        if (_session.State == SessionState.Presenting && _session.Source is { IsBoard: true })
+            return _board?.BoardOnScreen is { Width: > 0, Height: > 0 } board ? (board, board) : null; // the whiteboard: its window is the board
         if (_session.State != SessionState.Presenting || _session.Source is not { } source || source.IsOffScreen) return null;
         Rectangle area = source.Screen is { } screen ? screen.Bounds
             : WindowEnumerator.IsAlive(source.Handle) && !WindowEnumerator.IsMinimized(source.Handle) ? WindowEnumerator.ClientBoundsOnScreen(source.Handle) : Rectangle.Empty;
@@ -2502,13 +2642,15 @@ internal sealed partial class ScpApp : IDisposable
     private void StopDrawing()
     {
         if (_drawing is null) return;
+        bool board = _boardInk is not null && ReferenceEquals(_drawing, _boardInk) && _session.Source is { IsBoard: true };
         _drawing = null;
         _drawingSource = null;
         DrawingOverlay? overlay = _drawingOverlay;
         _drawingOverlay = null;
         overlay?.Close();
         overlay?.Dispose();
-        _session.Effects?.InkClear(); // the drawing goes from the TV too
+        if (board) _board?.ShowDrawing(false); // the board keeps its drawing on the TV until it's cleared or put away
+        else _session.Effects?.InkClear(); // the drawing goes from the TV too
         UpdatePointerWork();
     }
 
@@ -2601,8 +2743,12 @@ internal sealed partial class ScpApp : IDisposable
     }
 
     /// <summary>"12:04" or "12:04 of 20:00" for the now-showing bar; empty when switched off or not showing.</summary>
-    private string TalkText() =>
-        Settings.ShowTalkTimer && _session.State != SessionState.Off && _talk.Started is not null ? _talk.Text(DateTime.UtcNow, Settings.TalkMinutes) : "";
+    private string TalkText()
+    {
+        string talk = Settings.ShowTalkTimer && _session.State != SessionState.Off && _talk.Started is not null ? _talk.Text(DateTime.UtcNow, Settings.TalkMinutes) : "";
+        string section = SectionText(); // FR-121: the part shown, against its budget
+        return section.Length == 0 ? talk : talk.Length == 0 ? section : $"{talk} · {section}";
+    }
 
     private void RestartTalkTimer()
     {
@@ -2613,6 +2759,8 @@ internal sealed partial class ScpApp : IDisposable
         }
         _talk.Reset();
         _talk.Start(DateTime.UtcNow);
+        _sections.Reset(); // the parts' times start again too
+        if (_session.Source is { } shown) _sections.Show(CaptureProtocol.CoverKey(shown), SourceName(shown), TimeSpan.Zero, DateTime.UtcNow);
         _lastTalkText = null;
         Message("The talk timer starts again from 0:00.");
     }
@@ -2748,6 +2896,8 @@ internal sealed partial class ScpApp : IDisposable
             return;
         }
         if (_split.Count > 0) StopSplit(null); // one or the other
+        if (LeaveOutTaskbar(source) is not { } clear) return; // FR-112: a screen shown small without its taskbar
+        source = clear;
         _inset = source;
         SendOtherHiddenParts(); // its hidden parts are covered from its first frame
         UpdatePrivateAppGuard(); // a never-show app on a screen shown small: black before the small picture is sent
@@ -3114,14 +3264,18 @@ internal sealed partial class ScpApp : IDisposable
     /// </summary>
     private void UpdatePrivateAppGuard()
     {
-        bool watch = !_quitting && Settings.NeverShowApps.Count > 0
+        UpdateDesktopIcons(); // a screen shown small or beside counts too (FR-113)
+        bool watch = !_quitting && (Settings.NeverShowApps.Count > 0 || Settings.HoldForFileBoxes)
             && (_session.State == SessionState.Presenting && (_session.Source is { IsScreen: true } || _inset is { IsScreen: true } || _split.Any(s => s.IsScreen))
                 || _second is { State: SessionState.Presenting, Source.IsScreen: true });
         if (!watch)
         {
             _windowChanges.Stop();
             _privateAppShown = null;
+            _fileBoxShown = null;
             if (_session.IsHeldFor(HoldReason.PrivateApp)) _ = _session.ComeBackAsync(HoldReason.PrivateApp);
+            if (_session.IsHeldFor(HoldReason.FileBox)) _ = _session.ComeBackAsync(HoldReason.FileBox);
+            if (_second?.IsHeldFor(HoldReason.FileBox) == true) _ = _second.ComeBackAsync(HoldReason.FileBox);
             return;
         }
         _windowChanges.Start();
@@ -3131,7 +3285,9 @@ internal sealed partial class ScpApp : IDisposable
     private void CheckPrivateApps()
     {
         CheckSecondPrivateApps();
+        CheckSecondFileBoxes();
         if (_session.State != SessionState.Presenting || _session.Source is not { } source) return;
+        CheckFileBoxes(source);
         string screenName = (source.Screen ?? _inset?.Screen)?.Name ?? "the screen";
         if (PrivateAppOn(source) is { } found)
         {
@@ -3295,7 +3451,7 @@ internal sealed partial class ScpApp : IDisposable
         if (back && !_toldStepBack)
         {
             _toldStepBack = true;
-            Message("The preview steps behind while you work on the screen it shows. Click it in the taskbar to see it again. Meetings can't see it.");
+            Message("The preview stays behind the window you're working in, so it never covers your work. Click it to bring it to the front. Meetings can't see it.");
         }
     }
 
@@ -3649,6 +3805,7 @@ internal sealed partial class ScpApp : IDisposable
         UpdateStage();
         if (_session.State == SessionState.Off) StopSlideshow(null);
         if (_session.State == SessionState.Presenting && _session.Source?.Screen is { } shownScreen) MaybeRemindDoNotDisturb(shownScreen);
+        UpdateExtras();
         _tray.Refresh();
         ScheduleTrim();
     }
@@ -3669,6 +3826,8 @@ internal sealed partial class ScpApp : IDisposable
             SessionState.Presenting when s.IsBlanked => new BadgeContent(BadgeDot.Hollow, $"{OutputNameCapitalised()} is blank", "Your audience sees black", [showAgain, stop]),
             SessionState.Presenting when s.IsHeldFor(HoldReason.PrivateApp) => new BadgeContent(BadgeDot.Warning, $"“{_privateAppShown ?? "A never-show app"}” is open here",
                 "Your audience sees black until you minimise it or move it away", [stop]),
+            SessionState.Presenting when s.IsHeldFor(HoldReason.FileBox) => new BadgeContent(BadgeDot.Accent, "An Open or Save box is open here",
+                "Your audience sees black until it closes or moves away", [stop]),
             SessionState.Presenting when s.IsAwayFromPage => new BadgeContent(BadgeDot.Warning, "On another page", "Your audience sees black until you go back",
                 [Button("Show this page instead", ShowCurrentBrowserPage), stop]),
             SessionState.Presenting when s.IsFrozen => new BadgeContent(BadgeDot.Warning, $"{OutputNameCapitalised()} is frozen", "You can scroll and click privately", [goLive, stop]),
@@ -3825,6 +3984,7 @@ internal sealed partial class ScpApp : IDisposable
                 Message("The screen you were showing was disconnected, so showing stopped.", BadgeDot.Warning);
             }
             CheckDuplicateDisplay();
+            await RefreshTaskbarCropsAsync(); // a screen's taskbar may have moved with it
             OnSessionChanged(reveal: false);
             await OfferNewScreenAsync(); // an HDMI cable plugged in while set to show in a window
             OfferArrivedScreen(arrived);
@@ -3962,6 +4122,7 @@ internal sealed partial class ScpApp : IDisposable
         _shotPreview?.Dispose();
         DisposeStage();
         _trimTimer.Dispose();
+        DisposeExtras();
         _drawingOverlay?.Dispose();
         _pointerTimer.Dispose();
         _clock.Dispose();

@@ -109,16 +109,39 @@ internal sealed class OutputWindow : Form, IOutputSurface
         const SET_WINDOW_POS_FLAGS Flags = SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER;
         var hwnd = (HWND)Handle;
-        if (back)
-        {
-            // Behind everything, but still open: a meeting sharing it keeps sharing it.
-            Windows.Win32.PInvoke.SetWindowPos(hwnd, (HWND)(nint)(-2), 0, 0, 0, 0, Flags); // not on top any more
-            Windows.Win32.PInvoke.SetWindowPos(hwnd, (HWND)(nint)1, 0, 0, 0, 0, Flags);   // to the bottom
-        }
-        else
+        if (!back)
         {
             Windows.Win32.PInvoke.SetWindowPos(hwnd, _topMost ? (HWND)(nint)(-1) : (HWND)(nint)0, 0, 0, 0, 0, Flags);
+            return;
         }
+        // Behind the window the presenter is working in, and no further: it stays where it can be
+        // seen, it just doesn't cover their work, and it's still open (a meeting sharing it keeps
+        // sharing it). Sent to the bottom of every window, as it was, it looked as if it had been
+        // minimised. Placed after a window that isn't on top, it stops being on top too.
+        HWND active = Windows.Win32.PInvoke.GetForegroundWindow();
+        if (active.IsNull || active == hwnd || IsTopMost(active) || DesktopIcons.ClassOf(active) is "Progman" or "WorkerW")
+        {
+            // Nothing (or the desktop, or a window on top) to go behind: just not on top any more.
+            if (IsTopMost(hwnd)) Windows.Win32.PInvoke.SetWindowPos(hwnd, (HWND)(nint)(-2), 0, 0, 0, 0, Flags);
+            return;
+        }
+        if (!IsTopMost(hwnd) && IsBehind(hwnd, active)) return; // already behind it: the order is left as the presenter made it
+        Windows.Win32.PInvoke.SetWindowPos(hwnd, active, 0, 0, 0, 0, Flags);
+    }
+
+    private static bool IsTopMost(HWND window) =>
+        ((WINDOW_EX_STYLE)Windows.Win32.PInvoke.GetWindowLong(window, WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE)).HasFlag(WINDOW_EX_STYLE.WS_EX_TOPMOST);
+
+    /// <summary>True when <paramref name="window"/> is somewhere below <paramref name="above"/> in the order of windows.</summary>
+    internal static bool IsBehind(HWND window, HWND above)
+    {
+        HWND next = Windows.Win32.PInvoke.GetWindow(above, GET_WINDOW_CMD.GW_HWNDNEXT);
+        for (int i = 0; i < 4096 && !next.IsNull; i++)
+        {
+            if (next == window) return true;
+            next = Windows.Win32.PInvoke.GetWindow(next, GET_WINDOW_CMD.GW_HWNDNEXT);
+        }
+        return false;
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)
@@ -127,7 +150,7 @@ internal sealed class OutputWindow : Form, IOutputSurface
         if (e.Button == MouseButtons.Left) DoubleClicked?.Invoke(this, EventArgs.Empty);
     }
 
-    public void SetContentAspect(Size? content)
+    public void SetContentAspect(Size? content, bool now = false)
     {
         if (!_floating || _fitTimer is null) return;
         if (content is { Width: <= 0 } or { Height: <= 0 }) content = null;
@@ -136,9 +159,12 @@ internal sealed class OutputWindow : Form, IOutputSurface
         bool same = _content is { } previous && FloatingFit.SameShape(next, previous);
         _content = next;
         if (same) return;
-        if (first)
+        if (first || now)
         {
-            FitToContent(); // before it is revealed: never seen with black bars
+            // Before it's revealed, or while a switch has it black: the new picture fades in already
+            // in its own shape. (Reshaped a moment later, the window jumped as the picture came in.)
+            _fitTimer.Stop();
+            FitToContent();
             return;
         }
         _fitTimer.Stop();

@@ -108,6 +108,31 @@ internal static class Direct3D
         }
     }
 
+    /// <summary>A WinRT surface over <paramref name="texture"/> (shares its pixels), for Windows' media player to draw a video frame into (FR-116).</summary>
+    public static IDirect3DSurface SurfaceOf(ID3D11Texture2D texture)
+    {
+        using Vortice.DXGI.IDXGISurface dxgi = texture.QueryInterface<Vortice.DXGI.IDXGISurface>();
+        var com = (Windows.Win32.Graphics.Dxgi.IDXGISurface)Marshal.GetObjectForIUnknown(dxgi.NativePointer);
+        try
+        {
+            PInvoke.CreateDirect3D11SurfaceFromDXGISurface(com, out Windows.Win32.System.WinRT.IInspectable inspectable).ThrowOnFailure();
+            nint unknown = Marshal.GetIUnknownForObject(inspectable);
+            try
+            {
+                return MarshalInterface<IDirect3DSurface>.FromAbi(unknown);
+            }
+            finally
+            {
+                Marshal.Release(unknown);
+                Marshal.ReleaseComObject(inspectable);
+            }
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(com);
+        }
+    }
+
     /// <summary>The D3D texture behind a captured frame's surface (no copy).</summary>
     public static ID3D11Texture2D TextureOf(IDirect3DSurface surface)
     {

@@ -768,7 +768,18 @@ internal sealed partial class ScpApp
             Message("Show something first, then turn on live captions. (With “Save a transcript” on in Settings, they can listen without showing anything.)");
             return;
         }
-        (CaptionsProcess? process, string? problem) = CaptionsProcess.Start();
+        StartLiveCaptions();
+    }
+
+    /// <summary>For a rehearsal (FR-127): listening on this PC, whether or not anything is shown.</summary>
+    private void StartCaptionsForRehearsal()
+    {
+        if (_captions is null) StartLiveCaptions();
+    }
+
+    private void StartLiveCaptions()
+    {
+        (CaptionsProcess? process, string? problem) = CaptionsProcess.Start(Settings.CaptionWords);
         if (process is null)
         {
             Message(problem ?? "Live captions couldn't start.", BadgeDot.Warning);
@@ -803,13 +814,20 @@ internal sealed partial class ScpApp
                         : "Listening for the transcript: what you say is written down on this PC; nothing is sent anywhere.",
                     BadgeDot.Accent, Button("Turn them off", () => StopLiveCaptions("Live captions are off."), primary: false));
                 break;
+            case "words-added":
+                // Remembered until the helper is seen to take them out again (FR-128).
+                Settings.CaptionWordsInWindows = CaptionVocabulary.FromToken(text);
+                Save();
+                break;
             case "error":
                 StopLiveCaptions(null);
                 Message(text.Length > 0 ? text : "Live captions couldn't start.", BadgeDot.Warning);
                 break;
             default:
-                if (_liveText.Heard(line, DateTime.UtcNow) && Settings.CaptionsOnTv) _session.Effects?.LiveCaption(_liveText.Shown);
+                if (Settings.CaptionWords.Count > 0) line = CaptionVocabulary.Respell(line, Settings.CaptionWords); // FR-128: names spelled as they should be
+                if (_liveText.Heard(line, DateTime.UtcNow) && Settings.CaptionsOnTv && !Rehearsing) _session.Effects?.LiveCaption(_liveText.Shown);
                 WriteTranscript();
+                NoteRehearsalLine();
                 break;
         }
     }
@@ -828,6 +846,11 @@ internal sealed partial class ScpApp
         _liveText.Reset();
         _session.Effects?.LiveCaption(null);
         process.Dispose();
+        if (process.StoppedCleanly && Settings.CaptionWordsInWindows.Count > 0)
+        {
+            Settings.CaptionWordsInWindows = []; // it took them out itself
+            Save();
+        }
         FinishTranscript();
         ApplyMarksChange();
         _tray.Refresh();
@@ -910,6 +933,13 @@ internal sealed partial class ScpApp
             return;
         }
         if (source.IsWindow && source.Crop is null && Settings.SavedCrops.TryGetValue(source.AppName, out CropRegion? crop)) source = source with { Crop = crop };
+        if (LeaveOutTaskbar(source) is not { } clear)
+        {
+            Message("That part of the screen is its taskbar, which is never shown.");
+            return;
+        }
+        source = clear;
+        if (source.IsWindow) source = await ShowOnlyThePageAsync(source); // FR-133: a browser on the second TV shows only its page
         PresenterChose(PlaylistScreen.Second);
         SessionController second = EnsureSecondSession();
         Settings.SecondOutputDevice = screen.DeviceName;
@@ -926,7 +956,7 @@ internal sealed partial class ScpApp
         var second = new SessionController(new Win32SessionPlatform(() => _store.Current)) { BlankMessage = Settings.BlankMessage };
         second.HiddenPartsFor = source => Redactions.PartsFor(Settings, source);
         second.IdleText = () => Settings.IdleShowsMessage ? Settings.BlankMessage : null;
-        second.HoldCheck = source => NeverShowAppOn(source) is not null ? HoldReason.PrivateApp : null;
+        second.HoldCheck = source => NeverShowAppOn(source) is not null ? HoldReason.PrivateApp : SecondFileBoxOn(source) ? HoldReason.FileBox : null;
         second.SetLogo(Settings.BlankLogo is { } logo && File.Exists(logo) ? logo : null);
         second.StateChanged += (_, _) => Guard(OnSecondChanged);
         second.SourceGeometryChanged += (_, _) => Guard(UpdateSecondOutline);
@@ -943,6 +973,8 @@ internal sealed partial class ScpApp
 
     private void OnSecondChanged()
     {
+        UpdateDesktopIcons(); // a whole screen on the second TV hides them too (FR-113)
+        UpdateRoomSignTimer();
         if (_second is { State: SessionState.Off }) StopPlaylist(PlaylistScreen.Second, null);
         UpdateSecondOutline();
         UpdatePrivateAppGuard();
@@ -1019,6 +1051,7 @@ internal sealed partial class ScpApp
         if (_qrText is { } qr) effects.Qr(qr, QrCorner());
         if (_captions is not null && Settings.CaptionsOnTv && _liveText.Shown.Length > 0) effects.LiveCaption(_liveText.Shown);
         ReplayExtend(effects);
+        ReplayExtras(effects);
     }
 
     /// <summary>Showing stopped: the extras that belong to the picture go with it. Something changed: the windows that follow it update.</summary>

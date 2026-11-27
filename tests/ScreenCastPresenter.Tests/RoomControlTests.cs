@@ -347,7 +347,10 @@ public class SpeakerNotesTests
         string notes = "Start with the Q3 numbers.\nAsk Zoë about the 2027 plan. ✓";
         (string n, string c, string t) = NotesCipher.Encrypt(key, notes);
         Assert.Equal(notes, NotesCipher.Decrypt(key, n, c, t));
-        Assert.DoesNotContain("Q3", c);
+        // The words aren't in what's sent: checked on the bytes (a two-letter check on the text could match random letters by chance).
+        byte[] sent = RemoteAuth.FromBase64UrlLong(c)!;
+        Assert.Equal(-1, sent.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes("Q3 numbers")));
+        Assert.Equal(-1, sent.AsSpan().IndexOf(System.Text.Encoding.UTF8.GetBytes("Zoë")));
         Assert.Null(NotesCipher.Decrypt(RemoteAuth.NewKey(), n, c, t)); // another key
         Assert.Null(NotesCipher.Decrypt(key, n, c[..^2] + (c[^2] == 'A' ? "B" : "A") + c[^1], t)); // tampered with
         Assert.Null(NotesCipher.Decrypt(key, n, c, t[..^1] + (t[^1] == '0' ? "1" : "0")));

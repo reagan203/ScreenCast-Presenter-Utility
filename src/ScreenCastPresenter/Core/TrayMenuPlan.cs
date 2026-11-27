@@ -108,6 +108,20 @@ internal sealed record TrayMenuState
     public bool PlaylistPlaying { get; init; }
     public bool PhoneRemote { get; init; }
     public bool AutoHide { get; init; }
+
+    // Rev 10 (FR-112 to FR-134).
+    public bool FollowMe { get; init; }
+    public bool TimerOn { get; init; }
+    public NightMode Night { get; init; }
+    public InsetShape InsetShape { get; init; }
+    public bool SpeakerScreen { get; init; }
+    public bool Rehearsing { get; init; }
+    public bool ClickerKeys { get; init; }
+    public bool BoardOut { get; init; }
+
+    /// <summary>A PDF is shown: its page and how many there are (0 when not a PDF).</summary>
+    public int Page { get; init; }
+    public int Pages { get; init; }
 }
 
 /// <summary>
@@ -129,7 +143,11 @@ internal static class TrayMenuPlan
         "help", "settings", "settings:output", "settings:appearance", "settings:privacy", "quit", "record-output", "record-picker",
         "stop-recording", "pause-recording", "open-recordings", "output-window", "zoom", "stop-after:never", "show-again",
         "settings:rooms", "stop-second-tv", "stop-at",
+        "night:off", "night:soften", "night:invert", "inset-shape:rectangle", "inset-shape:rounded", "inset-shape:circle",
     };
+
+    /// <summary>Timer lengths offered in the menu ("timer:" + minutes).</summary>
+    public static readonly int[] TimerMinutes = [1, 2, 3, 5, 10, 15, 20, 30];
 
     /// <summary>A command something will actually run (tests check every menu line and help topic).</summary>
     public static bool IsKnownCommand(string command) =>
@@ -139,7 +157,8 @@ internal static class TrayMenuPlan
         || command.StartsWith("room:", StringComparison.Ordinal) && command.Length > "room:".Length
         || command.StartsWith("playlist:", StringComparison.Ordinal) && command.Length > "playlist:".Length
         || command.StartsWith("stop-after:", StringComparison.Ordinal) && int.TryParse(command.AsSpan("stop-after:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _)
-        || command.StartsWith("countdown:", StringComparison.Ordinal) && int.TryParse(command.AsSpan("countdown:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _);
+        || command.StartsWith("countdown:", StringComparison.Ordinal) && int.TryParse(command.AsSpan("countdown:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _)
+        || command.StartsWith("timer:", StringComparison.Ordinal) && int.TryParse(command.AsSpan("timer:".Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int m) && m is >= 1 and <= ActivityTimer.MaxMinutes;
 
     public static IReadOnlyList<MenuEntry> Build(TrayMenuState s)
     {
@@ -224,8 +243,32 @@ internal static class TrayMenuPlan
     private static List<MenuEntry> OnTheTv(TrayMenuState s)
     {
         var countdown = CountdownMinutes.Select(m => new MenuEntry(m == 1 ? "1 minute" : $"{m} minutes", $"countdown:{m}")).ToList();
+        var timer = TimerMinutes.Select(m => new MenuEntry(m == 1 ? "1 minute" : $"{m} minutes", $"timer:{m}")).ToList();
+        timer.Add(MenuEntry.Separator);
+        timer.Add(new("Another length, with its words…", "timer", Shortcut: "timer"));
+        var night = new List<MenuEntry>
+        {
+            new("Off", "night:off", Checked: s.Night == NightMode.Off),
+            new("Soften white pages", "night:soften", Checked: s.Night == NightMode.Soften),
+            new("Turn light pages dark", "night:invert", Checked: s.Night == NightMode.Invert),
+        };
+        var shape = new List<MenuEntry>
+        {
+            new("Rectangle", "inset-shape:rectangle", Checked: s.InsetShape == InsetShape.Rectangle),
+            new("Rounded corners", "inset-shape:rounded", Checked: s.InsetShape == InsetShape.Rounded),
+            new("Circle", "inset-shape:circle", Checked: s.InsetShape == InsetShape.Circle),
+        };
+        var pages = s.Pages > 0
+            ? new List<MenuEntry>
+            {
+                new(s.Page < s.Pages ? $"Next page ({s.Page + 1} of {s.Pages})" : "Next page (this is the last)", "next-slide", Enabled: s.Page < s.Pages, Shortcut: "next-slide"),
+                new("Previous page", "previous-slide", Enabled: s.Page > 1, Shortcut: "previous-slide"),
+                MenuEntry.Separator,
+            }
+            : [];
         return
         [
+            .. pages,
             new(s.Zoomed ? "Zoom out" : "Zoom in around the mouse", "zoom-in", Shortcut: "zoom-in"),
             new(s.Drawing ? "Stop drawing" : "Draw on it…", "draw", Shortcut: "draw"),
             new("Laser", "laser", Checked: s.LaserOn, Shortcut: "laser"),
@@ -237,6 +280,11 @@ internal static class TrayMenuPlan
             new(s.HasQr ? "Take the QR code off" : "A QR code (link or Wi-Fi)…", "qr", Shortcut: "qr"),
             new("Live captions", "live-captions", Checked: s.LiveCaptions, Shortcut: "live-captions"),
             new("Show my shortcuts", "show-keys", Checked: s.ShowKeys, Shortcut: "show-keys"),
+            new("Follow me to the windows I switch to", "follow-me", Checked: s.FollowMe, Shortcut: "follow-me"),
+            s.TimerOn ? new("Take the timer off", "timer", Shortcut: "timer") : MenuEntry.Submenu("A timer on it", timer),
+            MenuEntry.Submenu("Night filter", night),
+            MenuEntry.Submenu("Small picture's shape", shape),
+            new("Copy the text in it", "copy-text", Shortcut: "copy-text"),
             MenuEntry.Separator,
             new("Hide part of it…", "hide-part", Shortcut: "hide-part"),
             new("Hide private details automatically", "auto-hide", Checked: s.AutoHide, Shortcut: "auto-hide"),
@@ -268,6 +316,14 @@ internal static class TrayMenuPlan
         items.Add(MenuEntry.Separator);
         items.Add(new("Show a picture…", "show-picture", Shortcut: "show-picture"));
         items.Add(new("Show a card…", "show-card", Shortcut: "show-card"));
+        items.Add(new("Show a PDF…", "show-pdf", Shortcut: "show-pdf"));
+        items.Add(new("Show a video…", "show-video", Shortcut: "show-video"));
+        items.Add(new(s.BoardOut ? "Put the whiteboard away" : "Whiteboard", "show-whiteboard", Checked: s.BoardOut, Shortcut: "show-whiteboard"));
+        items.Add(new("Show the room sign", "room-sign", Shortcut: "room-sign"));
+        items.Add(MenuEntry.Separator);
+        items.Add(new("Rehearse my talk", "rehearse", Checked: s.Rehearsing, Shortcut: "rehearse"));
+        items.Add(new("Page Down and Page Up go to what's shown", "clicker-keys", Checked: s.ClickerKeys, Shortcut: "clicker-keys"));
+        items.Add(new("Make a GIF from a recording…", "make-gif", Shortcut: "make-gif"));
         items.Add(new("Phone remote…", "phone-remote", Checked: s.PhoneRemote, Shortcut: "phone-remote"));
         items.Add(new("Voice commands", "voice-commands", Checked: s.VoiceCommands, Shortcut: "voice-commands"));
         items.Add(new("My notes", "notes", Checked: s.NotesOpen, Shortcut: "notes"));
@@ -282,6 +338,8 @@ internal static class TrayMenuPlan
     {
         var items = s.Screens.Select(screen => new MenuEntry(screen.Text, "output:" + screen.DeviceName, Checked: !s.WindowChosen && screen.Chosen)).ToList();
         items.Add(new("A window (to share in a meeting)", "output-window", Checked: s.WindowChosen, Shortcut: "switch-output"));
+        items.Add(new("Connect a wireless TV…", "cast", Shortcut: "cast"));
+        items.Add(new("Speaker's screen", "speaker-screen", Checked: s.SpeakerScreen, Shortcut: "speaker-screen"));
         items.Add(MenuEntry.Separator);
         if (s.SecondTvOn) items.Add(new("Stop the second TV", "stop-second-tv"));
         else items.Add(new("Second TV: show something…", "second-tv", Enabled: s.SecondTvPossible, Shortcut: "second-tv"));

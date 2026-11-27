@@ -57,12 +57,17 @@ internal static class Icons
     public const char Picture = '\uE8B9';
     public const char List = '\uE8FD';
     public const char Phone = '\uE8EA';
+    public const char Document = '\uE8A5';
+    public const char Edit = '\uE70F';
+    public const char Copy = '\uE8C8';
+    public const char Stopwatch = '\uE916';
 
     public static IReadOnlyList<char> All { get; } =
     [
         Play, Stop, Pause, Hide, View, Crop, Camera, Record, Video, Folder, Settings, Help, Search, Power, Tv, Window, Share, Star,
         Keyboard, Colour, Font, Microphone, Volume, Brightness, Mouse, Pin, Download, Delete, Lock, Info, Back, ChevronRight,
         OpenWindow, Message, Repair, Home, Highlight, Clock, Check, Next, QrCode, Captions, Spotlight, Person, People, Calendar, Picture, List, Phone,
+        Document, Edit, Copy, Stopwatch,
     ];
 
     /// <summary>The icon for a command or action id (tray menu, search results); null for none.</summary>
@@ -99,6 +104,22 @@ internal static class Icons
         "voice-commands" => Microphone,
         "notes" or "edit-notes" => Message,
         "auto-hide" => Hide,
+        "show-pdf" => Document,
+        "show-video" or "make-gif" => Video,
+        "show-whiteboard" => Edit,
+        "room-sign" => Calendar,
+        "follow-me" => Next,
+        "clicker-keys" => Keyboard,
+        "timer" => Stopwatch,
+        _ when command.StartsWith("timer:", StringComparison.Ordinal) => Stopwatch,
+        "night-filter" => Brightness,
+        _ when command.StartsWith("night:", StringComparison.Ordinal) => Brightness,
+        "inset-shape" => OpenWindow,
+        _ when command.StartsWith("inset-shape:", StringComparison.Ordinal) => OpenWindow,
+        "cast" => Tv,
+        "speaker-screen" => View,
+        "rehearse" => Microphone,
+        "copy-text" => Copy,
         _ when command.StartsWith("scene-", StringComparison.Ordinal) => Star,
         _ when command.StartsWith("playlist:", StringComparison.Ordinal) => List,
         "check-updates" => Download,

@@ -23,8 +23,22 @@ internal static class CaptionsHost
     private const int LParamIsPointer = 1, LParamIsObject = 2, LParamIsString = 3, LParamIsToken = 4;
     private const uint WholePhrase = 0xFFFFFFFF;
 
-    public static int Run()
+    /// <param name="args">The switch, then (optionally) the presenter's words for captions as one token (FR-128).</param>
+    /// <summary>After the words' token: only take them out of Windows' speech dictionary, then end.</summary>
+    public const string RemoveWordsSwitch = "--remove-words";
+
+    public static int Run(string[]? args = null)
     {
+        List<string> words = args is { Length: > 1 } ? CaptionVocabulary.FromToken(args[1]) : [];
+        if (args is { Length: > 2 } && args[2] == RemoveWordsSwitch)
+        {
+            // Only putting Windows' speech dictionary back: words a helper added and couldn't take out (it was ended).
+            Thread cleaner = new(() => SpeechWords.Remove(words)) { IsBackground = true };
+            cleaner.SetApartmentState(ApartmentState.MTA);
+            cleaner.Start();
+            cleaner.Join(TimeSpan.FromSeconds(10));
+            return 0;
+        }
         var output = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
         using var stop = new ManualResetEventSlim();
         // The app closing our input (or going away, which closes it too) is the signal to stop.
@@ -43,15 +57,17 @@ internal static class CaptionsHost
 
         int exit = 0;
         // Its own free-threaded thread: SAPI's objects then need no message loop.
-        var worker = new Thread(() => exit = Listen(output, stop)) { IsBackground = true, Name = "captions: speech" };
+        var worker = new Thread(() => exit = Listen(output, stop, words)) { IsBackground = true, Name = "captions: speech" };
         worker.SetApartmentState(ApartmentState.MTA);
         worker.Start();
         worker.Join();
         return exit;
     }
 
-    private static int Listen(StreamWriter output, ManualResetEventSlim stop)
+    private static int Listen(StreamWriter output, ManualResetEventSlim stop, IReadOnlyList<string> words)
     {
+        using SpeechWords? known = SpeechWords.Add(words); // taken out of Windows' dictionary again as captions stop
+        if (known is { Added.Count: > 0 }) Say(output, "words-added " + CaptionVocabulary.Token(known.Added)); // the app remembers them, in case this helper is ended
         ISpRecognizer? recognizer = null;
         ISpRecoContext? context = null;
         ISpRecoGrammar? grammar = null;

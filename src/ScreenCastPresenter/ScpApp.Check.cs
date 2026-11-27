@@ -35,7 +35,7 @@ internal sealed partial class ScpApp
     /// </summary>
     private async Task<bool> CheckAsync(SourceWindow source, bool asked)
     {
-        _checkedThisSession.Add(CaptureProtocol.SourceSpec(source));
+        _checkedThisSession.Add(CaptureProtocol.CoverKey(source));
         if (source.IsOffScreen)
         {
             if (asked) Message("The check works on windows and screens: a camera's or a picture's picture isn't on your screen to read.");
@@ -94,7 +94,7 @@ internal sealed partial class ScpApp
     private async Task<bool> CheckFirstTimeAsync(SourceWindow source)
     {
         if (!Settings.CheckBeforeShowing || _playlistSwitching || _slideshowSwitching || source.IsOffScreen) return true;
-        if (_checkedThisSession.Contains(CaptureProtocol.SourceSpec(source))) return true;
+        if (_checkedThisSession.Contains(CaptureProtocol.CoverKey(source))) return true;
         return await CheckAsync(source, asked: false);
     }
 

@@ -15,6 +15,9 @@ internal enum HoldReason
 
     /// <summary>A never-show app is on the screen being shown (NeverShow).</summary>
     PrivateApp,
+
+    /// <summary>An Open or Save box is on the screen being shown (FileBoxes, FR-114).</summary>
+    FileBox,
 }
 
 internal enum SessionState
@@ -294,7 +297,7 @@ internal sealed class SessionController : IDisposable
         // Already showing this source here: just apply a new crop and make sure it's visible.
         if (sameOutput && _engine is not null && source.IsSameSource(Source))
         {
-            if (source.Crop != Source!.Crop) await ChangeCropCoreAsync(source.Crop);
+            if (source.Crop != Source!.Crop || source.AutoCrop != Source.AutoCrop) await ChangeCropCoreAsync(source.Crop, source.AutoCrop, fade: true);
             if (IsBlanked) await UnblankCoreAsync();
             return;
         }
@@ -679,18 +682,49 @@ internal sealed class SessionController : IDisposable
         }
     }
 
-    private async Task ChangeCropCoreAsync(CropRegion? crop)
+    /// <summary>
+    /// A crop made for the presenter (the taskbar left out, FR-112; a browser's page, FR-133) and
+    /// the crop to show inside it. <paramref name="fade"/> false moves straight to it: a browser's
+    /// page area shifting a few pixels as the window is resized needn't go through black.
+    /// </summary>
+    public async Task SetAutoCropAsync(CropRegion? crop, CropRegion? autoCrop, bool fade)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (Source is null || _engine is null) return;
+            await ChangeCropCoreAsync(crop, autoCrop, fade);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private Task ChangeCropCoreAsync(CropRegion? crop) => ChangeCropCoreAsync(crop, Source?.AutoCrop, fade: true);
+
+    private async Task ChangeCropCoreAsync(CropRegion? crop, CropRegion? autoCrop, bool fade)
     {
         if (crop is { IsFull: true }) crop = null;
-        if (Source is not { } source || _engine is not { } engine || source.Crop == crop) return;
+        if (autoCrop is { IsFull: true }) autoCrop = null;
+        if (Source is not { } source || _engine is not { } engine) return;
+        if (source.Crop == crop)
+        {
+            if (source.AutoCrop != autoCrop)
+            {
+                Source = source with { AutoCrop = autoCrop };
+                SourceGeometryChanged?.Invoke(this, EventArgs.Empty); // the tray and badge say "all of it" correctly
+            }
+            return;
+        }
         double target = TargetOpacity;
-        await FadeAsync(0, SwitchFadeOut);
+        if (fade) await FadeAsync(0, SwitchFadeOut);
         View = null; // a new crop ends zooming in
         engine.SetCrop(crop);
-        Source = source with { Crop = crop };
+        Source = source with { Crop = crop, AutoCrop = autoCrop };
         UpdateContentShape();
         SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
-        if (!HidesWhenMinimized) await FadeAsync(target, SwitchFadeIn);
+        if (fade && !HidesWhenMinimized) await FadeAsync(target, SwitchFadeIn);
         SetState(State);
     }
 
@@ -883,15 +917,19 @@ internal sealed class SessionController : IDisposable
     {
         if (sender != _watcher) return;
         _engine?.OnSourceChanged();
-        UpdateContentShape(); // the source was resized
+        UpdateContentShape(now: false); // the source is being resized: at most every 150 ms
         SourceGeometryChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>A floating window follows the shape of what it shows (no black bars). Nothing shown: it keeps its shape.</summary>
-    private void UpdateContentShape()
+    /// <summary>
+    /// A floating window follows the shape of what it shows (no black bars). Nothing shown: it keeps
+    /// its shape. A switch, a crop or a restore reshapes it at once (<paramref name="now"/>), at the
+    /// moment the picture changes, so it never fades in at the old shape and then jumps.
+    /// </summary>
+    private void UpdateContentShape(bool now = true)
     {
         if (_output is { IsAlive: true, IsFloating: true } output && Source is { } source && !IsSourceMinimized)
-            output.SetContentAspect(_platform.ContentSize(source));
+            output.SetContentAspect(_platform.ContentSize(source), now);
     }
 
     /// <summary>The floating output window steps behind other windows, or comes back on top (FloatingStepBack).</summary>

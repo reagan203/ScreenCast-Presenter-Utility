@@ -8,6 +8,10 @@ Nov 26, 2026 · Revision 5: more for presenters. Click a window to show it, a co
 
 Nov 26, 2026 · Revision 9: fourteen more. Split screen; zoom that follows typing; shortcuts on the TV; pictures and text cards as sources and in playlists; password boxes covered exactly; a check before sharing; faces blurred; chapters and a timeline; saving the last minute; the TV on, off and to this PC's input over the cable; schedules from a calendar file; rules from the organisation and settings to a file; voice commands; speaker notes, encrypted to the phone. Changed requirements are marked **(rev 9)**.
 
+Nov 26, 2026 · Revision 10: twenty-three more. More privacy (the taskbar and desktop icons left out of a whole screen, black while an Open or Save box is open, a browser's page only, a warning when a meeting shares a whole screen); more to show (PDFs page by page, videos with sound, a whiteboard, the room sign); for trainers and stages (the small picture in a circle, Follow me, a timer on the TV, time budgets, PowerPoint's notes, a night filter, the speaker's screen, casting, rehearsals, words for captions, clicker keys); and from outside (`--status` and `--is`, copying the text, GIFs). Changed requirements are marked **(rev 10)**.
+
+Nov 27, 2026 · Revision 11: a plan for macOS and Linux, not built yet. It covers what works on each system and what can't, a shared core with a front end for each system, the permissions each system asks for, how privacy holds on each, the order to build in, and the questions and decisions to settle first. v1.0 stays Windows-only. The plan is section 9; changed requirements are marked **(rev 11)**. It also fixes what a user saw on Windows with the output in a window on one screen: the preview seemed to minimise, the picture shook on switches and in browsers, and Settings flickered (FR-11, FR-113, FR-133, 6.1).
+
 Nov 26, 2026 · Revision 8: more from everything. Exact on/off for a dozen switches from the command line; automatic hiding of keys, passwords and your own list of names, in screenshots and recordings too; zoom, the name banner, live captions, a break countdown and playlists from the phone; a contact card as a QR code; shuffled playlists; web subtitles; scenes that switch live captions. It also finishes FR-16 (the idle screen's message and logo when what's shown closes), FR-51 (the preview after a screenshot) and FR-59 (stopping a recording at a set time). Changed requirements are marked **(rev 8)**.
 
 Nov 26, 2026 · Revision 7: running the room. Scenes on one key, playlists for lobby screens, hiding email addresses and numbers automatically, transcripts and readable captions, and a phone remote. Changed requirements are marked **(rev 7)**.
@@ -42,9 +46,12 @@ In scope for v1.0:
 - **(rev 6)** Stage tools: hiding part of a window, the audience view, getting the next thing ready, a spotlight, arrows, boxes and text, a name banner, a logo, QR codes, room profiles, schedules, live captions and a second TV (section 3.8).
 - **(rev 7)** Running the room: scenes, playlists for lobby screens, automatic hiding of personal details, transcripts, and a phone remote (section 3.9).
 - **(rev 9)** Split screen, typing-aware zoom, shortcuts on the TV, pictures and cards, exact password-box covering, a check before sharing, face blurring, chapters and timelines, the last minute saved on demand, the TV over the cable, calendar schedules, organisation rules and settings transfer, voice commands, and speaker notes (section 3.11).
+- **(rev 10)** Twenty-three more: the taskbar, desktop icons and Open/Save boxes kept off a whole screen, a browser's page only, a warning when a meeting shares a whole screen, PDFs, videos, a whiteboard, the room sign, the small picture's shape, Follow me, a timer on the TV, time budgets, PowerPoint's notes, a night filter, the speaker's screen, casting, rehearsals, words for captions, clicker keys, `--status` and `--is`, copying text and GIFs (section 3.12).
 - **(rev 8)** More from each of these: exact switches from the command line, keys, passwords and your own words hidden automatically, a fuller phone remote, contact cards, shuffled playlists, web subtitles and scenes with captions (section 3.10).
 
-Out of scope for v1.0: streaming over the network, video editing, macOS and Linux builds. **(rev 2: recording and audio capture moved into scope; rev 5: annotation moved into scope as drawing on the TV, FR-71)**
+- **(rev 11)** A plan, not yet built, for macOS and Linux versions (v2.0): section 9.
+
+Out of scope for v1.0: streaming over the network, video editing, macOS and Linux builds. **(rev 2: recording and audio capture moved into scope; rev 5: annotation moved into scope as drawing on the TV, FR-71; rev 11: macOS and Linux planned for v2.0, section 9)**
 
 ### 1.4 Definitions
 
@@ -79,6 +86,7 @@ SCP is a standalone desktop app. It doesn't replace Zoom or Teams. It feeds them
 - Any GPU with a WDDM 2.0+ driver.
 - Displays: laptop screen plus HDMI/USB-C TV, wireless display (Miracast), or a virtual display.
 - Works alongside Zoom, Microsoft Teams, Google Meet (browser) and OBS.
+- **(rev 11)** Planned for v2.0 (section 9): macOS 14 (Sonoma) or later on Apple silicon and Intel, and Linux desktops with PipeWire and xdg-desktop-portal (GNOME, KDE Plasma), on Wayland or X11.
 
 ### 2.4 Design and implementation constraints
 
@@ -117,7 +125,7 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | --- | --- | --- |
 | FR-10 | Show the source fullscreen and borderless on a chosen monitor (TV), scaled to fit with black letterboxing | Must |
 | FR-10a | **(rev 4, from a user test)** Set to show in a window, a TV or screen connected since that choice (at start, on hot-plug, or just before presenting) gets the presentation: at once with "Keep it in a window" when nothing is showing; asked while showing in the window. Asked once per new screen; a virtual (Zoom) screen is never chosen this way | Must |
-| FR-11 | Show the source in a floating, resizable, dark-framed window. **(rev 4)** It takes the shape of what it shows (no black bars) and keeps it while resized; only a close button (✕ stops showing); double-click brings the presented window to the front, or moves the pointer to the presented screen. As a private preview only (showing its own screen, hidden from capture), it steps behind other windows while the presenter works on that screen and comes back when clicked in the taskbar. A window a meeting could share never steps behind: some meeting apps share a window by copying its area of the screen and would send whatever covers it; the audience must only ever see the chosen source | Must |
+| FR-11 | Show the source in a floating, resizable, dark-framed window. **(rev 4)** It takes the shape of what it shows (no black bars) and keeps it while resized; only a close button (✕ stops showing); double-click brings the presented window to the front, or moves the pointer to the presented screen. As a private preview only (showing its own screen, hidden from capture), it steps behind other windows while the presenter works on that screen and comes back when clicked in the taskbar. A window a meeting could share never steps behind: some meeting apps share a window by copying its area of the screen and would send whatever covers it; the audience must only ever see the chosen source. **(rev 11, from a user report)** Stepping behind means just behind the window the presenter is working in, and no further (sent to the bottom of every window, it looked as if it had been minimised); switching between other windows leaves the order as the presenter made it. A new shape is taken at the moment of a switch or a new crop, while the picture is black, never a moment into the fade-in (the window jumped as the new picture came in); only a source being resized waits up to 150 ms | Must |
 | FR-12 | Detect a virtual display and offer it as "Zoom screen"; guide the user to share that screen in Zoom. **(rev 3)** "Show me how" opens a three-step share guide (generic drawings of a meeting toolbar and share picker, the right tile outlined in yellow) for the window or the Zoom screen. "Set up a Zoom screen" installs the virtual display driver with winget after asking (Windows asks for admin rights), waits for the screen, makes it the output; without winget it offers the driver's page | Should |
 | FR-13 | Keep the output window out of Alt+Tab and the taskbar when fullscreen on another monitor | Must |
 | FR-14 | Prevent mirror loops: never list the output window as a source, and refuse a monitor source that hosts the active output. Do NOT apply `WDA_EXCLUDEFROMCAPTURE` to the output window, or Zoom and other capture tools will see black | Must |
@@ -136,7 +144,7 @@ Priority: **Must** = v1.0 release blocker, **Should** = v1.0 if time allows, **C
 | FR-21a | A shortcut that another app already owns is reported (tray, badge, Settings) and the rest still work. A default shortcut whose keys type a character on the current keyboard layout (AltGr layouts, e.g. Ctrl+Alt+4 = € on UK) moves automatically to Ctrl+Alt+Shift+… and the user is told **(rev 2)** | Must |
 | FR-22 | Switching source cross-fades through black over 150–250 ms | Must |
 | FR-23 | Save up to 9 favourite sources (app + crop + output) for one-key recall | Should |
-| FR-24 | Optionally hide the mouse cursor on the output | Should |
+| FR-24 | Optionally hide the mouse cursor on the output. **(rev 10)** It's left out by itself while the presentation covers the screen the shown window is on (no TV connected, so it's shown full screen on the presenter's own screen): the presenter's real pointer is already on top of the picture, and a copy inside it would be a second pointer, out of step with the first. It comes back when the TV is connected or the window moves to another screen | Should |
 | FR-24a | **(rev 4, from a user test)** Browsers keep to the page chosen (on by default; Settings › Where it shows): a browser window shows whichever tab is active, so when its title shows another tab or page, the picture cuts to black at once (no fade) until it matches again; "Show this page instead" makes the new page the chosen one. Unread counters in titles ("(3) Inbox") are ignored | Must |
 | FR-25 | Command palette: type any action or window name and press Enter; every action is reachable this way **(rev 2)**. **(rev 3)** Called "Search and help": "How do I…?" questions come first, and choosing one does the thing (or opens where it is done) | Must |
 | FR-26 | Shortcut cheat sheet (Ctrl+Alt+K) and a Settings page to view, search, change, disable and reset shortcuts **(rev 2)** | Must |
@@ -271,6 +279,55 @@ How these stay light: the new kinds of hiding are two more source-generated expr
 
 How these stay light: each runs only while chosen. The password-box finder, the caret tracker and voice listening each have one thread or process while on; faces and text share the GPU's scaled copy and run on a worker only when the picture changed; the shortcut poll and the replay recorder run only while their switch is on and something is shown; calendars are read again only when the file changes.
 
+### 3.12 Twenty-three more (rev 10)
+
+Every new action is in the tray menu (On the TV, Show on, or Rooms, scenes and playlists), in Search and help with a "How do I…?", on the command line and in Settings; none has a default key (any can be given one). Each runs only while it's used.
+
+**More privacy.** Each of these only ever shows less.
+
+| ID | Requirement | Priority |
+| --- | --- | --- |
+| FR-112 | Leave out the taskbar (on by default, Settings › Privacy): a whole screen shown stops short of its taskbar and any other docked bar (the screen's work area), plus the full thickness of a taskbar that hides itself (it would pop up over the picture). Kept as a crop, so zoom, marks, hidden parts, screenshots and recordings stop at it. A part the presenter chooses is kept inside it; a part that is all taskbar is refused rather than showing more (and when the taskbar moves onto a part already chosen, all that's clear of it now shows, never a crop worked out before the move). "Show all of it" means all but the taskbar. Applies to the main picture, a screen beside it, a screen shown small and the second TV, and follows the taskbar when it moves, starts hiding itself or a screen changes. At most 40% of a side is left out. A screen's part travels to the helper with it; hidden parts are kept by the screen, never by its part, so rounding can't lose them | Should |
+| FR-113 | Hide desktop icons (on by default): while a whole screen is shown anywhere (main, beside, small, second TV) the desktop's icons are hidden and come back when it stops. Icons the presenter hid in Explorer are left alone; a restarted Explorer's new icons are hidden on the next check (every 2 s while hidden); that they're hidden is saved, so the next start after a crash shows them again. Only the icon list is hidden, never the wallpaper. **(rev 11)** Not for a private preview (FR-11): nobody else sees it, so the presenter's own desktop is left as it is | Should |
+| FR-114 | Open and Save boxes (on by default): a file or folder box (a dialog box holding a file view, a folder tree or the Open/Save view) on the part of a screen being shown cuts the picture to black at once, like a never-show app, until it closes or moves away. On the second TV too. A window shown on its own is unaffected (its boxes are separate windows the audience doesn't see) | Should |
+| FR-133 | Browsers: only the page (on by default): a browser window shown on the TV or the second TV shows only its page (beside the main picture or small in a corner it shows whole: those can't be cropped), so other tabs' titles, the address bar, bookmarks and the profile are left out. The page's area comes from the browser (Chromium's page window, or UI Automation's document for others), is asked for before showing (up to 0.9 s; otherwise it's shown whole until the answer comes), then every 0.5 s on a thread of its own, and followed without a fade. Not believed when under 25% of the window or 98.5% or more of it (full screen). A crop the presenter chose, or one saved for the app, wins. **(rev 11, from a user report)** No page, or one under 25%, is most often a page between two loads: the page's crop is kept for up to 2 s (four answers) rather than the picture jumping to the whole window, tabs and address bar included, and back; a page filling the window is taken at once. Before showing, the browser is asked again every 0.15 s within the same 0.9 s | Should |
+| FR-134 | A meeting sharing a whole screen (on by default, while something is shown): every 3 s the windows of meeting apps (Zoom, Teams, Webex, Slack, Discord, GoTo, RingCentral) are looked at; a see-through, click-through border kept on top and following a screen's edges (within 24 px) means that screen is shared. Unless it's the TV showing the chosen source, the presenter is told once per share ("Zoom is sharing all of Screen 1…") with "Show me how" and "Don't warn me". A guess from outside: a browser meeting draws no border and isn't seen | Could |
+
+**More to show.**
+
+| ID | Requirement | Priority |
+| --- | --- | --- |
+| FR-115 | PDFs (tray, `--pdf "file" [--page N]`, favourites, scenes, playlists): pages are made into pictures (the longer side at least 2,560 px, bigger on a scaled display) by Windows' own PDF renderer in a helper process (`--pdf-pages`, 30 s limit), kept in a folder named from the file's path, size and last change (the newest 8 PDFs kept), and shown as pictures. The page asked for is made first, then the next two and the one before, in the background. Next and previous slide (keys, clicker keys, the phone, voice) turn the page through black, saying so at either end. A favourite keeps the PDF and its page. In a playlist each page is a step (pages made only when shown; up to 200). Password-protected, damaged, empty, missing and too big (300 MB) files say why | Should |
+| FR-116 | Videos (MP4, M4V, MOV, WMV, AVI, MKV, WebM; tray, `--video`, favourites, scenes, playlists): played by Windows' media player in the capture helper, frames copied GPU to GPU, sound on the default speakers. It plays only while the TV shows it, so it starts as it fades in and pauses while blank, held black or frozen; next and previous slide jump 10 s. At the end its last picture stays and the presenter is offered "Play it again"; in a playlist it plays to its end (a 4-hour backstop), then the next item shows (a playlist of just one video plays it again). A file Windows can't play (or with no picture) says why. A video is the main picture only (never small or beside); its frames go through automatic hiding like any picture. Every call into the player is made on the render thread, never under a lock or in one of the player's events | Should |
+| FR-117 | The whiteboard (tray, `--whiteboard`, favourites and scenes): a blank board on the TV (dark by default, light when chosen: Settings › Where it shows) drawn on from a private board window (hidden from capture) with the drawing tools; the board window is the drawing area. The drawing stays on the TV between drawing sessions until "Clear" or the board is put away (which brings back what was shown before, or stops), and is saved as a PNG next to screenshots with "Save as a picture". Showing anything else puts the board away | Should |
+| FR-125 | The room sign (tray, `--room-sign`, favourites, scenes, playlists): "free until 13:00", "Booked until 11:00" (back-to-back bookings joined) and up to three later bookings today, from the room's calendar file, on a dark sign with a green or red panel, made on the PC and read again in place (no fade) when it says something new (checked every 20 s). Meeting names only when chosen ("Booked" otherwise). A calendar that can't be read says "Bookings unavailable", never "Free" | Could |
+
+**For trainers and stages.**
+
+| ID | Requirement | Priority |
+| --- | --- | --- |
+| FR-118 | The small picture's shape: rectangle (default), rounded corners or a circle (the middle square of the picture), from Settings, the tray, scenes and `inset-shape`. Its hidden parts and automatic covers are drawn inside the same mask | Could |
+| FR-119 | Follow me (tray, `follow-me`, `--on/--off follow-me`): while on, switching to a window of an app on its list shows it (after it's stayed in front 450 ms, so Alt+Tab passing through doesn't switch). Anything else (another app, a dialog box, the desktop, a never-show app, a minimised window) stays private; nothing happens while frozen. Turning it on adds the app shown; showing another app while it's on adds that app (with Undo); up to 20, edited in Settings. Off when showing stops | Could |
+| FR-120 | A timer on the TV (tray presets 1–30 minutes, or minutes and words; `--timer N\|off`): "Exercise 4:59" in a corner nothing else uses (not the QR code's or the small picture's), above the banner and captions, white on a dark chip, updated each second from a monotonic clock. At zero, "Time's up" in amber for 30 s, then it goes. With the picture or the blank screen's message, never on plain black; kept through engine changes; off when showing stops | Could |
+| FR-121 | Time budgets: each favourite and scene can have minutes (the notes form). While shown, the now-showing bar says "Demo 3:12 of 5:00" (or "1:05 over"); a minute before and at the end the presenter is told, once each. Time adds up when something comes back, stops while blank or held, and starts again with the talk timer. Every part shown is timed, for rehearsals | Could |
+| FR-122 | PowerPoint's notes (on by default): while a PowerPoint window is shown and the notes are seen somewhere (the notes window, the paired phone, the speaker's screen), PowerPoint is asked every 0.7 s, on a thread of its own, which slide is on (the slide show's, or the one being edited) and its notes; they join the presenter's own as "Slide 3 of 12: …". Read only; a busy or closing PowerPoint is asked again shortly | Could |
+| FR-123 | The night filter (Settings, tray, `--night`, scenes): "Soften white pages" (a tone curve to 72%, warmer) or "Turn light pages dark" (inverted, hues kept by turning them half way round). On what's shown and the pictures beside it; never on the name banner, captions, the timer, the QR code (it must scan) or the small picture. Fades in from black like the picture (folded into the colour matrix), so it never flashes | Could |
+| FR-124 | The speaker's screen (Show on, `speaker-screen`): full screen on a chosen screen that isn't a TV showing something: the time, how long the talk's run or what's left (amber two minutes before, red when over), the part's budget, what the audience sees (a live copy), what's next, the timer, and the notes in large type. Always dark, hidden from capture, never takes focus, Esc puts it away; warns when it covers the presenter's own screen | Could |
+| FR-126 | Connect a wireless TV (Show on, `--cast`): opens Windows' own Cast list; once connected, the usual offer to show on it follows, as a separate screen (never a copy of the presenter's) | Could |
+| FR-127 | Rehearse (tray, `rehearse`): a private practice. Each part shown is timed; live captions listen (even with nothing shown, and never on the TV meanwhile). "Finish" writes a report to the transcripts folder (time taken against the talk's length; words, pace and filler words, overall and per part; parts over their budget; the longest pause) and says the gist. Nothing is recorded or sent | Could |
+| FR-128 | Words for captions (Settings): up to 100 names and words. They're added to Windows' speech dictionary while captions listen and taken out again after (words already there are left alone; words a helper that was ended couldn't take out are remembered and taken out at the next start), and what's heard is spelled as listed ("ninth mind" → "Ninthmind"; only whole words, three letters or more) | Could |
+| FR-132 | Page Down and Page Up go to what's shown (tray, Settings, `clicker-keys`; off by default): while a window, a PDF or a video is shown, Page Down and Page Up (and the arrow keys, if chosen) are taken with RegisterHotKey (no keyboard hook) from any keyboard or presenter clicker and sent to what's shown (posted, never typed), so slides move while the presenter works elsewhere. They don't reach the presenter's own window meanwhile; keys another app has taken are said once | Could |
+
+**Running it from outside.**
+
+| ID | Requirement | Priority |
+| --- | --- | --- |
+| FR-129 | `--status` answers with what's on as JSON (showing, what and where, blank, frozen, held, recording, the playlist, the timer's words, the part's budget, and every switch); `--is NAME` answers with exit code 0 when on and 1 when off, shown on screen as nothing (an answer, not a problem). New `--on/--off` names: follow-me, timer, night-filter, clicker-keys, speaker-screen, rehearse | Should |
+| FR-130 | Copy the text in what's shown (tray, `--copy-text`): a window or screen pictured as a screenshot takes it (hidden parts and automatic hiding covered, so those words are never copied); a PDF page, picture, whiteboard, room sign, camera or video from the output window itself (exactly what the audience sees, covered as it is) is read by Windows' text recognizer in a helper (`--read-text`, 20 s limit) and put on the clipboard (up to 100,000 characters). Not for a video (freeze and screenshot it) | Could |
+| FR-131 | A GIF of a recording (tray, `--gif`): the first 15 s of an MP4, at most 10 frames a second and 720 px wide, made in a helper (`--make-gif`, 3-minute limit) by an encoder written here (a palette per frame by median cut, LZW, looping), beside the recording, never over another file. A still moment keeps its length | Could |
+
+How these stay light: the privacy checks run only while a whole screen or a browser is shown, the share watch only while something is shown, Follow me and clicker keys only while on, PowerPoint is asked only while its notes are seen, the room sign is checked only while shown, and PDFs, text and GIFs are made in short-lived helpers. Videos are decoded on the GPU by Windows.
+
 ## 4. Non-functional requirements
 
 ### 4.1 Performance and memory
@@ -342,6 +399,7 @@ How memory stays low:
 - **(rev 5)** Never-show apps never reach the audience (FR-62). Marks for the audience never reveal private work: no click rings, pointer ring or laser while frozen or over another window, and a countdown never brings the picture back on its own. A slideshow's switch never undoes a blank, freeze or hold that came meanwhile, and a hold is checked again just before it lifts. Every new overlay (the click layer, the drawing layer and its toolbar) is hidden from capture and kept off the TV.
 - **(rev 6)** Hidden parts (FR-74) are covered before anything is seen, on every engine, at every brightness, while frozen, and in screenshots and recordings of that window; something with hidden parts is never shown by an engine that can't cover them. The audience view, the text box for text marks and every form (a Wi-Fi password is typed in one) are hidden from capture. Live captions listen only while on, on the PC itself, and never show on a break screen or on black. A QR code's label never shows a Wi-Fi password, and the password is never saved.
 - **(rev 9)** Password boxes are covered where Windows says they are, not where the picture seems to show them; every other picture on the TV (a pane, the small picture) is covered like the main one; faces are found and blurred on the PC, never recognised or kept; the check's preview is private and deleted at once; shortcuts on the TV never show typing; the replay keeps only the TV's own (already covered) picture, only while on, and deletes its parts; voice commands and the caret tracker never keep what's said or typed; notes travel to the phone encrypted with its pairing key; calendars and pictures are read from files on the PC, never fetched; the organisation's rules can only add protection.
+- **(rev 10)** A whole screen shown leaves out its taskbar and desktop icons and goes black while an Open or Save box is on it; a browser shows only its page; the presenter is told when a meeting app shares a whole screen. A part of a screen that is all taskbar is refused, never widened. Text is copied only from a picture with hidden parts and automatic hiding already covered. The speaker's screen and the whiteboard window are hidden from capture; PowerPoint's notes are read on the PC and never reach the TV. Clicker keys are off unless chosen, taken with RegisterHotKey (no hook) and only while something they can move is shown. Words for captions are taken out of Windows' speech dictionary again when captions stop.
 - **(rev 8)** Keys and passwords are covered by their shape or their label; your own words are kept in the settings file (they have to be read to be found) and never sent anywhere; a line that can't be checked in time is covered whole rather than shown. A contact card shows only the name under the code. The phone's new buttons open nothing on the PC.
 - **(rev 7)** The phone remote is off unless switched on and can't be reached from outside the local network; its pairing code is never on the TV; its key never crosses the network and is stored encrypted; commands are signed, can't be replayed, are limited in rate and limited to a fixed list (no settings, no quitting, no saving, nothing that opens a window). Automatic hiding reads the picture on the PC only, and a transcript is written only when switched on.
 - Signed executable to avoid SmartScreen warnings.
@@ -376,6 +434,8 @@ The controller uses the DWM engine by default and switches to WGC only for minim
 
 **Hardening (M6).** Settings window (General, Output, Recording & screenshots, Appearance, Advanced; every change applies immediately). Start with Windows through the user's Run key (FR-42), quiet when started at sign-in, repaired if the portable exe moves. The last thing shown is remembered (FR-41), so "previous source" works after a restart. After resume from sleep, unlock and remote-desktop reconnects, SCP re-checks screens, shortcuts and the output a moment later. Release: one self-contained single-file exe per architecture (x64, ARM64), uncompressed for memory (see docs/RELEASE.md).
 
+**macOS and Linux (rev 11, planned).** A shared core with an Avalonia front end and a capture helper for each system: section 9.3.
+
 **Screen capture compatibility.** A full-screen flip-model surface may be shown by the GPU directly ("independent flip"). Modern capture (Windows Graphics Capture, Desktop Duplication — used by Zoom, Teams, OBS and SCP's own screenshots) sees it; legacy GDI screen grabs may not.
 
 ## 6. External interfaces
@@ -393,7 +453,7 @@ Two themes **(rev 2)**: Light (the default), Dark, or Match Windows. Dark: backg
 | Picker | Centred overlay on the presenter's screen: search box, grid of live window thumbnails, monitors row, output selector (TV / Zoom screen / Floating), "Crop…" button |
 | Crop overlay | Dimmed source with a draggable rectangle and a size readout; Enter confirms, Esc cancels |
 | Presenting badge | Small pill at the top of the presenter's screen: source name, Blank, Stop; auto-hides after 3 s |
-| Settings | Tabs: General (start with Windows, cursor), Keyboard shortcuts, Output (monitor, dimming, idle screen text), Recording (folders, audio), Appearance, Advanced (capture engine, diagnostics) **(rev 2)**. **(rev 3)** General (start with Windows, icon by the clock, Start menu / uninstall, shortcuts, outline, now-showing bar, status pill, pointer), Where it shows (screen or window, keep on top, sharing in Zoom or Teams, Zoom screen setup, dimming, blank message), Recording & screenshots, Appearance (theme, text size), Advanced (how windows are shown, settings file, privacy, version) |
+| Settings | Tabs: General (start with Windows, cursor), Keyboard shortcuts, Output (monitor, dimming, idle screen text), Recording (folders, audio), Appearance, Advanced (capture engine, diagnostics) **(rev 2)**. **(rev 3)** General (start with Windows, icon by the clock, Start menu / uninstall, shortcuts, outline, now-showing bar, status pill, pointer), Where it shows (screen or window, keep on top, sharing in Zoom or Teams, Zoom screen setup, dimming, blank message), Recording & screenshots, Appearance (theme, text size), Advanced (how windows are shown, settings file, privacy, version). **(rev 11, from a user report)** A save made anywhere refreshes the open page only when something on it reads differently (the switch just flipped already shows its new state), after the click that caused it; then the page is replaced in one repaint, at the same place and with focus on the same control, without applying the window's backdrop again (it flickered and jumped) |
 | Share guide **(rev 3)** | Three numbered steps with drawings; Done, Choose what to show, Share a whole screen instead… |
 | Quick-actions panel **(rev 4)** | Acrylic panel above the clock: preview and status, tiles, footer (FR-49) |
 | Output | Borderless, black, source scaled to fit; nothing else |
@@ -426,6 +486,8 @@ Two themes **(rev 2)**: Light (the default), Dark, or Match Windows. Dark: backg
 | Media Foundation source reader to sink writer, passthrough **(rev 9)** | Joining the last minute (FR-106) |
 | Monitor configuration (`dxva2`: `SetVCPFeature`, capabilities) **(rev 9)** | The TV over the cable (FR-107) |
 | Registry `SOFTWARE\Policies\ScreenCastPresenter` **(rev 9)** | Rules from the organisation (FR-109) |
+
+**(rev 11)** What replaces each of these on macOS and Linux is listed in section 9.5.
 
 ### 6.3 Hardware interfaces
 
@@ -528,6 +590,237 @@ Estimated effort for one developer: about 6 weeks to v1.0.
 | The TV over the cable **(rev 9)** | "Test the TV" on a monitor and on a TV; schedule it off at 18:00 | Each says what it supports; the monitor goes to standby on time |
 | Voice **(rev 9)** | Say "Presenter, next slide" in a quiet and a noisy room; talk about "the next slide" without the wake word | The slide changes only when asked |
 
+## 9. macOS and Linux (rev 11 plan)
+
+This section is a plan; none of it is built yet. It sets out what a v2.0 for macOS and Linux would do, what it can't do, how the code splits, and the order to build in. It was written on the Windows development PC, with no Mac or Linux PC to try things on, so every system behaviour it relies on is either documented or listed in 9.9 as a question for the first milestone (P0), answered on real machines before anything else is built.
+
+### 9.1 What doesn't change
+
+- **Only the chosen source reaches the audience; privacy beats convenience.** Where a system can't give a guarantee that SCP gives on Windows, the feature is off or asks first. It never quietly gives weaker protection (FR-139, FR-144).
+- No bright flashes (4.2): the output is black until its first frame and every change passes through black, measured the same way (NFR-16, NFR-19).
+- Plain language and one word for a screen (4.3); every action reachable from the icon; the command line; the settings file's format (so "settings to a file and back", FR-109, works across systems).
+- No network use except the existing opt-in exceptions; no telemetry, no account.
+- Code in this repository stays MIT. Libraries must be MIT-compatible; GPL projects (OBS, ddcutil) are studied, never copied.
+
+### 9.2 What each system allows
+
+| Topic | Windows (v1.0) | macOS 14 or later | Linux on X11 | Linux on Wayland |
+| --- | --- | --- | --- | --- |
+| Seeing other apps' windows (list, titles, positions, changes) | Yes | Yes (titles need Screen Recording permission) | Yes | No: SCP gets only what the presenter picks in the desktop's own picker |
+| Capturing a window or screen | WGC and DWM, no permission | ScreenCaptureKit, with Screen Recording permission. macOS 15 and later ask the presenter from time to time to confirm it | XComposite and XShm, no permission | The ScreenCast portal and PipeWire. The desktop asks each time, unless it gave a restore token |
+| Leaving things out of SCP's own capture of a whole screen | SCP's own windows | Any app or window, through ScreenCaptureKit's content filter | No (SCP can hide its own windows briefly for a screenshot) | No |
+| Keeping SCP's windows out of other apps' captures (a meeting sharing the presenter's whole screen) | Yes (`WDA_EXCLUDEFROMCAPTURE`) | No: from macOS 15 a window's "don't share" setting is no longer honoured by ScreenCaptureKit, and Apple has said there is no public way to prevent capture | No | No |
+| Global shortcuts | `RegisterHotKey` | `RegisterEventHotKey`, no permission | `XGrabKey` | The Global Shortcuts portal (KDE Plasma, and GNOME by version 49). The desktop shows the keys and the presenter confirms them |
+| An icon by the clock | Notification area | Menu bar. On a MacBook with a notch, a full menu bar can hide it | StatusNotifierItem (KDE and most desktops; GNOME only with the AppIndicator extension, which Ubuntu turns on) | Same as X11 |
+| Sending keys to a window in the background | `PostMessage` | `CGEventPostToPid`, with Accessibility permission | Only reliable into the focused window (many apps ignore synthetic keys) | No (the RemoteDesktop portal types only into the focused window, after the presenter agrees) |
+| Reading another app's controls (password boxes, a browser's page, the focused field) | UI Automation | Accessibility API, with Accessibility permission | AT-SPI over D-Bus (apps with accessibility turned on) | AT-SPI works, but its answers can't be tied to the picked window or to screen positions |
+| The pointer and clicks | Yes | Position yes; clicks through a global mouse monitor | XInput2 | Position only while it's over the shown source (the stream's pointer data); no clicks |
+| Placing SCP's own windows | Yes | Yes | Yes | The TV output: full screen on a chosen screen. Other windows through XWayland (P0, Q11) |
+| Pop-up notifications | Shown on the main screen | Shown on the main display (the one with the menu bar in Displays settings) | Depends on the desktop | Depends on the desktop |
+
+### 9.3 Architecture
+
+Today the app is about 42,000 lines. About 9,700 of them (most of Core, plus the pure parts of recording, the remote and the capture protocol) have no Windows reference. Another 3,200 lines in Core are tied to Windows only through a few calls: the session's DWM flush and monitor type, the phone remote's key storage, the organisation's registry rules, and the hotkey manager. The rest is Windows through and through: the UI (9,900), the app's partial classes (9,200), capture (6,200), interop (1,900) and recording (1,600). macOS and Linux each get their own version of that part, written fresh rather than translated.
+
+```text
+                    ScreenCastPresenter.Core   (net10.0, every system)
+   settings · favourites · scenes · playlists · schedules · calendar · session controller
+   command line · helper protocol · QR codes · GIFs · captions text · rehearsal · hiding rules
+   tray menu, quick panel and help plans · interfaces for each system's services
+            |                              |                               |
+   Windows (v1.0, unchanged)       macOS                           Linux
+   WinForms UI                     Avalonia UI  <-- shared -->     Avalonia UI
+   DWM / WGC helper                helper: ScreenCaptureKit        helper: PipeWire portal (Wayland)
+   Direct2D marks                  Skia stage   <-- shared -->     or XComposite (X11); Skia stage
+   Media Foundation, SAPI, OCR     Swift shim: AVFoundation,       GStreamer, Tesseract, D-Bus
+                                   Vision, Speech, Accessibility   (portals, AT-SPI, Secret Service)
+```
+
+| Project | What it holds |
+| --- | --- |
+| `src/ScreenCastPresenter.Core` (net10.0) | The portable code above, with the 3,200 lines cut free. Each system service becomes an interface: screens, windows, hotkeys, key storage, start at login, organisation rules, folders, the single-instance channel, the clipboard and slide keys. Its tests run on all three systems |
+| `src/ScreenCastPresenter` (Windows) | Today's app, now referencing Core. Behaviour, tests and memory budgets unchanged |
+| `src/ScreenCastPresenter.Desktop` (Avalonia) | For macOS and Linux: the icon and its menu, quick panel, picker, Settings, messages, first run, audience view, speaker screen, notes and whiteboard windows. Built from the same plans the Windows UI uses (TrayMenuPlan, QuickPanelPlan, HelpTopics, PickerLayout), so a new feature's tray line is still written once |
+| `src/ScreenCastPresenter.Stage` (SkiaSharp) | For macOS and Linux: draws the picture and everything on it (fades, dimming, night filter, hidden parts and blur, spotlight, zoom, ink, arrows, the banner, captions, the timer, QR codes, the logo, the small picture and its shape, split screen). It takes the same one-line commands as the Windows helper (CaptureProtocol), so the session can't tell the systems apart |
+| `native/mac` (Swift package, built to `libscp_mac.dylib`) | A small C interface for .NET over ScreenCaptureKit, AVFoundation (recording, playback, cameras), Vision (text, faces), Speech (captions), Accessibility and PowerPoint/Keynote scripting. Built on a Mac (a CI runner) |
+| Linux backends (C#, no native code of ours) | D-Bus through Tmds.DBus.Protocol (portals, AT-SPI, notifications, Secret Service), GStreamer through its C API (PipeWire capture, encoding, playback, cameras), Xlib and XComposite for X11, PDFium, Tesseract |
+
+Helpers stay helpers. As on Windows, the capture helper is the same program started with `--capture-host`, so a crash in capture never takes the app down (4.4). On macOS and Linux the helper owns the output window itself, because neither system lets one process's window sit inside another's (the Windows helper draws into a child window). `--remote`, `--captions`, `--pdf-pages`, `--read-text` and `--make-gif` keep their roles.
+
+Choices and why:
+
+- **Avalonia instead of a native UI for each system (SwiftUI, GTK):** one UI for two systems, in C# like the rest, MIT licensed. It draws its own controls, so SCP's web-like light look is the same on both. The icon's menu stays a native menu.
+- **Windows keeps WinForms for now:** it works, it's tested, and it meets the memory budgets. Whether Windows moves to Avalonia later is decision D1.
+- **A Swift shim instead of .NET's macOS bindings:** ScreenCaptureKit and Speech are asynchronous, delegate-based APIs. They are short and safe to call in Swift, and long and fragile through raw Objective-C calls. The shim's C interface stays small: start and stop a stream, take a frame, plus a few calls each for recording, text, faces and speech.
+- **PDFium on macOS and Linux:** one renderer, so pages look the same on both (FR-115).
+
+### 9.4 Each feature on each system
+
+**Same**: works as on Windows. **Changed**: works, in a different way (see the notes). **Partly**: some of it works, as the notes say. **No**: can't be done on that system; SCP says so where the feature would be (FR-144).
+
+| Feature | macOS | Linux X11 | Linux Wayland | Notes |
+| --- | --- | --- | --- | --- |
+| Window and screen list with live pictures, search (FR-01–FR-03) | Same | Same | Changed | macOS: pictures are refreshed about once a second while the picker is open (no zero-copy thumbnails). Wayland: "Choose…" opens the desktop's picker; things picked before are listed by their restore tokens |
+| Click a window to show it (FR-05) | Same | Same | No | Wayland: the desktop's picker instead |
+| What's shown closes or is minimised (FR-06, UC-06) | Same | Same | Same | A minimised window can't be captured on any system: its last picture stays and the presenter is told |
+| The TV output, fades, idle screen, blank, freeze, break countdown, switch backlog (FR-10, FR-10a, FR-13, FR-14, FR-16, FR-20, FR-22, FR-27, FR-27a, FR-28, FR-66) | Same | Same | Same | macOS: a borderless window above the menu bar on the TV, never macOS's own full screen (that slides in and makes a new Space). Wayland: full screen on a chosen screen is the one placement a Wayland app may ask for |
+| The output in a window (FR-11) | Same | Same | Partly | Wayland: "Keep the window on top" depends on the desktop |
+| A virtual "Zoom screen" (FR-12) | No | No | No | There's no public way for an app to add a screen. A virtual screen made by another app is used like a TV; otherwise meetings share the output window |
+| Status pill, now-showing bar, quick panel, Search and help, shortcut sheet, first run (FR-15, FR-19a, FR-25, FR-26, FR-49) | Same | Same | Changed | Wayland: placed and kept on top through XWayland (Q11) |
+| The outline around what's shown (FR-17) | Same | Same | No | macOS: follows the window from the window list (Q4). Wayland: only the desktop's own "sharing" indicator |
+| Identify screens (FR-18) | Changed | Same | Same | macOS has no screen numbers, so SCP numbers them (FR-146) |
+| The icon and its menu (FR-20, FR-48) | Changed | Changed | Changed | See FR-141 |
+| Global shortcuts (FR-21, FR-21a) | Changed | Same | Partly | See FR-142 |
+| Favourites, previous source (FR-23, FR-41) | Same | Same | Changed | Wayland: a favourite keeps the picker's restore token. When the desktop won't restore it, the picker opens with a line saying which favourite it's for |
+| The pointer on the TV (FR-24) | Same | Same | Same | ScreenCaptureKit and the portal both draw it or leave it out, as asked |
+| Browsers keep to the page chosen (FR-24a) | Same | Same | No | Wayland: the picked window's title isn't given to SCP |
+| One copy running, command line, `--on`/`--off`, `--status`, `--is` (FR-29, FR-43, FR-91, FR-129) | Same | Same | Same | A socket in the user's own runtime folder that only they can open replaces the named pipe. The command is `screencast-presenter` |
+| How it captures (FR-30–FR-33) | Changed | Changed | Changed | macOS: ScreenCaptureKit only. There is no zero-copy way (FR-30) and no capture border to remove (FR-33); macOS shows its own recording indicator in the menu bar, never on the output. X11: XComposite. Wayland: PipeWire |
+| Settings file, appearance, text size (FR-40, FR-44–FR-46) | Changed | Changed | Changed | Same file format, kept in `~/Library/Application Support` on macOS or `$XDG_CONFIG_HOME` on Linux. Appearance follows the system's light or dark setting. Accent colour: SCP blue or the system's |
+| Start at login, install (FR-42, FR-47) | Changed | Changed | Changed | macOS: a login item (SMAppService), and installing means dragging the app to Applications from a signed DMG. Linux: an autostart entry (the Background portal in Flatpak), installed from Flathub or a tarball |
+| Screenshots (FR-50, FR-51, FR-56) | Same | Changed | Changed | macOS leaves SCP's own windows out of its pictures. X11: SCP hides its own windows for the moment the picture is taken. Wayland: from a stream SCP already has, otherwise the Screenshot portal (the desktop may ask) |
+| Recording with sound, pausing, crash-safe files, background recording (FR-52–FR-55, FR-57, FR-59–FR-61) | Same | Same | Partly | macOS: H.264 from the hardware encoder through AVFoundation, as fragmented MP4, with computer sound and the microphone from ScreenCaptureKit. Linux: GStreamer (VA-API hardware encoding, otherwise OpenH264), as fragmented MP4, with sound from PipeWire. Wayland: recording a covered window in the background depends on the desktop (Q7) |
+| Only the recorded app's sound (FR-58) | Same | Partly | Partly | macOS: ScreenCaptureKit's filter gives one app's sound. Linux: PipeWire can record one app's stream when SCP knows which app it is (by its process on X11). On Wayland the picked window can't be tied to an app, so it records all computer sound |
+| Never-show list (FR-62) | Changed | Same | No | macOS: never-show apps are left out of a whole screen by macOS itself (the audience sees what's under them, never them), and they can't be chosen. X11: as on Windows, black at once. Wayland: SCP can't tell which app the picker gave it or what's on a screen (FR-139) |
+| Do not disturb reminder (FR-63) | Changed | Changed | Changed | macOS: the reminder's button opens Notifications settings ("Allow notifications when mirroring or sharing the display"). Linux: where the desktop lets an app turn on do not disturb, SCP turns it on while a whole screen is shown and off after; otherwise it reminds (Q8) |
+| Zoom, click rings, pointer ring, spotlight, laser (FR-64, FR-65, FR-71's laser, FR-77) | Same | Same | Partly | Wayland: the stream says where the pointer is over what's shown, so zoom, the pointer ring, the spotlight and the laser work. Clicks can't be seen, so there are no click rings |
+| Zoom that follows typing (FR-99) | Changed | Changed | No | macOS: the focused field from Accessibility (permission). X11: AT-SPI's caret. Wayland: no screen positions |
+| Drawing, arrows, boxes, text (FR-71, FR-78) | Same | Same | Changed | Wayland: drawn on the audience view (FR-75) instead of over the window, because SCP doesn't know where the window is. The other systems offer this as an option too |
+| Talk timer, time budgets, a timer on the TV, the speaker's screen (FR-67, FR-120, FR-121, FR-124) | Same | Same | Same | |
+| Cameras (FR-68) | Same | Same | Same | macOS: AVFoundation (Camera permission; an iPhone used as Continuity Camera is listed too). Linux: PipeWire's camera portal, or V4L2 through GStreamer |
+| Slideshow, rooms, schedules, scenes, playlists, shuffle, calendar (FR-69, FR-82, FR-83, FR-86, FR-87, FR-95, FR-97, FR-108) | Same | Same | Partly | Shared core. Wayland: items that need a pick (windows, screens) are restored from their tokens, or skipped like an app that isn't open |
+| A TV plugged in; a TV that copies the screen (FR-70, 4.5) | Same | Same | Same | Each system's UI framework reports screen changes |
+| The small picture and its shape, split screen, a second TV (FR-72, FR-85, FR-104, FR-118) | Same | Same | Partly | Wayland: each extra window or screen is a separate pick; a whole screen beside the main picture follows FR-139 |
+| Update check (FR-73) | Same | Same | Same | For the DMG and the tarball; Flathub updates its own apps |
+| Crop, hide part of it (FR-04, FR-74) | Same | Same | Changed | Wayland: the box is dragged on a picture of the source in an SCP window. It's kept as fractions of the window, as on Windows, so it still follows the window |
+| The audience view, get the next thing ready (FR-75, FR-76) | Same | Same | Changed | The helper draws a second, private copy of the output. Wayland: the next thing is picked in the desktop's picker |
+| Name banner, logo, QR codes, contact card, night filter (FR-79–FR-81, FR-94, FR-123) | Same | Same | Same | Drawn by the shared Skia stage |
+| Live captions, transcripts, subtitles, words for captions, voice commands, rehearsals (FR-84, FR-89, FR-96, FR-110, FR-127, FR-128) | Changed | Partly | Partly | macOS: Apple's on-device speech recognizer (Microphone and Speech Recognition permissions), with the listed words as its custom vocabulary. Linux has no built-in recognizer (decision D4) |
+| Automatic hiding, keys, your own words, copying text, the check before sharing (FR-88, FR-92, FR-102, FR-130) | Same | Changed | Changed | macOS: Vision's text recognition, on the Mac. Linux: Tesseract, on the PC. It's slower, so the 0.4 s rhythm and the 2 s first-look wait may grow (Q10) |
+| Phone remote, notes on the phone (FR-90, FR-93, FR-111) | Same | Same | Partly | The pairing key lives in the Keychain or the Secret Service (FR-143). Wayland: slide buttons as in the clicker row below |
+| Password boxes covered exactly (FR-98) | Changed | Changed | No | macOS: Accessibility's secure text fields (permission; Chromium browsers are asked to turn on their accessibility). X11: AT-SPI's password fields. Wayland: answers can't be tied to the picked window |
+| Faces blurred (FR-100) | Same | Partly | Partly | macOS: Vision. Linux has no built-in face detector (decision D5) |
+| Shortcuts on the TV (FR-101) | Changed | Same | No | macOS: needs Input Monitoring permission. Wayland: keys pressed in other apps can't be seen |
+| Pictures, cards, PDFs, the whiteboard, the room sign (FR-103, FR-115, FR-117, FR-125) | Same | Same | Same | PDFium makes the pages on macOS and Linux |
+| Videos (FR-116) | Partly | Same | Same | macOS's own player opens MP4, M4V and MOV; WMV, AVI, MKV and WebM need another decoder (Q10). Linux: GStreamer plays them all, with the Flatpak runtime's codecs |
+| Next and previous slide sent to what's shown, clicker keys (FR-90, FR-110, FR-132) | Changed | Partly | No | macOS: keys posted to the app (Accessibility permission; Q5). X11: dependable only while the shown window has focus. Wayland: keys go only into the focused window, so clicker keys and the phone's slide buttons work only while the presenter is in the shown window, and Settings says so. On every system, SCP turns PDF pages and moves videos itself |
+| Chapters, timeline, the last minute, GIFs (FR-105, FR-106, FR-131) | Same | Same | Same | AVFoundation or GStreamer join and read the MP4 files; the GIF encoder is SCP's own |
+| The TV over the cable (FR-107) | Partly | Changed | Changed | macOS: Apple silicon only through private interfaces (as the MonitorControl app does), which a macOS update can break; Intel Macs through I²C. Linux: the i2c-dev driver; the presenter must be allowed to use it (the `i2c` group), and SCP explains how |
+| Organisation rules, settings to a file (FR-109) | Changed | Changed | Changed | macOS: a configuration profile (managed preferences). Linux: `/etc/screencast-presenter/policy.json`, owned by root |
+| The taskbar left out (FR-112) | Changed | Same | No | macOS: the menu bar and the Dock are left out (the screen's visible area); a Dock that hides itself is left out at its full size. X11: the work area and the panels' reserved edges |
+| Desktop icons (FR-113) | Changed | Partly | No | macOS: Finder's desktop icons are left out of the picture by macOS itself, so nothing on the desktop changes (Q6). X11: only where the desktop's icon window can be identified |
+| Open and Save boxes (FR-114) | Partly | Partly | No | macOS: sandboxed apps' boxes belong to a system service, which is left out of the picture like a never-show app (Q6); other apps' boxes are found with Accessibility. X11: file dialogs found by their window type and role, where the toolkit sets one |
+| Browsers: only the page (FR-133) | Changed | Changed | No | macOS: the page's area from Accessibility (permission). X11: AT-SPI's document frame |
+| A meeting sharing a whole screen (FR-134) | Same | Same | No | Meeting apps' windows from the window list |
+| Follow me (FR-119) | Same | Same | No | macOS: the active app and its front window from the window list. X11: the active window property |
+| PowerPoint's notes (FR-122) | Changed | No | No | macOS: PowerPoint and Keynote through AppleScript (Automation permission for each). Linux: LibreOffice Impress could come later |
+| Connect a wireless TV (FR-126) | Changed | Partly | Partly | macOS: AirPlay from Control Center with "Use As Separate Display"; SCP opens Displays settings and says how. Linux: GNOME Network Displays, where installed |
+
+Counted over these 55 rows: macOS has 32 Same, 19 Changed, 3 Partly and 1 No. Linux on X11 has 34 Same, 12 Changed, 7 Partly and 2 No. Linux on Wayland has 13 Same, 15 Changed, 11 Partly and 16 No. In short, macOS can do nearly everything, mostly at the cost of permissions. X11 can do almost as much. Wayland loses everything that needs SCP to see other windows.
+
+### 9.5 What replaces each Windows interface
+
+| Windows (6.2) | macOS | Linux |
+| --- | --- | --- |
+| `EnumWindows`, titles, cloaking | `SCShareableContent`, `CGWindowListCopyWindowInfo` | X11: `_NET_CLIENT_LIST_STACKING`, window names. Wayland: none (the ScreenCast portal's picker) |
+| DWM thumbnails | ScreenCaptureKit stills (`SCScreenshotManager`) | X11: XComposite pixmaps. Wayland: none |
+| WGC, Direct3D 11, the swap chain | ScreenCaptureKit stream (IOSurface frames) drawn by Skia on Metal | The ScreenCast portal and PipeWire (Wayland), XComposite and XShm (X11), drawn by Skia on OpenGL |
+| Direct2D, DirectWrite, Gaussian blur | Skia (SkiaSharp) | Skia (SkiaSharp) |
+| `EnumDisplayMonitors`, `WM_DISPLAYCHANGE` | `NSScreen` and its change notification (through Avalonia) | XRandR or Wayland outputs (through Avalonia) |
+| `SetWindowDisplayAffinity` | `SCContentFilter` leaving SCP out (SCP's own captures only) | None |
+| `RegisterHotKey` | `RegisterEventHotKey` | `XGrabKey`; the Global Shortcuts portal |
+| `Shell_NotifyIcon` | `NSStatusItem` (Avalonia's TrayIcon) | StatusNotifierItem over D-Bus (Avalonia's TrayIcon) |
+| Media Foundation sink writer, WASAPI and per-process loopback | `AVAssetWriter` (VideoToolbox), ScreenCaptureKit audio | GStreamer (`vah264enc` or `openh264enc`, `mp4mux`), PipeWire audio |
+| `Windows.Media.Playback` | `AVPlayer` with `AVPlayerItemVideoOutput` | GStreamer `playbin` with an app sink |
+| `Windows.Data.Pdf` | PDFium | PDFium |
+| `Windows.Media.Ocr` | Vision (`VNRecognizeTextRequest`) | Tesseract |
+| `FaceDetector` | Vision (`VNDetectFaceRectanglesRequest`) | Decision D5 |
+| SAPI and its speech dictionary | Speech (`SFSpeechRecognizer`, on the device) with contextual strings | Decision D4 |
+| UI Automation, `GetGUIThreadInfo` | Accessibility (`AXUIElement`) | AT-SPI over D-Bus |
+| `SendInput`, `PostMessage` | `CGEventPostToPid` | XTest; the RemoteDesktop portal (focused window only) |
+| PowerPoint through COM | AppleScript (PowerPoint, Keynote) | None |
+| DPAPI | Keychain | Secret Service (over D-Bus) |
+| Registry policies | Managed preferences (a configuration profile) | A file in `/etc` owned by root |
+| The Run key, Start menu install | `SMAppService` login item; a DMG | XDG autostart or the Background portal; Flatpak |
+| Named pipe | A Unix socket in `$TMPDIR`, mode 0600 | A Unix socket in `$XDG_RUNTIME_DIR`, mode 0600 |
+| `dxva2` monitor configuration | Private IOAVService (Apple silicon), I²C (Intel) | `/dev/i2c-*` (as ddcutil does) |
+| `SetThreadExecutionState` | `IOPMAssertion` | The Inhibit portal |
+| `SHQueryUserNotificationState` | None (a reminder only) | The desktop's do not disturb, where offered |
+| Cast (Win+K) | AirPlay (Control Center) | GNOME Network Displays |
+
+### 9.6 Privacy on each system
+
+- **macOS** is stronger than Windows in one way and weaker in another. Stronger: SCP's own captures can leave out whole apps. Never-show apps, SCP's own windows, Finder's desktop icons and sandboxed apps' Open and Save boxes are removed from a whole screen by macOS itself, instead of the picture going black. Weaker: from macOS 15, a window can't keep itself out of other apps' captures. If a meeting shares the presenter's whole Mac screen, it shows SCP's windows (picker, pill, notes) like any others. SCP never opens a window on the TV or over the output, so sharing the output window or the TV's screen, the way SCP is meant to be used (6.4), stays clean, and the share watch (FR-134) warns when a meeting shares the presenter's own screen. Notification banners appear on the main display, so first run checks that the TV isn't it, and the output sits above banners (Q2).
+- **Linux on X11** is close to Windows, except that SCP's windows can't be kept out of other apps' captures (as on macOS).
+- **Linux on Wayland:** the desktop decides what SCP may see. SCP can't keep never-show apps, Open and Save boxes, desktop icons or panels off a whole screen, and FR-139 decides what happens instead. A window shown on its own is as private as anywhere: the desktop sends that window and nothing else.
+
+### 9.7 Requirements (rev 11)
+
+| ID | Requirement | Priority |
+| --- | --- | --- |
+| FR-135 | One shared core: the portable code moves into `ScreenCastPresenter.Core` (net10.0) with no Windows reference, and each system service becomes an interface. The Windows app's behaviour, tests and memory budgets don't change. The core's tests run on Windows, macOS and Linux | Must |
+| FR-136 | Permissions, explained first. Before macOS or a Linux portal asks, one SCP screen says what is needed, why, and what won't work without it: Screen Recording (needed to show anything), Accessibility (password boxes, a browser's page, Open and Save boxes, slide keys, zoom that follows typing), Input Monitoring (shortcuts on the TV), Microphone and Speech Recognition (captions, voice commands, rehearsals), Camera, and Automation (PowerPoint and Keynote notes). Each is asked for when first needed, except Screen Recording, which first run asks for. A permission later taken away is noticed and said. macOS's periodic Screen Recording question is explained before it first comes | Must |
+| FR-137 | Capture on macOS with ScreenCaptureKit: a window on its own, which shows even when covered; a screen, with SCP, never-show apps, Finder's desktop icons and the Open/Save service left out by the content filter; a part of either, for crops; the pointer drawn or left out (FR-24). Frames stay on the GPU (IOSurface to Metal) | Must |
+| FR-138 | Capture on Linux. On Wayland, through the ScreenCast portal: a window or screen picked in the desktop's picker, the pointer as data so SCP can draw it or leave it out, and the restore token kept so favourites and "Show it again" come back without asking where the desktop allows. On X11, windows and screens directly (XComposite, XShm, XFixes for the pointer), as on Windows. The session type decides which is used, and Settings › Advanced says which | Must |
+| FR-139 | Whole screens on Wayland. SCP can't see what's on a screen there, so "Allow whole screens" is off by default (Settings › Privacy, with the reason in one line). When switched on, every time a whole screen is about to be shown SCP says which protections can't work on it (the never-show list, Open and Save boxes, desktop icons, the panel), with "Show it anyway" and "Show a window instead". The organisation can keep it off (FR-109). Windows, pictures, PDFs, videos, cameras and the whiteboard are unaffected | Must |
+| FR-140 | The TV output on macOS and Linux belongs to the capture helper. It is borderless and full screen on the chosen screen (above the menu bar and the Dock on macOS, never a macOS full-screen Space) and black until its first frame, and it fades through black as on Windows (NFR-10 to NFR-16, measured the same way). The window output (FR-11) is an ordinary window that meetings can share | Must |
+| FR-141 | The icon: in the menu bar on macOS, in the tray (StatusNotifierItem) on Linux. Where there's no tray (GNOME without the AppIndicator extension), opening the app again shows the quick panel, and first run says so. On a MacBook whose notch can hide it, first run checks that it shows and says what to do if not | Must |
+| FR-142 | Shortcuts. macOS: the defaults use Control+Option instead of Ctrl+Alt (Command shortcuts belong to apps). Linux on X11: as on Windows. Wayland: through the Global Shortcuts portal where the desktop has one; otherwise Settings shows how to make a desktop shortcut that runs `screencast-presenter --action …`. Conflicts are reported as in FR-21a | Must |
+| FR-143 | Per system. Settings are kept where the system keeps app settings, in the same format. Start at login (FR-42). One copy running, with commands through a socket only the user can open (FR-29, FR-43). The phone's pairing key goes in the Keychain or the Secret Service and is never stored in plain text; without a Secret Service, the phone remote stays off and says why. Organisation rules come from a configuration profile or a file owned by root | Must |
+| FR-144 | What can't be done says so. A feature this system can't do is shown greyed in the menu, the quick panel, Search and help and Settings, with one line saying why (for example "Not on Wayland: ScreenCast Presenter can't see other windows here"). It is never left out silently. The command line exits with 1 and the same line, and `--status` lists it as unavailable | Must |
+| FR-145 | Packages. macOS: one signed and notarized universal app (Apple silicon and Intel) in a DMG. Linux: a Flatpak on Flathub, whose portals suit FR-138, and a tarball for X11 users. Nothing needs admin rights to install | Must |
+| FR-146 | Screen numbers: macOS has none, so SCP numbers screens itself (the main display is 1, then left to right) and Identify (FR-18) shows them. Linux uses the order the desktop gives. One word for a screen everywhere: "Screen 2" | Should |
+
+| ID | Requirement | Target |
+| --- | --- | --- |
+| NFR-17 | Memory on macOS and Linux | Set in P0 from measurements. Aim: idle under 60 MB, presenting under 150 MB for the app and helper together (a UI framework that draws its own controls starts larger than WinForms) |
+| NFR-18 | CPU while presenting 1080p60 on a recent laptop | ≤ 5%, with frames kept on the GPU |
+| NFR-19 | Flashes | Zero in 100 switches on each system, measured as in NFR-16 (FlashCheck made to run on macOS and Linux) |
+| NFR-20 | Added latency | ≤ 2 frames |
+| NFR-21 | Cold start to the icon | ≤ 1.5 s |
+
+### 9.8 Order of building
+
+Estimates assume one developer with a Mac, a Linux PC (GNOME and KDE Plasma, on Wayland and on X11) and a TV at hand. Most of the time goes into checking on real machines, not into writing code.
+
+1. **P0 – Answers from real machines (2 weeks).** A throwaway test app on a Mac and on Linux answers the questions in 9.9: memory of an Avalonia tray app, a ScreenCaptureKit window fading in on a TV (checked with FlashCheck), a portal stream on GNOME and KDE, global shortcuts, notifications over the TV. Exit: every question answered in this section; a go or no-go for each system; NFR-17 to NFR-21 set.
+2. **P1 – The shared core (2 weeks, on Windows).** FR-135. Worth doing even if the port stops here: the core is cleaner and testable on its own. Exit: the Windows app unchanged (the full test suite, the stress harness scenarios and FlashCheck as before); the core builds and its tests pass on macOS and Linux in continuous integration (GitHub Actions: Windows, macOS and Ubuntu runners).
+3. **P2 – macOS: first show (5 weeks).** The Avalonia front end (menu bar icon, quick panel, picker, Settings, messages, first run with permissions), the Swift shim and the Skia stage. Showing a window or a screen on a TV or in a window, with fades, blank, freeze, stop, favourites, previous, shortcuts, the never-show list, the outline and the command line. FR-136, FR-137 and FR-140 to FR-146 for macOS. Exit: UC-01, UC-03 and UC-05 on a Mac with a TV; zero flashes in 100 switches; the icon works on a MacBook with a notch; a signed, notarized DMG runs on a clean Mac.
+4. **P3 – Linux: first show (5 weeks).** The same on Linux: the X11 and Wayland backends, FR-138, FR-139 and FR-141 to FR-145 for Linux. Exit: the same use cases on GNOME (Wayland), KDE Plasma (Wayland) and an X11 session; whole screens refused on Wayland until allowed; the Flatpak installs and runs.
+5. **P4 – Stage tools (4 weeks).** Marks, zoom, the spotlight, the laser, drawing (including on the audience view), the banner, the logo, QR codes, the timer, the night filter, the small picture, split screen, hidden parts, the audience view, the next thing ready and a second TV. Exit: the GPU pixel tests run against the Skia stage on macOS and Linux (nothing under a hidden part in any frame; a busy frame within 16 ms).
+6. **P5 – Recording and media (4 weeks).** Screenshots, recording with sound, background recording, the last minute, chapters, GIFs, cameras, pictures, PDFs, videos, the whiteboard and the room sign. Exit: FR-52 to FR-61 where the table allows; an 8-hour recording plays after the power is cut.
+7. **P6 – Privacy and the room (5 weeks).** Automatic hiding, password boxes, faces, a browser's page only, Open and Save boxes, desktop icons, the taskbar, the share watch, Follow me, captions and voice commands (after D4), the phone remote, notes, PowerPoint and Keynote notes, clicker keys, the TV over the cable, organisation rules. Exit: the privacy, hidden-parts, automatic-hiding, keys, password-box, faces and phone-remote acceptance tests of 8.1, on each system that has the feature (9.4).
+8. **P7 – Release (2 weeks).** An 8-hour soak test on each system, the README and docs/TESTING.md, the Flathub submission, the update check. Exit: every Must requirement in 9.7 passes, and every Same and Changed row in 9.4 works on its system.
+
+That's about 29 weeks, roughly seven months. Continuous integration (from P1) builds all three systems and runs every automated test it can. It can't grant macOS's Screen Recording permission, run a Wayland desktop's picker or drive a TV. Those checks are manual, listed in docs/TESTING.md, and run on a real Mac and a real Linux PC at the end of each milestone (decision D2). The Windows development PC can build the C# for all three systems, but not the Swift shim, and it can't run anything on macOS or Linux.
+
+### 9.9 Questions for P0
+
+| # | Question |
+| --- | --- |
+| Q1 | Does ScreenCaptureKit keep capturing a window that is covered or on another Space, and how soon does the stream end when the window closes? |
+| Q2 | Does a borderless window above the menu bar appear on the TV without a slide or a flash, and does it stay above notification banners and the Dock? |
+| Q3 | How often do macOS 15 and later ask again about Screen Recording for an app that keeps a stream open? Does the system picker (`SCContentSharingPicker`) avoid the question, and at what cost to one-click showing? |
+| Q4 | Can the outline be kept directly above another app's window on macOS, or must it stay on top of everything? How quickly are moves seen? |
+| Q5 | Do PowerPoint and Keynote act on Page Down sent to their process while in the background? |
+| Q6 | Does leaving out Finder's desktop-icon window keep the wallpaper? Does leaving out the Open and Save service hide sandboxed apps' boxes? |
+| Q7 | On GNOME and KDE: does a window stream keep running while the window is covered or on another workspace? Do restore tokens bring back a window (not just a screen) without asking? Does pointer data arrive while the pointer is over the window? |
+| Q8 | Which Linux desktops offer global shortcuts and let an app turn on do not disturb? Does the tray icon show on Ubuntu, Fedora (GNOME) and KDE? |
+| Q9 | Memory and CPU: an idle Avalonia tray app, and the helper at 1080p60, on each system. |
+| Q10 | Tesseract's speed on a 1080p frame (FR-88's rhythm); the speed and accuracy of the D4 candidates on a typical laptop; a decoder for WMV, AVI, MKV and WebM on macOS. |
+| Q11 | Avalonia's own Wayland backend (added in 12.1, still marked experimental) compared with XWayland: placing SCP's windows, keeping them on top, the tray, and the licence that covers it. |
+
+### 9.10 Decisions for the owner
+
+| # | Decision | Options |
+| --- | --- | --- |
+| D1 | The Windows UI | Keep WinForms (recommended until macOS and Linux catch up; meanwhile two UIs share the menu, panel and help plans), or move Windows to Avalonia too (one UI, but the tested Windows app is rebuilt) |
+| D2 | Test machines | Who tests on a Mac and a Linux PC with a TV at the end of each milestone (the development PC can't) |
+| D3 | Accounts | Apple Developer Program membership (needed to sign and notarize; without it macOS blocks the app by default) and a Flathub account |
+| D4 | Captions on Linux | A local open-source recognizer with a model the presenter installs (whisper.cpp: more accurate, heavier; Vosk: lighter), or no captions, voice commands or rehearsal transcripts on Linux |
+| D5 | Faces on Linux | Bundle a small face-detection model and its runtime (several MB), or keep face blurring to Windows and macOS |
+| D6 | Which first | macOS first (recommended: closest to Windows, with far fewer No rows), Linux first, or only one of them |
+
 ## Appendix A. Open-source references
 
 | Project | Why study it | Language | Licence |
@@ -537,6 +830,18 @@ Estimated effort for one developer: about 6 weeks to v1.0.
 | [Magpie](https://github.com/Blinue/Magpie) | Lightweight fullscreen mirroring of a window using WGC, multi-monitor | C++ | GPL-3.0 |
 | [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) | Virtual monitor for the "Zoom screen" output; installable via winget | C++ | MIT |
 | [OBS Studio](https://github.com/obsproject/obs-studio) | Window capture and fullscreen projector patterns (heavy; study, don't copy) | C/C++ | GPL-2.0 |
+
+**(rev 11)** For the macOS and Linux plan (section 9):
+
+| Project | Why study it | Language | Licence |
+| --- | --- | --- | --- |
+| [Avalonia](https://github.com/AvaloniaUI/Avalonia) | The UI for macOS and Linux | C# | MIT (check its Wayland backend's, Q11) |
+| [PDFium](https://pdfium.googlesource.com/pdfium/) | PDF pages on macOS and Linux | C++ | BSD-3-Clause |
+| [Tesseract](https://github.com/tesseract-ocr/tesseract) | Text recognition on Linux | C++ | Apache-2.0 |
+| [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and [Vosk](https://github.com/alphacep/vosk-api) | Offline captions on Linux (D4) | C++ | MIT; Apache-2.0 |
+| [MonitorControl](https://github.com/MonitorControl/MonitorControl) | DDC/CI on Apple silicon Macs | Swift | MIT |
+| [ddcutil](https://github.com/rockowitz/ddcutil) | DDC/CI on Linux | C | GPL-2.0 (study only) |
+| OBS Studio's `mac-capture` and `linux-pipewire` plugins | ScreenCaptureKit and portal capture in practice | C, Objective-C | GPL-2.0 (study only) |
 
 Licence note: MIT code can be reused freely. Reusing GPL code makes SCP GPL. Reusing MS-RL code requires the changed files to stay open source. Studying them and writing your own code avoids all of this.
 
@@ -552,3 +857,5 @@ Licence note: MIT code can be reused freely. Reusing GPL code makes SCP GPL. Reu
 | Tests | xUnit |
 | Publish | Self-contained single-file exe (no trimming; WinForms doesn't support it) |
 | Virtual display | `winget install --id=VirtualDrivers.Virtual-Display-Driver -e` |
+
+**(rev 11, planned)** For macOS and Linux (section 9.3): Avalonia for the UI, SkiaSharp for the stage, a Swift package with a C interface for macOS's frameworks, Tmds.DBus.Protocol for Linux's portals, AT-SPI and Secret Service, GStreamer for Linux media, PDFium and Tesseract. Published as a signed, notarized universal app in a DMG, and as a Flatpak.

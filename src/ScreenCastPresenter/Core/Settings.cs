@@ -23,16 +23,45 @@ internal sealed class Favourite
     /// <summary>Set when the favourite is a picture file (FR-103): its full path; <see cref="Title"/> is its name.</summary>
     public string? PicturePath { get; set; }
 
+    /// <summary>Set when the favourite is a video file (FR-116): its full path.</summary>
+    public string? VideoPath { get; set; }
+
+    /// <summary>Set when the favourite is a PDF (FR-115): its full path, and the page it was on (from 1).</summary>
+    public string? DocumentPath { get; set; }
+    public int DocumentPage { get; set; } = 1;
+
+    /// <summary>How long this should take when shown (FR-121), in minutes; 0 for no time.</summary>
+    public int Minutes { get; set; }
+
+    /// <summary>Set when the favourite is something made on this PC rather than a file or window: "Whiteboard" or "RoomSign".</summary>
+    public string? Special { get; set; }
+
+    public const string WhiteboardSpecial = "Whiteboard", RoomSignSpecial = "RoomSign";
+
+    /// <summary>The rev 10 parts made sensible: a budget in range, a page from 1, blank paths gone.</summary>
+    public void NormalizeRev10()
+    {
+        Minutes = SectionClock.Normalize(Minutes);
+        DocumentPage = Math.Max(1, DocumentPage);
+        if (string.IsNullOrWhiteSpace(VideoPath)) VideoPath = null;
+        if (string.IsNullOrWhiteSpace(DocumentPath)) DocumentPath = null;
+        Special = string.Equals(Special, WhiteboardSpecial, StringComparison.OrdinalIgnoreCase) ? WhiteboardSpecial
+            : string.Equals(Special, RoomSignSpecial, StringComparison.OrdinalIgnoreCase) ? RoomSignSpecial : null;
+    }
+
     /// <summary>The same source: the same screen, the same camera, the same picture, or the same app with the same or a similar title.</summary>
     public bool Matches(Favourite other) =>
-        PicturePath is not null || other.PicturePath is not null ? string.Equals(PicturePath, other.PicturePath, StringComparison.OrdinalIgnoreCase)
+        Special is not null || other.Special is not null ? string.Equals(Special, other.Special, StringComparison.OrdinalIgnoreCase)
+        : DocumentPath is not null || other.DocumentPath is not null ? string.Equals(DocumentPath, other.DocumentPath, StringComparison.OrdinalIgnoreCase)
+        : VideoPath is not null || other.VideoPath is not null ? string.Equals(VideoPath, other.VideoPath, StringComparison.OrdinalIgnoreCase)
+        : PicturePath is not null || other.PicturePath is not null ? string.Equals(PicturePath, other.PicturePath, StringComparison.OrdinalIgnoreCase)
         : ScreenDevice is not null || other.ScreenDevice is not null ? ScreenDevice == other.ScreenDevice
         : CameraId is not null || other.CameraId is not null ? CameraId == other.CameraId
         : string.Equals(AppName, other.AppName, StringComparison.OrdinalIgnoreCase) && (Title == other.Title || FavouriteMatcher.IsSimilar(Title, other.Title));
 }
 
 /// <summary>Everything SCP remembers (FR-40/41). Unknown JSON fields are ignored, missing ones get defaults.</summary>
-internal sealed class AppSettings
+internal sealed partial class AppSettings
 {
     public const int SlotCount = 9;
     public const double MaxDim = 0.4;
@@ -301,6 +330,106 @@ internal sealed class AppSettings
     /// <summary>The phone remote's pairing key, encrypted for this Windows user (DPAPI); null = not paired.</summary>
     public string? RemoteKey { get; set; }
 
+    // ───────────── rev 10 (FR-112 to FR-134) ─────────────
+
+    /// <summary>A whole screen shown stops short of its taskbar (FR-112).</summary>
+    public bool LeaveOutTaskbar { get; set; } = true;
+
+    /// <summary>Desktop icons are hidden while a whole screen is shown (FR-113).</summary>
+    public bool HideDesktopIcons { get; set; } = true;
+
+    /// <summary>This app hid the desktop icons and hasn't shown them again yet (put right at the next start after a crash).</summary>
+    public bool DesktopIconsHidden { get; set; }
+
+    /// <summary>A whole screen shown cuts to black while an Open or Save box is on it (FR-114).</summary>
+    public bool HoldForFileBoxes { get; set; } = true;
+
+    /// <summary>Say when a meeting app shares a whole screen rather than the Zoom screen (FR-134).</summary>
+    public bool WarnWholeScreenShare { get; set; } = true;
+
+    /// <summary>A browser shown shows only its page: tabs, address bar and bookmarks are left out (FR-133).</summary>
+    public bool BrowserPageOnly { get; set; } = true;
+
+    /// <summary>Apps Follow me shows when the presenter switches to them (FR-119).</summary>
+    public List<string> FollowMeApps { get; set; } = [];
+
+    /// <summary>Page Down and Page Up go to what's shown while presenting, wherever the presenter is working (FR-132).</summary>
+    public bool ClickerKeys { get; set; }
+
+    /// <summary>The arrow keys go to what's shown too (they're also used for typing, so off unless chosen).</summary>
+    public bool ClickerArrows { get; set; }
+
+    /// <summary>The timer on the TV (FR-120): its last length and words.</summary>
+    public int TimerMinutes { get; set; } = ActivityTimer.DefaultMinutes;
+    public string TimerLabel { get; set; } = ActivityTimer.DefaultLabel;
+
+    /// <summary>The night filter (FR-123): Off, Soften or Invert.</summary>
+    public string NightFilter { get; set; } = nameof(NightMode.Off);
+
+    /// <summary>The small picture's shape (FR-118): Rectangle, Rounded or Circle.</summary>
+    public string InsetShape { get; set; } = nameof(Core.InsetShape.Rectangle);
+
+    /// <summary>The speaker's screen (FR-124): its device name; null for none.</summary>
+    public string? SpeakerScreenDevice { get; set; }
+
+    /// <summary>PowerPoint's own notes for the slide shown join the presenter's notes (FR-122).</summary>
+    public bool PowerPointNotes { get; set; } = true;
+
+    /// <summary>Names and words live captions should know (FR-128): product names, people, places.</summary>
+    public List<string> CaptionWords { get; set; } = [];
+
+    /// <summary>Words a captions helper added to Windows' speech dictionary and hasn't been seen to take out yet (taken out at the next start).</summary>
+    public List<string> CaptionWordsInWindows { get; set; } = [];
+
+    /// <summary>The room sign (FR-125): the room's name on it, and whether meeting titles show (off: just "Booked").</summary>
+    public string RoomSignName { get; set; } = "";
+    public bool RoomSignTitles { get; set; }
+
+    /// <summary>The whiteboard is light (white, like a real one) rather than dark (FR-117).</summary>
+    public bool WhiteboardLight { get; set; }
+
+    /// <summary>Folders last chosen from, offered again.</summary>
+    public string? LastDocumentFolder { get; set; }
+    public string? LastVideoFolder { get; set; }
+
+    [JsonIgnore]
+    public NightMode Night
+    {
+        get => Core.NightFilter.Parse(NightFilter);
+        set => NightFilter = value.ToString();
+    }
+
+    [JsonIgnore]
+    public Core.InsetShape InsetShapeMode
+    {
+        get => InsetShapes.Parse(InsetShape);
+        set => InsetShape = value.ToString();
+    }
+
+    /// <summary>The rev 10 settings made sensible (from a hand-edited or older file).</summary>
+    private void NormalizeRev10()
+    {
+        FollowMeApps = FollowMe.Normalize(FollowMeApps, NeverShowApps);
+        TimerMinutes = ActivityTimer.Normalize(TimerMinutes);
+        TimerLabel = ActivityTimer.TidyLabel(TimerLabel);
+        NightFilter = Night.ToString();
+        InsetShape = InsetShapeMode.ToString();
+        if (string.IsNullOrWhiteSpace(SpeakerScreenDevice)) SpeakerScreenDevice = null;
+        CaptionWords = CaptionVocabulary.Normalize(CaptionWords);
+        CaptionWordsInWindows = CaptionVocabulary.Normalize(CaptionWordsInWindows);
+        RoomSignName = InkStroke.TidyText(RoomSignName ?? "", RoomSign.MaxName).Trim();
+        LastDocumentFolder = string.IsNullOrWhiteSpace(LastDocumentFolder) ? null : LastDocumentFolder.Trim();
+        LastVideoFolder = string.IsNullOrWhiteSpace(LastVideoFolder) ? null : LastVideoFolder.Trim();
+        foreach (Favourite? f in Favourites) f?.NormalizeRev10();
+        foreach (Scene? sc in Scenes)
+        {
+            if (sc is null) continue;
+            sc.Source?.NormalizeRev10();
+            sc.InsetShape = InsetShapes.Parse(sc.InsetShape).ToString();
+            sc.Night = sc.Night is null ? null : Core.NightFilter.Parse(sc.Night).ToString();
+        }
+    }
+
     [JsonIgnore]
     public SensitiveKinds AutoHideKinds
     {
@@ -431,6 +560,7 @@ internal sealed class AppSettings
         CaptionLook = CaptionLook;
         if (RemotePort is < 1024 or > 65535) RemotePort = Remote.RemoteServer.DefaultPort;
         if (string.IsNullOrWhiteSpace(RemoteKey)) RemoteKey = null;
+        NormalizeRev10();
         BlankMessage = string.IsNullOrWhiteSpace(BlankMessage) ? "We'll be right back" : BlankMessage.Trim();
         if (BlankMessage.Length > MaxMessageLength) BlankMessage = BlankMessage[..MaxMessageLength];
         return this;

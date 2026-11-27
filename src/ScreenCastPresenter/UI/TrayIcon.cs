@@ -74,7 +74,7 @@ internal sealed class TrayIcon : IDisposable
             Session = s.State,
             Blanked = s.IsBlanked,
             Frozen = s.IsFrozen,
-            Cropped = s.Source?.Crop is not null,
+            Cropped = s.Source?.ChosenCrop is not null,
             Status = StatusText(s),
             Where = _app.AudienceScreenName,
             Recording = r.Status,
@@ -113,6 +113,16 @@ internal sealed class TrayIcon : IDisposable
             PlaylistPlaying = _app.PlayingOn(PlaylistScreen.Main) is not null || _app.PlayingOn(PlaylistScreen.Second) is not null,
             PhoneRemote = _app.PhoneRemoteOn,
             AutoHide = _app.Settings.AutoHideKinds != SensitiveKinds.None,
+            FollowMe = _app.FollowMeOn,
+            TimerOn = _app.TimerOn,
+            Night = _app.Settings.Night,
+            InsetShape = _app.Settings.InsetShapeMode,
+            SpeakerScreen = _app.SpeakerScreenOpen,
+            Rehearsing = _app.Rehearsing,
+            ClickerKeys = _app.Settings.ClickerKeys,
+            BoardOut = _app.BoardOut,
+            Page = s.Source is { IsDocument: true } doc ? doc.Page : 0,
+            Pages = s.Source is { IsDocument: true } pdf ? pdf.Pages : 0,
         };
     }
 

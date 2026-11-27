@@ -44,7 +44,7 @@ internal static unsafe class Mp4Joiner
             for (int i = 0; i < parts.Count; i++)
             {
                 string part = parts[i];
-                PInvoke.MFCreateSourceReaderFromURL(part, null, out IMFSourceReader reader).ThrowOnFailure();
+                MediaFiles.OpenReader(part, null, out IMFSourceReader reader).ThrowOnFailure();
                 try
                 {
                     if (raw == 0)

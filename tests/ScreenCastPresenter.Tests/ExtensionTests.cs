@@ -6,6 +6,7 @@ using ScreenCastPresenter.Core;
 namespace ScreenCastPresenter.Tests;
 
 /// <summary>Automatic hiding of keys and passwords, and of the presenter's own words (FR-88, extended).</summary>
+[Collection(SpeedCollection.Name)] // holds a timing test: never beside busy tests
 public class SecretsAndOwnWordsTests
 {
     /// <summary>A line of words, each 10 pixels wide per letter, one pixel apart, 20 high.</summary>

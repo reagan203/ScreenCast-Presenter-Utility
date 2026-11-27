@@ -22,6 +22,17 @@ internal static class SlideKeys
         if (window == 0 || !PInvoke.IsWindow((HWND)window)) return false;
         VIRTUAL_KEY key = forward ? Next : Previous;
         if (PInvoke.GetForegroundWindow() == (HWND)window) return Type(key);
+        return Post(window, forward);
+    }
+
+    /// <summary>
+    /// Posted straight to <paramref name="window"/>, even when it's in front: used for keys taken
+    /// as clicker keys (FR-132), which would be taken again if they were typed.
+    /// </summary>
+    public static bool Post(nint window, bool forward)
+    {
+        if (window == 0 || !PInvoke.IsWindow((HWND)window)) return false;
+        VIRTUAL_KEY key = forward ? Next : Previous;
         // Posted: the scan code and "extended key" bit as a real key press has them.
         uint scan = PInvoke.MapVirtualKey((uint)key, MAP_VIRTUAL_KEY_TYPE.MAPVK_VK_TO_VSC);
         nint down = (nint)(1 | (scan << 16) | (1 << 24)), up = (nint)(down | unchecked((int)0xC0000000));

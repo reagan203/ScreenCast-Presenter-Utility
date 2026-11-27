@@ -49,12 +49,18 @@ internal static class CommandLine
     {
         QuietStartSwitch,
         Capture.CaptureProtocol.HostSwitch, Capture.CaptureProtocol.StillSwitch, Capture.CaptureProtocol.CheckSwitch, Recording.RecordingProtocol.RecordSwitch,
+        Capture.CaptureProtocol.PdfSwitch, Capture.CaptureProtocol.ReadTextSwitch, Capture.CaptureProtocol.GifSwitch,
         Installer.UninstallSwitch, StartupRegistration.StartupSwitch, UpdateCheck.Switch, LiveCaptions.Switch, Remote.RemoteHost.Switch,
     };
 
     /// <summary>What "--on NAME" and "--off NAME" switch: set exactly, so a button deck can't get out of step.</summary>
     public static readonly IReadOnlyList<string> Switches =
-        ["spotlight", "caption", "live-captions", "auto-hide", "laser", "highlight-clicks", "pointer-ring", "phone-remote", "audience-view", "outline", "badge", "widget", "show-keys", "replay", "voice-commands", "notes"];
+        ["spotlight", "caption", "live-captions", "auto-hide", "laser", "highlight-clicks", "pointer-ring", "phone-remote", "audience-view", "outline", "badge", "widget", "show-keys", "replay", "voice-commands", "notes",
+         "follow-me", "timer", "night-filter", "clicker-keys", "speaker-screen", "rehearse"];
+
+    /// <summary>What "--is NAME" and "--status" report (FR-129): every switch, and what's happening.</summary>
+    public static readonly IReadOnlyList<string> StatusNames =
+        [.. Switches, "showing", "blank", "freeze", "recording", "whiteboard", "split-screen", "inset", "qr", "zoom", "draw"];
 
     private static readonly Dictionary<string, string> Simple = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -67,6 +73,11 @@ internal static class CommandLine
         ["--stop-recording"] = "stop-recording",
         ["--screenshot"] = "screenshot",
         ["--choose"] = "picker",
+        ["--status"] = "cli:status",
+        ["--whiteboard"] = "show-whiteboard",
+        ["--room-sign"] = "room-sign",
+        ["--copy-text"] = "copy-text",
+        ["--cast"] = "cast",
     };
 
     public const string Usage =
@@ -104,10 +115,23 @@ internal static class CommandLine
           --split "text"               show the window whose app or title contains the text beside what's shown
                                        ("--split off" goes back to one picture)
           --layout NAME                split screen's layout: side-by-side, stacked, grid or focus
+          --pdf "file" [--page N]      show a PDF, from page N (next and previous slide turn its pages)
+          --video "file"               play a video (MP4, MOV, WMV…) with its sound
+          --whiteboard                 a blank board to draw on
+          --room-sign                  the room's bookings from its calendar file
+          --timer N | off              a timer of N minutes in a corner of the TV
+          --night off|soften|invert    the night filter for a dark room
+          --copy-text                  copy the text in what's shown
+          --gif "recording.mp4"        make a short GIF of a recording's start, beside it
+          --cast                       open Windows' Cast list to connect a wireless TV
           --on NAME, --off NAME        switch one of these on or off (nothing happens if it already is):
                                        spotlight, caption, live-captions, auto-hide, laser, highlight-clicks,
                                        pointer-ring, phone-remote, audience-view, outline, badge, widget, show-keys,
-                                       replay (keep the last minute), voice-commands, notes
+                                       replay (keep the last minute), voice-commands, notes, follow-me, timer,
+                                       night-filter, clicker-keys, speaker-screen, rehearse
+          --is NAME                    exit code 0 when NAME is on, 1 when it's off (any --on name, or showing,
+                                       blank, freeze, recording, whiteboard, split-screen, inset, qr, zoom, draw)
+          --status                     what's on now, as JSON (for button decks and scripts)
           --tv on|off                  turn the TV on or off over the cable (when it takes it)
           --tv-input NAME              switch the TV to an input: hdmi1, hdmi2, dp1, usb-c…
           --export-settings "file"     save the settings to a file (to set up another PC the same way)
@@ -294,6 +318,58 @@ internal static class CommandLine
                     if (what is null)
                         return (null, $"{name} needs one of: {string.Join(", ", Switches)}{(v is null ? "" : $" (got “{v}”)")}.");
                     actions.Add((name.Equals("--on", StringComparison.OrdinalIgnoreCase) ? "cli:on:" : "cli:off:") + what);
+                    break;
+                }
+                case "--is":
+                {
+                    string? v = NextValue();
+                    string? what = v is null ? null : StatusNames.FirstOrDefault(s => s.Equals(v, StringComparison.OrdinalIgnoreCase));
+                    if (what is null) return (null, $"--is needs one of: {string.Join(", ", StatusNames)}{(v is null ? "" : $" (got “{v}”)")}.");
+                    actions.Add("cli:is:" + what);
+                    break;
+                }
+                case "--pdf" or "--video" or "--gif":
+                {
+                    string? v = NextValue();
+                    string kind = name.ToLowerInvariant()[2..];
+                    if (v is null) return (null, $"{name} needs a file, e.g. {name} \"{(kind == "pdf" ? "C:\\Handouts\\agenda.pdf" : "C:\\Videos\\intro.mp4")}\".");
+                    string full;
+                    try
+                    {
+                        full = Path.GetFullPath(v);
+                    }
+                    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+                    {
+                        return (null, $"“{v}” isn't a file name.");
+                    }
+                    if (kind == "pdf" && !PdfPages.IsPdf(full)) return (null, $"--pdf needs a PDF file (got “{v}”).");
+                    if (kind == "video" && !VideoSource.IsVideo(full)) return (null, $"--video needs an MP4, MOV, WMV, AVI, MKV or WebM file (got “{v}”).");
+                    if (kind == "gif" && !string.Equals(Path.GetExtension(full), ".mp4", StringComparison.OrdinalIgnoreCase)) return (null, $"--gif needs an MP4 recording (got “{v}”).");
+                    actions.Add($"cli:{kind}:" + full);
+                    break;
+                }
+                case "--page":
+                {
+                    string? v = NextValue();
+                    if (v is null || !IsNumberIn(v, 1, 100_000)) return (null, $"--page needs a page number, like --page 3{(v is null ? "" : $" (got “{v}”)")}.");
+                    int at = actions.FindLastIndex(a => a.StartsWith("cli:pdf:", StringComparison.Ordinal));
+                    if (at < 0) return (null, "--page goes after --pdf, e.g. --pdf \"agenda.pdf\" --page 3.");
+                    actions[at] = "cli:pdf-page:" + v + ":" + actions[at]["cli:pdf:".Length..];
+                    break;
+                }
+                case "--timer":
+                {
+                    string? v = NextValue();
+                    if (v is not null && v.Equals("off", StringComparison.OrdinalIgnoreCase)) actions.Add("cli:timer-off");
+                    else if (v is not null && IsNumberIn(v, 1, ActivityTimer.MaxMinutes)) actions.Add("timer:" + v);
+                    else return (null, $"--timer needs minutes from 1 to {ActivityTimer.MaxMinutes}, or “off”{(v is null ? "" : $" (got “{v}”)")}.");
+                    break;
+                }
+                case "--night":
+                {
+                    string? v = NextValue()?.ToLowerInvariant();
+                    if (v is not ("off" or "soften" or "invert")) return (null, "--night needs off, soften or invert.");
+                    actions.Add("night:" + v);
                     break;
                 }
                 case "--action":

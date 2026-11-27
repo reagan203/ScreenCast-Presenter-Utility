@@ -45,9 +45,12 @@ internal interface IOutputSurface : IDisposable
 
     /// <summary>
     /// The size of what is shown (null: nothing, or unknown). A floating window takes its shape,
-    /// so there are no black bars; a full-screen output ignores it.
+    /// so there are no black bars; a full-screen output ignores it. <paramref name="now"/>: at once,
+    /// for a switch or a new crop (the picture is black or changes at that moment, so the window must
+    /// match it then, not a moment into the fade-in); otherwise at most every 150 ms, for a source
+    /// that's being resized.
     /// </summary>
-    void SetContentAspect(Size? content);
+    void SetContentAspect(Size? content, bool now = false);
 
     /// <summary>
     /// A floating window steps behind other windows (true) or comes back to the front (false),

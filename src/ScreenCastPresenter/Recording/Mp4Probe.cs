@@ -17,7 +17,7 @@ internal sealed record Mp4Info(TimeSpan Duration, int Width, int Height, bool Ha
         MediaFoundation.Start();
         try
         {
-            PInvoke.MFCreateSourceReaderFromURL(path, null, out IMFSourceReader reader).ThrowOnFailure();
+            MediaFiles.OpenReader(path, null, out IMFSourceReader reader).ThrowOnFailure();
             try
             {
                 Guid key = PInvoke.MF_PD_DURATION;
@@ -45,7 +45,7 @@ internal sealed record Mp4Info(TimeSpan Duration, int Width, int Height, bool Ha
         MediaFoundation.Start();
         try
         {
-            PInvoke.MFCreateSourceReaderFromURL(path, null, out IMFSourceReader reader).ThrowOnFailure();
+            MediaFiles.OpenReader(path, null, out IMFSourceReader reader).ThrowOnFailure();
             try
             {
                 int frames = 0;

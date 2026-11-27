@@ -48,12 +48,26 @@ internal sealed class InsetFeed : IDisposable
     /// <summary>Why the small picture can't go on (closed, unplugged); null while it's fine.</summary>
     public string? Failure => _cameraProblem ?? _camera?.Failure ?? (_closed ? $"“{(_source.Title.Length > 0 ? _source.Title : "The small picture")}” closed, so the small picture was taken off." : null);
 
-    /// <summary>The part of a frame to show: a window's client area, or everything.</summary>
-    public Rectangle ContentArea => _source.IsWindow ? Direct3D.ClientAreaInFrame(_source.Handle, Size) : new Rectangle(System.Drawing.Point.Empty, Size);
+    /// <summary>All of the picture: a window's client area, or the whole frame. Hidden parts and what automatic hiding finds are kept as parts of this.</summary>
+    public Rectangle WholeArea => _source.IsWindow ? Direct3D.ClientAreaInFrame(_source.Handle, Size) : new Rectangle(System.Drawing.Point.Empty, Size);
+
+    /// <summary>The part of a frame to show: <see cref="WholeArea"/>, or for a screen with its taskbar left out (FR-112) the part clear of it.</summary>
+    public Rectangle ContentArea
+    {
+        get
+        {
+            Rectangle whole = WholeArea;
+            if (!_source.IsScreen || _source.Crop is not { } part || whole.Width <= 0 || whole.Height <= 0) return whole;
+            Rectangle r = part.ToPixels(whole.Size);
+            r.Offset(whole.Location);
+            return r;
+        }
+    }
 
     /// <summary>Starts capturing <paramref name="source"/>. Throws <see cref="InvalidOperationException"/> (plain words) when it can't.</summary>
     public static InsetFeed Start(Interop.SourceWindow source, ID3D11Device device, IDirect3DDevice? winrtDevice, ID2D1DeviceContext dc, Action wake)
     {
+        if (source.IsVideo) throw new InvalidOperationException("A video can only be the main picture, not a small one or one beside it.");
         var feed = new InsetFeed(source, device, dc);
         try
         {

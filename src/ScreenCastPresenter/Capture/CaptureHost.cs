@@ -30,6 +30,9 @@ internal static class CaptureHost
     private static readonly StreamReader Input = new(Console.OpenStandardInput(), new System.Text.UTF8Encoding(false), detectEncodingFromByteOrderMarks: true);
     private static readonly StreamWriter Output = new(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { NewLine = "\n" };
 
+    /// <summary>The exe that runs as a helper: this one, or ScreenCast Presenter's own when tests set it (they run in a test host).</summary>
+    public static string HelperPath => RemoteWgcEngine.HelperExe ?? Environment.ProcessPath ?? "ScreenCastPresenter.exe";
+
     /// <summary>Stream settings for SCP's side of the pipe, matching the helper's.</summary>
     public static void UseUtf8(ProcessStartInfo info)
     {
@@ -47,6 +50,9 @@ internal static class CaptureHost
             {
                 CaptureProtocol.StillSwitch => RunStill(args),
                 CaptureProtocol.CheckSwitch => RunCheck(args),
+                CaptureProtocol.PdfSwitch => PdfRenderer.Run(args, Send),
+                CaptureProtocol.ReadTextSwitch => ScreenText.Run(args, Send),
+                CaptureProtocol.GifSwitch => GifMaker.Run(args, Send),
                 Recording.RecordingProtocol.RecordSwitch => RunRecorder(),
                 _ => RunPresenter(),
             };
@@ -92,6 +98,7 @@ internal static class CaptureHost
         using var engine = new WgcEngine(start[3] == "1", start[4] == "1", autoHide, autoStyle, start.Length > 10 ? SensitiveText.ParseWordsToken(start[10]) : null);
         engine.InsetFailed += (_, reason) => Send("inset-failed " + reason);
         engine.AutoHidden += (_, words) => Send("autohid " + words);
+        engine.VideoEvent += (_, what) => Send("video-event " + what);
         engine.Failed += (_, reason) =>
         {
             Send("failed " + reason);
@@ -215,6 +222,15 @@ internal static class CaptureHost
                 else engine.HiddenFor(other, [], RedactStyle.Solid);
                 return true;
             }
+            case "timer" when p.Length > 1:
+                if (CaptureProtocol.ParseTimer(line[6..]) is { } timer) engine.Timer(timer.Text, timer.Corner, timer.Up);
+                else engine.Timer(null, InsetCorner.TopLeft, false);
+                return true;
+            case "night" when p.Length > 1: engine.Night(CaptureProtocol.ParseNight(p[1])); return true;
+            case "inset-shape" when p.Length > 1: engine.InsetShape(CaptureProtocol.ParseInsetShape(p[1])); return true;
+            case "video" when p.Length > 1:
+                if (CaptureProtocol.ParseVideo(line[6..]) is { } video) engine.Video(video.Command, video.Seconds);
+                return true;
             case "ink-remove" when p.Length > 1: engine.InkRemove(CaptureProtocol.ParseInt(p[1])); return true;
             case CaptureProtocol.InkClear: engine.InkClear(); return true;
             case "inset" when p.Length > 1:

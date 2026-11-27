@@ -52,6 +52,7 @@ internal sealed class EffectsLayer : IDisposable
     private (string Text, InsetCorner Corner, bool[,] Modules)? _qr;
     private string? _live;
     private string _qrLabel = "";
+    private (string Text, InsetCorner Corner, bool Up)? _timer;
 
     /// <summary>The label under a QR code is cut to this many characters.</summary>
     public const int QrLabelLength = 40;
@@ -148,6 +149,10 @@ internal sealed class EffectsLayer : IDisposable
     /// <summary>Live captions' size and place (FR-89).</summary>
     public void CaptionStyle(CaptionLook look) => Change(() => _look = look);
 
+    /// <summary>A timer in a corner (FR-120): "Exercise 4:59"; null takes it off.</summary>
+    public void Timer(string? text, InsetCorner corner, bool up) => Change(() =>
+        _timer = text is { Length: > 0 } ? (InkStroke.TidyText(text, 60), corner, up) : null);
+
     /// <summary>A shortcut the presenter pressed (FR-101), shown along the bottom; null takes it off.</summary>
     public void KeyCombo(string? text) => Change(() => _keys = text is { Length: > 0 } ? text : null);
 
@@ -232,7 +237,7 @@ internal sealed class EffectsLayer : IDisposable
     {
         get
         {
-            lock (_sync) return _caption is not null || _qr is not null || _live is not null;
+            lock (_sync) return _caption is not null || _qr is not null || _live is not null || _timer is not null;
         }
     }
 
@@ -379,8 +384,10 @@ internal sealed class EffectsLayer : IDisposable
         (string Text, InsetCorner Corner, bool[,] Modules)? qr;
         string? live, keys;
         CaptionLook look;
+        (string Text, InsetCorner Corner, bool Up)? timer;
         lock (_sync)
         {
+            timer = _timer;
             caption = _caption;
             captionShown = _captionShown;
             changed = _captionChanged;
@@ -392,7 +399,7 @@ internal sealed class EffectsLayer : IDisposable
         if (liveAlpha <= 0.001f) live = keys = null; // with the picture only, never on a break screen
         float fade = Math.Clamp((float)(Age(changed, now) / BannerFade), 0, 1);
         float bannerAlpha = caption is not null ? fade : 1 - fade;
-        if (bannerAlpha <= 0.001f && qr is null && live is null && keys is null) return;
+        if (bannerAlpha <= 0.001f && qr is null && live is null && keys is null && timer is null) return;
         EnsureResources(dc, factory);
         float h = canvas.Height, w = canvas.Width;
 
@@ -443,6 +450,17 @@ internal sealed class EffectsLayer : IDisposable
             dc.DrawRoundedRectangle(new RoundedRectangle(new System.Drawing.RectangleF(chip.X, chip.Y, chip.Width, chip.Height), h * 0.012f, h * 0.012f), _brush!, Math.Max(1.5f, h * 0.003f));
             SetColour(Color.White, liveAlpha);
             dc.DrawText(keys, format, new Rect(chip.X, chip.Y + (chip.Height - h * 0.052f) / 2, chip.Width, h * 0.056f), _brush!);
+        }
+
+        if (timer is { } t)
+        {
+            // A timer chip (FR-120): white on black while it runs, amber words when time's up.
+            IDWriteTextFormat format = Format(dwrite, h * 0.045f, bold: true, centred: true);
+            RectangleF chip = ActivityTimer.Chip(canvas, t.Corner, Measure(dwrite, t.Text, format, w), bottomLimit, topLimit);
+            SetColour(Color.Black, 0.74f);
+            dc.FillRoundedRectangle(new RoundedRectangle(new System.Drawing.RectangleF(chip.X, chip.Y, chip.Width, chip.Height), h * 0.014f, h * 0.014f), _brush!);
+            SetColour(t.Up ? EffectStyle.ClickPrimary : Color.White, 1);
+            dc.DrawText(t.Text, format, new Rect(chip.X, chip.Y + (chip.Height - h * 0.058f) / 2, chip.Width, h * 0.062f), _brush!);
         }
 
         if (qr is { } code)

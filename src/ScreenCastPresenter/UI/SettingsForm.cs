@@ -174,31 +174,121 @@ internal sealed class SettingsForm : ThemedForm
         }
     }
 
+    private bool _refreshQueued;
+
     private void OnSettingsChanged(object? sender, EventArgs e)
     {
-        if (IsDisposed) return;
-        // Something changed elsewhere (tray, shortcut): show the current values, keeping focus where it is.
-        if (!ContainsFocus || ActiveControl is not TextBox) Rebuild();
+        if (IsDisposed || _refreshQueued) return;
+        if (!IsHandleCreated)
+        {
+            Rebuild();
+            return;
+        }
+        // Something was saved (here, from the tray, a shortcut, the app itself): show the current
+        // values. Once the click or key that caused it has finished, never in the middle of it, and
+        // once for a burst of saves. Focus stays where it is.
+        _refreshQueued = true;
+        BeginInvoke(() =>
+        {
+            _refreshQueued = false;
+            if (!IsDisposed && (!ContainsFocus || ActiveControl is not TextBox)) Rebuild();
+        });
     }
 
+    /// <summary>The page being made, before it takes the place of the one showing (null: none).</summary>
+    private List<Control>? _page;
+
+    /// <summary>
+    /// Makes the page again from the current settings. It's made off screen first and compared with
+    /// the one showing: when it reads the same (most saves, e.g. the switch just flipped), the page
+    /// on screen is left exactly as it is. Otherwise it replaces it in one go, drawn once, at the
+    /// same place on the page and with focus on the same control. (Torn down and rebuilt on every
+    /// save, with the window's backdrop applied again, the page flickered and jumped.)
+    /// </summary>
     private void Rebuild()
     {
-        _rows.SuspendLayout();
-        foreach (Control old in _rows.Controls.Cast<Control>().ToList()) old.Dispose(); // Clear() alone would leak handles
-        _rows.Controls.Add(new Label { Text = Label(_section), Font = _titleFont, AutoSize = true, UseMnemonic = false, Margin = new Padding(0, 0, 0, 8) });
-        switch (_section)
+        if (IsDisposed) return;
+        var page = new List<Control>();
+        _page = page;
+        try
         {
-            case Section.General: BuildGeneral(); break;
-            case Section.Output: BuildOutput(); break;
-            case Section.Recording: BuildRecording(); break;
-            case Section.Appearance: BuildAppearance(); break;
-            case Section.Privacy: BuildPrivacy(); break;
-            case Section.Rooms: BuildRooms(); break;
-            case Section.Advanced: BuildAdvanced(); break;
+            page.Add(new Label { Text = Label(_section), Font = _titleFont, AutoSize = true, UseMnemonic = false, Margin = new Padding(0, 0, 0, 8) });
+            switch (_section)
+            {
+                case Section.General: BuildGeneral(); break;
+                case Section.Output: BuildOutput(); break;
+                case Section.Recording: BuildRecording(); break;
+                case Section.Appearance: BuildAppearance(); break;
+                case Section.Privacy: BuildPrivacy(); break;
+                case Section.Rooms: BuildRooms(); break;
+                case Section.Advanced: BuildAdvanced(); break;
+            }
         }
-        _rows.ResumeLayout();
-        ApplyPalette(Theme.Current);
-        LayoutRows();
+        finally
+        {
+            _page = null;
+        }
+        if (_rows.Controls.Count > 0 && PageText(page) == PageText(_rows.Controls.Cast<Control>()))
+        {
+            foreach (Control unused in page) unused.Dispose();
+            return;
+        }
+        Point scroll = _content.AutoScrollPosition;
+        string? focused = ContainsFocus && ActiveControl is { } active && _rows.Contains(active) ? FocusName(active) : null;
+        using (new PaintPause(_content))
+        {
+            _rows.SuspendLayout();
+            foreach (Control old in _rows.Controls.Cast<Control>().ToList()) old.Dispose(); // Clear() alone would leak handles
+            _rows.Controls.AddRange([.. page]);
+            _rows.ResumeLayout();
+            RecolourPage(Theme.Current);
+            LayoutRows();
+            _content.AutoScrollPosition = new Point(-scroll.X, -scroll.Y); // the same place on the page
+            if (focused is not null && FindByName(_rows, focused) is { CanFocus: true } again) again.Focus();
+        }
+        RebuildCount++;
+    }
+
+    /// <summary>How many times the page on screen was replaced (for tests).</summary>
+    internal int RebuildCount { get; private set; }
+
+    /// <summary>Adds to the page being made.</summary>
+    private void Place(Control control)
+    {
+        if (_page is not null) _page.Add(control);
+        else _rows.Controls.Add(control);
+    }
+
+    /// <summary>Everything a page shows, as text: two pages that read the same look the same.</summary>
+    internal static string PageText(IEnumerable<Control> controls)
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (Control control in controls) Describe(control, text);
+        return text.ToString();
+    }
+
+    private static void Describe(Control control, System.Text.StringBuilder text)
+    {
+        text.Append(control.GetType().Name).Append('\u001f').Append(control.Text).Append('\u001f').Append(control.AccessibleName)
+            .Append('\u001f').Append(control.Enabled ? '1' : '0');
+        if (control is ToggleSwitch toggle) text.Append(toggle.Checked ? "\u001fon" : "\u001foff");
+        if (control is PillButton pill) text.Append('\u001f').Append(pill.Kind).Append('\u001f').Append(pill.Detail);
+        text.Append('{');
+        foreach (Control child in control.Controls) Describe(child, text);
+        text.Append('}');
+    }
+
+    /// <summary>A control's name without its state, so the same control on the new page can be found ("Theme: Dark (current)" → "Theme: Dark").</summary>
+    private static string FocusName(Control control) => (control.AccessibleName ?? control.Text).Replace(" (current)", "", StringComparison.Ordinal);
+
+    private static Control? FindByName(Control parent, string name)
+    {
+        foreach (Control child in parent.Controls)
+        {
+            if (child.CanSelect && FocusName(child) == name) return child;
+            if (FindByName(child, name) is { } found) return found;
+        }
+        return null;
     }
 
     // ───────────────────────────── sections ─────────────────────────────
@@ -241,6 +331,14 @@ internal sealed class SettingsForm : ThemedForm
             {
                 if (int.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int port)) _app.SetRemotePort(port);
             });
+        AddGroup("Presenting from your own screen");
+        AddFollowList(_app.Settings.FollowMeApps);
+        AddToggle("Page Down and Page Up go to what's shown", $"While you present a window, a PDF or a video, Page Down and Page Up (from the keyboard or a presenter clicker) move what's shown, wherever you're working{Key("clicker-keys")}. They don't reach your own window meanwhile.",
+            _app.Settings.ClickerKeys, on => _app.SetClickerKeys(on, _app.Settings.ClickerArrows));
+        AddToggle("The arrow keys too", "Right and Down go forward, Left and Up back. Only while presenting, but you can't use them for typing meanwhile.",
+            _app.Settings.ClickerArrows, on => _app.SetClickerKeys(_app.Settings.ClickerKeys, on));
+        AddToggle("PowerPoint's notes", "While PowerPoint is shown, its notes for the slide join your notes (the notes window, your phone and the speaker's screen), slide by slide. Read on this PC, never shown on the TV.",
+            _app.Settings.PowerPointNotes, _app.SetPowerPointNotes);
         AddGroup("Voice commands");
         AddToggle("Voice commands", $"Say “Presenter, next slide” and it's done{Key("voice-commands")}. Windows' own speech recognition listens on this PC, only while something is shown; nothing is recorded or sent anywhere. Try: {string.Join(", ", VoiceCommands.Examples.Take(6).Select(e => "“Presenter, " + e + "”"))}.",
             s.VoiceCommands, _app.SetVoiceCommands);
@@ -249,7 +347,7 @@ internal sealed class SettingsForm : ThemedForm
         AddToggle("Yellow outline", "Marks on your screen what the audience sees. Never on the TV.", s.ShowOutline, on => _app.SetShowOutline(on));
         AddToggle("Now-showing bar", "A small bar on top while you present or record, like Teams' sharing bar. Click it to go to what's shown.", s.ShowWidget, on => _app.SetShowWidget(on));
         AddToggle("Status pill", "When the now-showing bar is hidden, a pill at the top of your screen says what's on the TV. Messages always appear there.", s.ShowBadge, on => _app.SetShowBadge(on));
-        AddToggle("Mouse pointer on the TV", "Show your pointer in what you present.", s.ShowCursor, on => _app.SetShowCursor(on));
+        AddToggle("Mouse pointer on the TV", "Show your pointer in what you present. When there's no TV and the presentation covers your own screen, it's left out: your own pointer is already there.", s.ShowCursor, on => _app.SetShowCursor(on));
         AddToggle("Talk timer", "How long you've been presenting, in the now-showing bar. Only you see it.", s.ShowTalkTimer, _app.SetShowTalkTimer);
         AddChoice("Talk length", "You're told two minutes before the end, and when time's up. Only you see it.",
             [.. TalkTimer.Lengths.Select(m => (m == 0 ? "None" : $"{m} min", s.TalkMinutes == m, (Action)(() => _app.SetTalkMinutes(m))))]);
@@ -297,6 +395,24 @@ internal sealed class SettingsForm : ThemedForm
         InsetCorner corner = InsetLayout.ParseCorner(s.InsetCorner);
         AddChoice("Small picture", $"Where a small picture (like you on a webcam) sits over what you show{Key("inset")}.",
             [.. Enum.GetValues<InsetCorner>().Select(c => (Capitalise(InsetLayout.Words(c)), c == corner, (Action)(() => _app.SetInsetPlace(c, s.InsetSize))))]);
+        AddChoice("Small picture's shape", $"A circle suits a webcam: the middle of the picture, cut round{Key("inset-shape")}.",
+        [
+            ("Rectangle", s.InsetShapeMode == InsetShape.Rectangle, () => _app.SetInsetShape(InsetShape.Rectangle)),
+            ("Rounded corners", s.InsetShapeMode == InsetShape.Rounded, () => _app.SetInsetShape(InsetShape.Rounded)),
+            ("Circle", s.InsetShapeMode == InsetShape.Circle, () => _app.SetInsetShape(InsetShape.Circle)),
+        ]);
+        AddChoice("Night filter", $"For a dark room: tones down only what's bright, unlike dimming{Key("night-filter")}. Your name, captions and QR codes stay as they are.",
+        [
+            ("Off", s.Night == NightMode.Off, () => _app.SetNightFilter(NightMode.Off)),
+            ("Soften white pages", s.Night == NightMode.Soften, () => _app.SetNightFilter(NightMode.Soften)),
+            ("Turn light pages dark", s.Night == NightMode.Invert, () => _app.SetNightFilter(NightMode.Invert)),
+        ]);
+        AddChoice("Whiteboard", $"The board you draw on{Key("show-whiteboard")}. Dark is easier on a room's eyes; light looks like a real whiteboard.",
+        [
+            ("Dark", !s.WhiteboardLight, () => _app.SetWhiteboardLight(false)),
+            ("Light", s.WhiteboardLight, () => _app.SetWhiteboardLight(true)),
+        ]);
+        AddSpeakerScreen();
         AddChoice("Small picture size", "How wide it is on the TV.",
             [.. InsetLayout.Sizes.Select(p => (p == InsetLayout.Sizes[0] ? "Small" : p == InsetLayout.Sizes[^1] ? "Large" : "Medium", s.InsetSize == p, (Action)(() => _app.SetInsetPlace(corner, p))))]);
         AddChoice("Countdown", $"Blank with a countdown{Key("blank-countdown")} shows the message above and the time left. When it ends the TV stays blank until you show it again.",
@@ -306,6 +422,8 @@ internal sealed class SettingsForm : ThemedForm
         AddGroup("Live captions and transcripts");
         AddToggle("Live captions on the TV", $"Live captions{Key("live-captions")} show what you say on the TV. Off: they only write the transcript.", s.CaptionsOnTv, _app.SetCaptionsOnTv);
         AddToggle("Save a transcript", "Everything live captions hear is written to a text file as it's said, with subtitles (.srt and .vtt) beside it when they stop. On this PC only.", s.SaveTranscript, _app.SetSaveTranscript);
+        AddText("Words for captions", $"Names and words Windows' speech recognition doesn't know (people, products, places), so captions spell them right. Separate them with commas (at most {CaptionVocabulary.MaxWords}).",
+            string.Join(", ", s.CaptionWords), CaptionVocabulary.MaxWords * (CaptionVocabulary.MaxLength + 2), _app.SetCaptionWords);
         AddToggle("Save a timeline", "What was shown when (“09:31 Showing Q3 results”), written as it happens to a text file in the transcripts folder. Names only.", s.SaveTimeline, _app.SetSaveTimeline);
         AddFolder("Transcripts folder", s.TranscriptFolder ?? SavedFiles.DefaultTranscriptFolder, s.TranscriptFolder is null, _app.SetTranscriptFolder);
         CaptionLook look = s.CaptionLook;
@@ -391,6 +509,18 @@ internal sealed class SettingsForm : ThemedForm
             _app.AddNeverShow(name);
             Rebuild();
         });
+        AddGroup("When a whole screen is shown");
+        AddToggle("Leave out the taskbar", "The audience sees the screen down to its taskbar, not your app icons, unread counts, clock or notifications. A taskbar that hides itself is left out too, so it can't pop up on the TV.",
+            _app.Settings.LeaveOutTaskbar, _app.SetLeaveOutTaskbar);
+        AddToggle("Hide desktop icons", "Your desktop's icons (file and folder names) are hidden while a whole screen is shown, and come back as they were when it stops. Icons you hid yourself stay hidden.",
+            _app.Settings.HideDesktopIcons, _app.SetHideDesktopIcons);
+        AddToggle("Black while an Open or Save box is open", "Open and Save boxes show folder and file names from all over your PC. While one is open on the screen shown, the audience sees black until it closes or moves away.",
+            _app.Settings.HoldForFileBoxes, _app.SetHoldForFileBoxes);
+        AddGroup("Browsers and meetings");
+        AddToggle("Browsers: only the page", "A browser shown on the TV or the second TV shows only its page: its other tabs' titles, the address bar, bookmarks and your profile are left out. A part you crop yourself wins. (Beside the main picture or small in a corner, a browser shows whole: hide parts of it instead.)",
+            _app.Settings.BrowserPageOnly, _app.SetBrowserPageOnly);
+        AddToggle("Tell me when a meeting shares a whole screen", "If Zoom, Teams or another meeting app shares all of a screen (rather than the Zoom screen or the ScreenCast Presenter window), you're told, because the meeting then sees everything on it.",
+            _app.Settings.WarnWholeScreenShare, _app.SetWarnWholeScreenShare);
         AddGroup("Hidden parts");
         RedactStyle look = _app.Settings.HiddenPartStyle;
         AddChoice("How hidden parts look", $"Hide part of a window{Key("hide-part")} by dragging a box over it: the audience sees this there instead.",
@@ -571,6 +701,11 @@ internal sealed class SettingsForm : ThemedForm
             AddToggle("Use the calendar", "", link.Enabled, on => { link.Enabled = on; _app.SetCalendar(link); }, ("Forget it", () => { _app.SetCalendar(null); Rebuild(); }));
         }
 
+        AddGroup("Room sign");
+        AddText("The room's name on the sign", $"The room sign{Key("room-sign")} shows whether the room is free, from the calendar above. Empty: the first room's name.",
+            _app.Settings.RoomSignName, RoomSign.MaxName, name => _app.SetRoomSign(name, _app.Settings.RoomSignTitles));
+        AddToggle("Show meeting names on the sign", "Off: bookings just say “Booked”, since a sign in a corridor is seen by anyone passing.",
+            _app.Settings.RoomSignTitles, on => _app.SetRoomSign(_app.Settings.RoomSignName, on));
         AddGroup("Schedule");
         AddButton("Add a scheduled action", "Start the lobby slideshow at 8:00, stop it at 18:00, switch rooms… Uses this PC's clock; ScreenCast Presenter must be running (it can start with Windows).",
             "Add…", AddScheduleEntry);
@@ -676,6 +811,39 @@ internal sealed class SettingsForm : ThemedForm
         row.AddBelow(pills);
     }
 
+    /// <summary>Follow me's apps (FR-119): each as a pill, click to take it off.</summary>
+    private void AddFollowList(IReadOnlyList<string> apps)
+    {
+        Row row = NewRow("Follow me", $"With Follow me on{Key("follow-me")}, switching to a window of one of these apps shows it on the TV; anything else stays private. An app is added the first time you show it while Follow me is on.");
+        var pills = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = new Padding(0, 8, 0, 0), MaximumSize = new Size(560, 0) };
+        foreach (string app in apps)
+        {
+            string name = app;
+            PillButton pill = Pill($"{name}   ✕", () =>
+            {
+                _app.RemoveFollowMeApp(name);
+                Rebuild();
+            }, PillKind.Selected);
+            pill.AccessibleName = $"Follow me shows {name}. Click to take it off the list.";
+            pills.Controls.Add(pill);
+        }
+        if (apps.Count == 0) pills.Controls.Add(new Label { Text = "No apps yet.", AutoSize = true, UseMnemonic = false, Tag = "dim", Margin = new Padding(0, 6, 0, 0) });
+        row.AddBelow(pills);
+    }
+
+    /// <summary>Where the speaker's screen goes (FR-124): a screen that isn't a TV showing something.</summary>
+    private void AddSpeakerScreen()
+    {
+        List<DisplayMonitor> screens = _app.SpeakerScreenCandidates();
+        var options = new List<(string, bool, Action)> { ("None", _app.Settings.SpeakerScreenDevice is null, () => _app.SetSpeakerScreen(null)) };
+        foreach (DisplayMonitor m in screens)
+        {
+            DisplayMonitor screen = m;
+            options.Add(($"{screen.Name}{(screen.IsPrimary ? " (yours)" : "")}", _app.Settings.SpeakerScreenDevice == screen.DeviceName, () => _app.SetSpeakerScreen(screen.DeviceName)));
+        }
+        AddChoice("Speaker's screen", $"A screen facing you (a stage monitor or a third screen) showing the time, your notes and what's next{Key("speaker-screen")}. Only you see it.", options);
+    }
+
     /// <summary>The apps with a window open now, not yet on the list.</summary>
     private void ShowAddAppMenu(Control anchor)
     {
@@ -748,12 +916,12 @@ internal sealed class SettingsForm : ThemedForm
 
     /// <summary>A small heading above a group of rows, like Windows 11 Settings.</summary>
     private void AddGroup(string text) =>
-        _rows.Controls.Add(new Label { Text = text, Font = _groupFont, AutoSize = true, UseMnemonic = false, Margin = new Padding(2, 18, 0, 6) });
+        Place(new Label { Text = text, Font = _groupFont, AutoSize = true, UseMnemonic = false, Margin = new Padding(2, 18, 0, 6) });
 
     private Row NewRow(string title, string description)
     {
         var row = new Row(title, description, _rowFont, RowIcons.TryGetValue(title, out char icon) && Icons.Available ? icon : null);
-        _rows.Controls.Add(row);
+        Place(row);
         return row;
     }
 
@@ -850,11 +1018,17 @@ internal sealed class SettingsForm : ThemedForm
     {
         base.ApplyPalette(palette);
         _nav.BackColor = HasBackdrop ? Color.Black : palette.Surface; // black is fully transparent on Mica
+        RecolourPage(palette);
+        if (_content.IsHandleCreated) DwmHelpers.SetDarkScrollbars((Windows.Win32.Foundation.HWND)_content.Handle, palette.IsDark);
+        foreach (Control c in _nav.Controls) c.Invalidate();
+    }
+
+    /// <summary>Colours the page only: a new page doesn't need the window's frame and backdrop applied again (that made the whole window flash).</summary>
+    private void RecolourPage(Palette palette)
+    {
         _content.BackColor = palette.Background;
         _rows.BackColor = palette.Background;
         foreach (Control c in _rows.Controls) Recolour(c, palette, onSurface: c is Row);
-        if (_content.IsHandleCreated) DwmHelpers.SetDarkScrollbars((Windows.Win32.Foundation.HWND)_content.Handle, palette.IsDark);
-        foreach (Control c in _nav.Controls) c.Invalidate();
     }
 
     private static void Recolour(Control control, Palette p, bool onSurface)

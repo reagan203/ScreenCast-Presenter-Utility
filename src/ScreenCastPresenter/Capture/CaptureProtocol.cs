@@ -17,19 +17,54 @@ internal static class CaptureProtocol
     /// <summary>The check before sharing (FR-102): one private picture, read for everything automatic hiding can find.</summary>
     public const string CheckSwitch = "--check";
 
+    /// <summary>A PDF's pages made into pictures (FR-115): --pdf-pages &lt;pdf&gt; &lt;folder&gt; &lt;pages, comma-separated&gt;.</summary>
+    public const string PdfSwitch = "--pdf-pages";
+
+    /// <summary>The words in what's shown (FR-130): --read-text &lt;png&gt;; the text to standard output.</summary>
+    public const string ReadTextSwitch = "--read-text";
+
+    /// <summary>A short animated picture from a video (FR-131): --make-gif &lt;mp4&gt; &lt;gif&gt; &lt;seconds&gt;.</summary>
+    public const string GifSwitch = "--make-gif";
+
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
     /// <summary>"window:1234", "screen:\\.\DISPLAY2", or "camera:" and the camera's id escaped so it has no spaces.</summary>
+    /// <remarks>A whole screen with part of it shown (the taskbar left out, FR-112) carries its crop after an "@", so a pane or the small picture shows the same part.</remarks>
     public static string SourceSpec(SourceWindow source) =>
-        source.Screen is { } screen ? "screen:" + screen.DeviceName
+        source.Screen is { } screen ? "screen:" + screen.DeviceName + (source.Crop is { } part ? "@" + Crop(part) : "")
         : source.Camera is { } camera ? "camera:" + Uri.EscapeDataString(camera.Id)
         : source.Picture is { } picture ? "picture:" + Uri.EscapeDataString(picture)
+        : source.Video is { } video ? "video:" + Uri.EscapeDataString(video)
         : "window:" + source.Handle.ToString(Inv);
+
+    /// <summary>
+    /// Which source something belongs to, whatever part of it is shown: hidden parts and "checked
+    /// already" are kept by this, so a screen's crop (rounded differently after a trip through the
+    /// protocol) can never make its hidden parts go missing.
+    /// </summary>
+    public static string CoverKey(SourceWindow source)
+    {
+        string spec = SourceSpec(source);
+        int at = source.IsScreen ? spec.IndexOf('@', StringComparison.Ordinal) : -1;
+        return at < 0 ? spec : spec[..at];
+    }
 
     public static SourceWindow? ParseSource(string spec, IReadOnlyList<DisplayMonitor>? monitors = null)
     {
         if (spec.StartsWith("window:", StringComparison.Ordinal) && long.TryParse(spec.AsSpan(7), NumberStyles.Integer, Inv, out long hwnd) && hwnd != 0)
             return new SourceWindow((nint)hwnd, "", "", false);
+        if (spec.StartsWith("video:", StringComparison.Ordinal) && spec.Length > 6)
+        {
+            try
+            {
+                string path = Uri.UnescapeDataString(spec[6..]);
+                return path.Length > 0 && Path.IsPathFullyQualified(path) ? SourceWindow.ForVideo(path) : null;
+            }
+            catch (UriFormatException)
+            {
+                return null;
+            }
+        }
         if (spec.StartsWith("picture:", StringComparison.Ordinal) && spec.Length > 8)
         {
             try
@@ -56,8 +91,16 @@ internal static class CaptureProtocol
         if (spec.StartsWith("screen:", StringComparison.Ordinal))
         {
             string device = spec[7..];
+            CropRegion? part = null;
+            int at = device.IndexOf('@', StringComparison.Ordinal);
+            if (at >= 0)
+            {
+                part = ParseCrop(device[(at + 1)..]);
+                device = device[..at];
+                if (part is null) return null; // a part that can't be read: never show more than was meant
+            }
             DisplayMonitor? screen = (monitors ?? DisplayHelpers.GetMonitors()).FirstOrDefault(m => m.DeviceName == device);
-            return screen is null ? null : SourceWindow.ForScreen(screen);
+            return screen is null ? null : SourceWindow.ForScreen(screen) with { Crop = part };
         }
         return null;
     }
@@ -218,6 +261,47 @@ internal static class CaptureProtocol
         var corner = p.Length > 0 && int.TryParse(p[0], NumberStyles.Integer, Inv, out int c) && Enum.IsDefined((InsetCorner)c) ? (InsetCorner)c : InsetCorner.BottomRight;
         int percent = p.Length > 1 && int.TryParse(p[1], NumberStyles.Integer, Inv, out int size) ? InsetLayout.Normalize(size) : InsetLayout.DefaultSize;
         return (corner, percent);
+    }
+
+    // ───────────── rev 10 (FR-112 to FR-134) ─────────────
+
+    /// <summary>A timer on the TV (FR-120): its corner, whether time is up, then its words; "timer none" takes it off.</summary>
+    public static string Timer(string? text, InsetCorner corner, bool up) =>
+        text is not { Length: > 0 } ? "timer none" : string.Create(Inv, $"timer {(int)corner} {(up ? 1 : 0)} {OneLine(text)}");
+
+    /// <summary>The rest of a "timer" line; null for "none" or nonsense (which takes the timer off).</summary>
+    public static (InsetCorner Corner, bool Up, string Text)? ParseTimer(string text)
+    {
+        string[] p = text.Split(' ', 3);
+        if (p.Length < 3 || p[2].Trim().Length == 0 || !int.TryParse(p[0], NumberStyles.Integer, Inv, out int c) || !Enum.IsDefined((InsetCorner)c)) return null;
+        return ((InsetCorner)c, p[1] == "1", p[2]);
+    }
+
+    /// <summary>The night filter (FR-123).</summary>
+    public static string Night(NightMode mode) => string.Create(Inv, $"night {(int)mode}");
+
+    public static NightMode ParseNight(string text) =>
+        int.TryParse(text, NumberStyles.Integer, Inv, out int n) && Enum.IsDefined((NightMode)n) ? (NightMode)n : NightMode.Off;
+
+    /// <summary>The small picture's shape (FR-118): a rectangle, rounded corners or a circle.</summary>
+    public static string InsetShapeLine(InsetShape shape) => string.Create(Inv, $"inset-shape {(int)shape}");
+
+    public static InsetShape ParseInsetShape(string text) =>
+        int.TryParse(text, NumberStyles.Integer, Inv, out int n) && Enum.IsDefined((InsetShape)n) ? (InsetShape)n : InsetShape.Rectangle;
+
+    /// <summary>A video's playing (FR-116): "video play", "video pause", "video seek &lt;seconds&gt;" (relative), "video restart".</summary>
+    public static string Video(VideoCommand command, double seconds = 0) => command switch
+    {
+        VideoCommand.Seek => string.Create(Inv, $"video seek {seconds:0.###}"),
+        _ => "video " + command.ToString().ToLowerInvariant(),
+    };
+
+    public static (VideoCommand Command, double Seconds)? ParseVideo(string text)
+    {
+        string[] p = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (p.Length == 0 || !Enum.TryParse(p[0], ignoreCase: true, out VideoCommand command) || !Enum.IsDefined(command)) return null;
+        if (command != VideoCommand.Seek) return (command, 0);
+        return p.Length > 1 && double.TryParse(p[1], NumberStyles.Float, Inv, out double s) && double.IsFinite(s) ? (command, Math.Clamp(s, -3600, 3600)) : null;
     }
 
     public static List<PointF> ParsePoints(string text)

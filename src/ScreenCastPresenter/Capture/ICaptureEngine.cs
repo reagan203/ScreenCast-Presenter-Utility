@@ -114,6 +114,21 @@ internal interface IEffectsEngine
     /// <summary>Automatic hiding covered something new: what, in words ("2 email addresses"), on the UI thread.</summary>
     event EventHandler<string>? AutoHidden { add { } remove { } }
 
+    /// <summary>A timer in a corner of the TV (FR-120): its words ("Exercise 4:59"); null takes it off.</summary>
+    void Timer(string? text, InsetCorner corner, bool up) { }
+
+    /// <summary>The night filter on what's shown (FR-123).</summary>
+    void Night(NightMode mode) { }
+
+    /// <summary>The small picture's shape (FR-118).</summary>
+    void InsetShape(InsetShape shape) { }
+
+    /// <summary>A video shown (FR-116): play, pause, jump, start again. Ignored when what's shown isn't a video.</summary>
+    void Video(VideoCommand command, double seconds) { }
+
+    /// <summary>A video's playing came to its end, or it couldn't play (in words): on the UI thread.</summary>
+    event EventHandler<string>? VideoEvent { add { } remove { } }
+
     /// <summary>The small picture in a corner (FR-72): another window, a screen or a camera; null takes it off.</summary>
     void Inset(SourceWindow? source, InsetCorner corner, int percent);
 

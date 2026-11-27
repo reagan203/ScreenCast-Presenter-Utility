@@ -88,6 +88,12 @@ internal sealed class RemoteWgcEngine : ICaptureEngine, IEffectsEngine
                     if (_ui is { } ui) ui.Post(_ => { if (!_disposed) InsetFailed?.Invoke(this, why); }, null);
                     else if (!_disposed) InsetFailed?.Invoke(this, why);
                 }
+                else if (line.StartsWith("video-event ", StringComparison.Ordinal))
+                {
+                    string what = line["video-event ".Length..];
+                    if (_ui is { } ui) ui.Post(_ => { if (!_disposed) VideoEvent?.Invoke(this, what); }, null);
+                    else if (!_disposed) VideoEvent?.Invoke(this, what);
+                }
                 else if (line.StartsWith("autohid ", StringComparison.Ordinal))
                 {
                     string words = line["autohid ".Length..];
@@ -183,6 +189,13 @@ internal sealed class RemoteWgcEngine : ICaptureEngine, IEffectsEngine
     public RedactStyle StartAutoStyle { get; init; }
     public IReadOnlyList<string>? StartAutoWords { get; init; }
     public void Inset(SourceWindow? source, InsetCorner corner, int percent) => Send(CaptureProtocol.Inset(source, corner, percent));
+    public void Timer(string? text, InsetCorner corner, bool up) => Send(CaptureProtocol.Timer(text, corner, up));
+    public void Night(NightMode mode) => Send(CaptureProtocol.Night(mode));
+    public void InsetShape(InsetShape shape) => Send(CaptureProtocol.InsetShapeLine(shape));
+    public void Video(VideoCommand command, double seconds) => Send(CaptureProtocol.Video(command, seconds));
+
+    /// <summary>The video shown ended ("ended"), or says where it is ("at 12.5 200.0"), or couldn't play ("failed …").</summary>
+    public event EventHandler<string>? VideoEvent;
 
     public event EventHandler<string>? InsetFailed;
 

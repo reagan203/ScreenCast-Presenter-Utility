@@ -371,7 +371,7 @@ internal sealed partial class ScpApp
     }
 
     /// <summary>The notes for what's shown now, or "".</summary>
-    internal string CurrentNotes() => NotesTarget() is { } t ? t.Get() : "";
+    internal string CurrentNotes() => SlideNotes.Combine(NotesTarget() is { } t ? t.Get() : "", _slideNotes); // FR-122: PowerPoint's notes for the slide join them
 
     /// <summary>"notes": the private notes window on / off.</summary>
     private void ToggleNotes()
@@ -391,7 +391,8 @@ internal sealed partial class ScpApp
     /// <summary>What's shown changed: the notes window and the phone follow.</summary>
     private void UpdateNotes()
     {
-        if (NotesOpen) _notesWindow!.ShowNotes(NotesTarget() is { } t ? t.Title : null, CurrentNotes(), _session.State == SessionState.Presenting);
+        if (NotesOpen) _notesWindow!.ShowNotes(NotesTarget() is { } t ? t.Title : _slideNotes is { } slide ? SlideNotes.Title(slide) : null, CurrentNotes(), _session.State == SessionState.Presenting);
+        _speaker?.UpdateFrom(this);
     }
 
     /// <summary>"edit-notes": the notes for what's shown, for its favourite or scene.</summary>
@@ -404,8 +405,20 @@ internal sealed partial class ScpApp
         }
         using var form = new FieldsForm($"Notes for “{target.Title}”", "Only you see these: on your own screen and on your paired phone, never on the TV.", "Save");
         (_, TextBox box) = form.AddField("Notes", target.Get(), NotesCipher.MaxLength, "Start with the Q3 numbers. Ask about…", lines: 8);
+        Favourite? timed = MinutesTarget();
+        TextBox? minutes = timed is null ? null
+            : form.AddField("Minutes it should take (0 for no time)", timed.Minutes.ToString(System.Globalization.CultureInfo.InvariantCulture), 3, "5").Item2; // FR-121
+        form.Check = () => minutes is null || int.TryParse(minutes.Text.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int m) && m <= SectionClock.MaxMinutes
+            ? null : $"Type the minutes as a number from 0 to {SectionClock.MaxMinutes}.";
         if (!form.Ask()) return;
         target.Set(box.Text);
+        if (timed is not null && minutes is not null && int.TryParse(minutes.Text.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int budget))
+        {
+            timed.Minutes = SectionClock.Normalize(budget);
+            if (_sections.Current(DateTime.UtcNow) is { } current)
+                _sections.Show(current.Key, current.Name, TimeSpan.FromMinutes(timed.Minutes), DateTime.UtcNow); // the budget applies at once
+            UpdateExtrasClock();
+        }
         Save();
         UpdateNotes();
         PushRemoteStatus();

@@ -28,6 +28,10 @@ When you share a whole screen on Zoom or a TV, the audience sees everything: not
 - **Set up once:** save a room's setup (its TV, dimming, extras, favourites) and switch to it in one click. Schedule things, like starting the lobby slideshow at 8:00 and stopping it at 18:00. With three screens, show something different on a second TV.
 - **Screenshots and recordings:** save what you present, with optional meeting and microphone audio, and chapters for each thing shown. Keep the last minute and save it when something goes well.
 - **Run the room:** turn the TV on and off over the cable, follow the room's calendar file, say "Presenter, next slide", and keep private speaker notes on your screen and phone.
+- **Keep the rest of your PC private:** a whole screen shown leaves out your taskbar and desktop icons, goes black while an Open or Save box is open, and a browser shows only its page, not your other tabs. You're told if Zoom or Teams is sharing your whole screen instead.
+- **More to show:** a PDF page by page, a video with its sound, a whiteboard to draw on, and a room sign that says when the room is free.
+- **For trainers and stages:** Follow me (the TV follows you between the apps you've shown), a timer on the TV for exercises, time budgets for each part, PowerPoint's own notes beside yours, a night filter for dark rooms, your webcam in a circle, a speaker's screen with the time and your notes, Page Down and Page Up going to the slides wherever you're working, and connecting a wireless TV.
+- **Practise and share:** rehearse your talk and see your pace and filler words; copy the text on the TV; make a GIF from a recording.
 - **For IT teams:** rules set by Group Policy (never-show apps, always-on hiding, features switched off), and settings copied between PCs.
 - **Small and fast:** about 15 MB of memory when idle and a few percent CPU while presenting.
 - **Windows 11 look:** light and dark themes, the Windows accent colour, and a settings window laid out like Windows Settings.
@@ -47,14 +51,21 @@ ScreenCastPresenter.exe --on spotlight --off auto-hide
 ScreenCastPresenter.exe --split "Excel" --layout side-by-side
 ScreenCastPresenter.exe --picture "C:\Lobby\welcome.png"
 ScreenCastPresenter.exe --tv on --tv-input hdmi1
+ScreenCastPresenter.exe --pdf "C:\Handouts\agenda.pdf" --page 3
+ScreenCastPresenter.exe --video "C:\Lobby\intro.mp4"
+ScreenCastPresenter.exe --timer 10
+ScreenCastPresenter.exe --night soften
+ScreenCastPresenter.exe --status
+ScreenCastPresenter.exe --is spotlight
 ScreenCastPresenter.exe --help
 ```
 
-If it's already running, the command goes to the running copy; otherwise it starts. Exit code 0 means it worked, 1 that it couldn't be done (the reason is printed), and 2 a mistake in the command. Handy for button decks and desktop shortcuts.
+If it's already running, the command goes to the running copy; otherwise it starts. Exit code 0 means it worked, 1 that it couldn't be done (the reason is printed), and 2 a mistake in the command. `--status` prints what's on as JSON, and `--is NAME` exits 0 when NAME is on and 1 when it's off, so a button deck can light its buttons. Handy for button decks and desktop shortcuts.
 
 ## Requirements
 
 - Windows 10 version 2004 (build 19041) or later, or Windows 11. x64 and Arm64 are both supported.
+- macOS and Linux aren't supported yet. A plan for them (what would work on each, what can't, and the order to build in) is in [docs/SRS.md](docs/SRS.md), section 9.
 - To build from source: the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 - Optional, for a Zoom screen without a second monitor: [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver). The app can install it for you.
 

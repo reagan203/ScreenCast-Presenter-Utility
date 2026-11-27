@@ -247,3 +247,19 @@ GetVCPFeatureAndVCPFeatureReply
 GetCapabilitiesStringLength
 CapabilitiesRequestAndCapabilitiesReply
 PHYSICAL_MONITOR
+
+// Rev 10: the taskbar left out (FR-112), desktop icons (FR-113), video frames (FR-116)
+FindWindowEx
+CreateDirect3D11SurfaceFromDXGISurface
+// Rev 10: a short GIF from a recording (FR-131)
+MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING
+MFVideoFormat_RGB32
+MF_MT_DEFAULT_STRIDE
+FindWindow
+SetThreadDpiAwarenessContext
+MFCreateSourceReaderFromByteStream
+IMFByteStream
+MF_FILE_ACCESSMODE
+MF_FILE_OPENMODE
+MF_FILE_FLAGS
+SendMessage

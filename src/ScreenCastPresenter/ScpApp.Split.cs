@@ -70,6 +70,8 @@ internal sealed partial class ScpApp
             return;
         }
         if (_inset is not null) RemoveInset(null); // one or the other: the small picture would cover a pane
+        if (LeaveOutTaskbar(source) is not { } clear) return; // FR-112: a screen beside it without its taskbar
+        source = clear;
         _split.Add(source);
         SendOtherHiddenParts(); // before the picture: its hidden parts are covered from its first frame
         UpdatePrivateAppGuard(); // a never-show app on a screen shown beside it: black before it's sent

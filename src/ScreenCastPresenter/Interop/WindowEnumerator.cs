@@ -34,11 +34,41 @@ internal sealed record SourceWindow(nint Handle, string Title, string AppName, b
 
     public bool IsPicture => Picture is not null;
 
-    /// <summary>A camera or a picture: its picture isn't on the presenter's screen (nothing to point at, crop by dragging, or hide by dragging).</summary>
-    public bool IsOffScreen => IsCamera || IsPicture;
+    /// <summary>Set for a video file (FR-116); then <see cref="Handle"/> is 0 and there's nothing on screen.</summary>
+    public string? Video { get; init; }
 
-    /// <summary>A window: something on the presenter's screen with a handle (not a whole screen, not a camera, not a picture).</summary>
-    public bool IsWindow => Screen is null && Camera is null && Picture is null;
+    public bool IsVideo => Video is not null;
+
+    /// <summary>Set for a page of a PDF (FR-115): the PDF's path; <see cref="Picture"/> is the page made into a picture.</summary>
+    public string? Document { get; init; }
+
+    /// <summary>The page shown, from 1, and how many there are (a PDF).</summary>
+    public int Page { get; init; }
+    public int Pages { get; init; }
+
+    public bool IsDocument => Document is not null;
+
+    /// <summary>The whiteboard (FR-117): a blank board shown as a picture, drawn on from the presenter's own screen.</summary>
+    public bool IsBoard { get; init; }
+
+    /// <summary>The room sign (FR-125): the room's bookings made into a picture, kept up to date.</summary>
+    public bool IsRoomSign { get; init; }
+
+    /// <summary>
+    /// A crop made for the presenter rather than chosen by them: a whole screen's part clear of its
+    /// taskbar (FR-112), or a browser's page without its tabs and address bar (FR-133). A crop the
+    /// presenter chooses is kept inside it; when the crop is exactly this, "all of it" is showing.
+    /// </summary>
+    public Core.CropRegion? AutoCrop { get; init; }
+
+    /// <summary>The crop the presenter chose, not counting <see cref="AutoCrop"/>.</summary>
+    public Core.CropRegion? ChosenCrop => AutoCrop is not null && Crop == AutoCrop ? null : Crop;
+
+    /// <summary>A camera, a picture or a video: its picture isn't on the presenter's screen (nothing to point at, crop by dragging, or hide by dragging).</summary>
+    public bool IsOffScreen => IsCamera || IsPicture || IsVideo;
+
+    /// <summary>A window: something on the presenter's screen with a handle (not a whole screen, not a camera, not a picture, not a video).</summary>
+    public bool IsWindow => Screen is null && Camera is null && Picture is null && Video is null;
 
     /// <summary>The part of the source to show; null shows all of it.</summary>
     public Core.CropRegion? Crop { get; init; }
@@ -50,7 +80,12 @@ internal sealed record SourceWindow(nint Handle, string Title, string AppName, b
         other is not null && (IsScreen ? other.Screen?.DeviceName == Screen!.DeviceName && other.IsScreen
             : IsCamera ? other.Camera?.Id == Camera!.Id
             : IsPicture ? string.Equals(other.Picture, Picture, StringComparison.OrdinalIgnoreCase)
+            : IsVideo ? string.Equals(other.Video, Video, StringComparison.OrdinalIgnoreCase)
             : other.IsWindow && other.Handle == Handle);
+
+    /// <summary>A video file (FR-116); <paramref name="title"/> defaults to its file name.</summary>
+    public static SourceWindow ForVideo(string path, string? title = null) =>
+        new(0, title is { Length: > 0 } ? title : Core.VideoSource.Name(path), Core.VideoSource.App, false) { Video = path };
 
     public static SourceWindow ForScreen(DisplayMonitor screen) =>
         new(0, $"{screen.Name} · {screen.ShortName}", "Screen", false) { Screen = screen };

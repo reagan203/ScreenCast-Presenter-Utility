@@ -98,6 +98,22 @@ internal static class ShortcutCatalog
         list.Add(new("edit-notes", "Edit the notes for what's shown", ShortcutGroup.OnMyScreen, null, Keywords: "notes edit speaker script write"));
         list.Add(new("auto-hide", "Hide private details automatically on / off", ShortcutGroup.OnTheTv, null, Keywords: "automatic hide redact email phone card iban ocr privacy personal details password key token secret words names"));
 
+        // Rev 10 (FR-112 to FR-134).
+        list.Add(new("show-pdf", "Show a PDF…", ShortcutGroup.Presenting, null, Keywords: "pdf document handout pages page acrobat reader slides deck print"));
+        list.Add(new("show-video", "Show a video…", ShortcutGroup.Presenting, null, Keywords: "video movie clip mp4 play film sound intro lobby loop"));
+        list.Add(new("show-whiteboard", "Whiteboard on / put it away", ShortcutGroup.OnTheTv, null, Keywords: "whiteboard blackboard board blank draw sketch explain diagram chalk"));
+        list.Add(new("room-sign", "Show the room sign", ShortcutGroup.Presenting, null, Keywords: "room sign booking calendar free busy door lobby signage meeting room availability"));
+        list.Add(new("follow-me", "Follow me: the TV follows my windows on / off", ShortcutGroup.Presenting, null, Keywords: "follow me active window switch automatic alt tab trainer demo teach"));
+        list.Add(new("clicker-keys", "Page Down and Page Up go to what's shown on / off", ShortcutGroup.Presenting, null, Keywords: "clicker presenter remote page down page up slides keys logitech"));
+        list.Add(new("timer", "Timer on the TV / take it off", ShortcutGroup.OnTheTv, null, Keywords: "timer countdown exercise activity group work minutes clock stopwatch"));
+        list.Add(new("night-filter", "Night filter: off / soften / turn light pages dark", ShortcutGroup.OnTheTv, null, Keywords: "night dark mode invert bright white glare dark room projector soften eyes"));
+        list.Add(new("inset-shape", "Small picture: rectangle / rounded / circle", ShortcutGroup.OnTheTv, null, Keywords: "small picture webcam circle round bubble shape rounded corners"));
+        list.Add(new("cast", "Connect a wireless TV", ShortcutGroup.OnTheTv, null, Keywords: "cast wireless miracast connect projector tv screen mirror win k"));
+        list.Add(new("speaker-screen", "Speaker's screen on / off", ShortcutGroup.OnMyScreen, null, Keywords: "speaker screen confidence monitor stage notes time left next foldback"));
+        list.Add(new("rehearse", "Rehearse / finish rehearsing", ShortcutGroup.OnMyScreen, null, Keywords: "rehearse practise practice rehearsal pace filler um timing coach dry run"));
+        list.Add(new("copy-text", "Copy the text in what's shown", ShortcutGroup.Recording, null, Keywords: "copy text ocr words read clipboard paste extract"));
+        list.Add(new("make-gif", "Make a GIF from a recording…", ShortcutGroup.Recording, null, Keywords: "gif animated animation clip recording share short loop"));
+
         list.AddRange(
         [
             new("crop", "Show only part of it (crop)", ShortcutGroup.Crop, C(Keys.C), Keywords: "part area region zoom crop"),

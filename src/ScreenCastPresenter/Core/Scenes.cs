@@ -31,6 +31,12 @@ internal sealed class Scene
     /// <summary>Speaker notes (FR-111): for the presenter's eyes only.</summary>
     public string Notes { get; set; } = "";
 
+    /// <summary>The small picture's shape (FR-118).</summary>
+    public string InsetShape { get; set; } = nameof(Core.InsetShape.Rectangle);
+
+    /// <summary>The night filter with this scene (FR-123); null (an older scene) leaves it as it is.</summary>
+    public string? Night { get; set; }
+
     /// <summary>Live captions on or off with this scene; null (a scene saved before scenes kept them) leaves them as they are.</summary>
     public bool? LiveCaptions { get; set; }
 
@@ -92,6 +98,7 @@ internal enum PlaylistScreen { Main, Second }
 internal sealed class PlaylistItem
 {
     public const string FavouriteKind = "Favourite", SceneKind = "Scene", PictureKind = "Picture", CardKind = "Card";
+    public const string VideoKind = "Video", DocumentKind = "Pdf", RoomSignKind = "RoomSign";
 
     public string Kind { get; set; } = FavouriteKind;
     public int Slot { get; set; } = 1;
@@ -107,8 +114,17 @@ internal sealed class PlaylistItem
     public bool IsPicture => string.Equals(Kind, PictureKind, StringComparison.OrdinalIgnoreCase);
     public bool IsCard => string.Equals(Kind, CardKind, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>A video (FR-116): it plays to its end, then the next item shows.</summary>
+    public bool IsVideo => string.Equals(Kind, VideoKind, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A PDF (FR-115): each page in turn, for the item's time each.</summary>
+    public bool IsDocument => string.Equals(Kind, DocumentKind, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The room sign (FR-125), kept up to date while it shows.</summary>
+    public bool IsRoomSign => string.Equals(Kind, RoomSignKind, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>A favourite or a scene: shown by its number.</summary>
-    public bool IsSlot => !IsPicture && !IsCard;
+    public bool IsSlot => !IsPicture && !IsCard && !IsVideo && !IsDocument && !IsRoomSign;
 
     /// <summary>Made sensible from a settings file; null when it can't be a step (no number, no picture, no words).</summary>
     public PlaylistItem? Normalized()
@@ -117,14 +133,20 @@ internal sealed class PlaylistItem
         if (IsPicture)
             return Path?.Trim() is { Length: > 0 } p && System.IO.Path.IsPathFullyQualified(p) ? new PlaylistItem { Kind = PictureKind, Path = p, Seconds = seconds } : null;
         if (IsCard) return TextCard.Tidy(Text) is { Length: > 0 } t ? new PlaylistItem { Kind = CardKind, Text = t, Seconds = seconds } : null;
+        if (IsVideo || IsDocument)
+            return Path?.Trim() is { Length: > 0 } f && System.IO.Path.IsPathFullyQualified(f) ? new PlaylistItem { Kind = IsVideo ? VideoKind : DocumentKind, Path = f, Seconds = seconds } : null;
+        if (IsRoomSign) return new PlaylistItem { Kind = RoomSignKind, Seconds = seconds };
         return Slot is >= 1 and <= AppSettings.SlotCount ? new PlaylistItem { Kind = IsScene ? SceneKind : FavouriteKind, Slot = Slot, Seconds = seconds } : null;
     }
 
     public string Words(Func<int, string>? favouriteName = null, Func<int, string>? sceneName = null) =>
         (IsPicture ? Path is { } p && !PictureSource.IsPicture(p) ? $"the pictures in “{System.IO.Path.GetFileName(p.TrimEnd('\\', '/'))}”" : $"“{PictureSource.Name(Path ?? "")}”"
             : IsCard ? $"the card “{TrayMenuPlan.Shorten(TextCard.Title(Text ?? ""), 30)}”"
+            : IsVideo ? $"the video “{VideoSource.Name(Path ?? "")}”"
+            : IsDocument ? $"the pages of “{PdfPages.Name(Path ?? "")}”"
+            : IsRoomSign ? "the room sign"
             : IsScene ? sceneName?.Invoke(Slot) ?? $"scene {Slot}" : favouriteName?.Invoke(Slot) ?? $"favourite {Slot}")
-        + $" for {Slideshow.Words(Seconds)}{(IsPicture && Path is { } folder && !PictureSource.IsPicture(folder) ? " each" : "")}";
+        + (IsVideo ? " to its end" : $" for {Slideshow.Words(Seconds)}{(IsPicture && Path is { } folder && !PictureSource.IsPicture(folder) || IsDocument ? " each" : "")}");
 }
 
 /// <summary>
@@ -204,7 +226,8 @@ internal static class PlaylistPlayer
     /// The steps a playlist plays now: a folder becomes each of its pictures in turn (as they are
     /// now; read again each time round), everything else stays one step.
     /// </summary>
-    public static List<PlaylistItem> Expand(IReadOnlyList<PlaylistItem> items)
+    /// <param name="pagesOf">How many pages a PDF has, when known (FR-115); each page is then a step. Unknown (0): its first page, until it's known.</param>
+    public static List<PlaylistItem> Expand(IReadOnlyList<PlaylistItem> items, Func<string, int>? pagesOf = null)
     {
         var steps = new List<PlaylistItem>(items.Count);
         foreach (PlaylistItem item in items)
@@ -212,6 +235,11 @@ internal static class PlaylistPlayer
             if (item.IsPicture && item.Path is { } folder && !PictureSource.IsPicture(folder))
             {
                 foreach (string file in PictureSource.InFolder(folder)) steps.Add(new PlaylistItem { Kind = PlaylistItem.PictureKind, Path = file, Seconds = item.Seconds });
+            }
+            else if (item.IsDocument && item.Path is { } pdf)
+            {
+                int pages = Math.Clamp(pagesOf?.Invoke(pdf) ?? 0, 1, PictureSource.MaxInFolder);
+                for (int page = 1; page <= pages; page++) steps.Add(new PlaylistItem { Kind = PlaylistItem.DocumentKind, Path = pdf, Slot = page, Seconds = item.Seconds });
             }
             else steps.Add(item);
         }

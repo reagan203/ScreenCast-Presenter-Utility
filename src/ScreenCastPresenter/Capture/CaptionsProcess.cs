@@ -31,9 +31,28 @@ internal sealed class CaptionsProcess : IDisposable
     public event EventHandler? Ended;
 
     /// <summary>Starts the helper; null (with the reason) when Windows won't start it.</summary>
-    public static (CaptionsProcess? Process, string? Problem) Start()
+    /// <param name="words">Names and words for the recognizer to know while it listens (FR-128).</param>
+    /// <summary>Takes words a helper added out of Windows' speech dictionary again (it was ended before it could): in the background.</summary>
+    public static void RemoveWords(IReadOnlyList<string> words)
     {
-        var info = new ProcessStartInfo(Environment.ProcessPath ?? "ScreenCastPresenter.exe", LiveCaptions.Switch)
+        if (words.Count == 0) return;
+        var info = new ProcessStartInfo(Environment.ProcessPath ?? "ScreenCastPresenter.exe") { UseShellExecute = false, CreateNoWindow = true };
+        info.ArgumentList.Add(LiveCaptions.Switch);
+        info.ArgumentList.Add(CaptionVocabulary.Token(words));
+        info.ArgumentList.Add(CaptionsHost.RemoveWordsSwitch);
+        try
+        {
+            using Process? process = Process.Start(info);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Debug.WriteLine(ex);
+        }
+    }
+
+    public static (CaptionsProcess? Process, string? Problem) Start(IReadOnlyList<string>? words = null)
+    {
+        var info = new ProcessStartInfo(Environment.ProcessPath ?? "ScreenCastPresenter.exe")
         {
             UseShellExecute = false,
             CreateNoWindow = true,
@@ -41,6 +60,8 @@ internal sealed class CaptionsProcess : IDisposable
             RedirectStandardOutput = true,
             StandardOutputEncoding = new UTF8Encoding(false),
         };
+        info.ArgumentList.Add(LiveCaptions.Switch);
+        if (words is { Count: > 0 }) info.ArgumentList.Add(CaptionVocabulary.Token(words));
         try
         {
             Process? process = Process.Start(info);
@@ -82,6 +103,9 @@ internal sealed class CaptionsProcess : IDisposable
         else action();
     }
 
+    /// <summary>It stopped by itself when asked (so it tidied up after itself), rather than being ended.</summary>
+    public bool StoppedCleanly { get; private set; }
+
     /// <summary>Ends the helper: its input closes, and it's ended if it hasn't gone a moment later.</summary>
     public void Stop()
     {
@@ -90,7 +114,8 @@ internal sealed class CaptionsProcess : IDisposable
         try
         {
             _process.StandardInput.Close();
-            if (!_process.WaitForExit(StopWait)) _process.Kill();
+            if (_process.WaitForExit(StopWait)) StoppedCleanly = true;
+            else _process.Kill();
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or NotSupportedException)
         {

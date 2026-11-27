@@ -158,6 +158,28 @@ public class SessionControllerTests
     }
 
     [Fact]
+    public async Task A_switch_or_a_crop_reshapes_the_floating_window_at_once_and_a_resizing_source_after_a_pause()
+    {
+        // From a user report: the window reshaped 150 ms after a switch, so the new picture faded in
+        // at the old shape and then the window jumped.
+        await _session.PresentAsync(Notepad, Floating);
+        FakeOutput output = _platform.Outputs[0];
+        Assert.True(output.ShapesNow[^1], "before it's first seen");
+
+        _platform.SourceSize = new Size(900, 1200);
+        await _session.PresentAsync(Deck, Floating);
+        Assert.Equal(new Size(900, 1200), output.Shapes[^1]);
+        Assert.True(output.ShapesNow[^1], "a switch: while it's black, not a moment into the fade-in");
+
+        await _session.SetCropAsync(CropRegion.Create(0, 0, 0.5, 1));
+        Assert.True(output.ShapesNow[^1], "a new crop: at the moment the picture changes");
+
+        _platform.SourceSize = new Size(1000, 1200);
+        _platform.Watchers[^1].RaiseChanged(); // the presenter drags the shown window's edge
+        Assert.False(output.ShapesNow[^1], "a source being resized: at most every 150 ms");
+    }
+
+    [Fact]
     public async Task A_full_screen_output_keeps_the_screen_shape()
     {
         await _session.PresentAsync(Notepad, TestData.Tv, true);
@@ -804,10 +826,14 @@ internal sealed class FakeOutput(DisplayMonitor monitor) : IOutputSurface
 
     public void StepBack(bool back) => StepBacks.Add(back);
 
-    public void SetContentAspect(Size? content)
+    /// <summary>For each shape: whether it was to be taken at once (a switch or a crop) rather than after a pause (a source being resized).</summary>
+    public List<bool> ShapesNow { get; } = [];
+
+    public void SetContentAspect(Size? content, bool now = false)
     {
         if (Shapes.Count == 0) ShapedBeforeReveal = !Calls.Contains("Reveal");
         Shapes.Add(content);
+        ShapesNow.Add(now);
     }
 
     public bool PrivatePreview { get; private set; }

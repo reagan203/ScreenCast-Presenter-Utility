@@ -49,6 +49,9 @@ internal sealed class ScpProcess : IDisposable
     public string ScreenshotDir => Path.Combine(_dir, "shots");
     public string RecordingDir => Path.Combine(_dir, "recs");
 
+    /// <summary>The app's diagnostic log (it says why something couldn't be done).</summary>
+    public static string DiagLog => Path.Combine(AppContext.BaseDirectory, "scp-diag.log");
+
     /// <summary>Capture-helper processes still running (SCP's own exe in helper mode).</summary>
     public int HelperCount => Math.Max(0, Process.GetProcessesByName("ScreenCastPresenter").Length - 1);
 
@@ -87,7 +90,7 @@ internal sealed class ScpProcess : IDisposable
 
         var info = new ProcessStartInfo(exe) { UseShellExecute = false };
         info.Environment["SCP_SETTINGS_PATH"] = path;
-        info.Environment["SCP_DIAG_LOG"] = Path.Combine(AppContext.BaseDirectory, "scp-diag.log");
+        info.Environment["SCP_DIAG_LOG"] = DiagLog;
         Process process = Process.Start(info) ?? throw new InvalidOperationException("Couldn't start SCP.");
         var scp = new ScpProcess(process, dir, exe);
         scp.WaitUntilReady();

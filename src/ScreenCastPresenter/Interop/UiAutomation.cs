@@ -24,6 +24,8 @@ internal sealed unsafe partial class UiAutomation : IDisposable
     private const int SlotLength = 3, SlotGetElement = 4;
 
     private const int IsPasswordPropertyId = 30019;
+    private const int ControlTypePropertyId = 30003, DocumentControlTypeId = 50030;
+    private const ushort VtI4 = 3;
     private const int TreeScopeDescendants = 4;
     private const ushort VtBool = 11;
     private const uint CoinitMultithreaded = 0, ClsctxInprocServer = 1;
@@ -52,7 +54,7 @@ internal sealed unsafe partial class UiAutomation : IDisposable
         public int Left, Top, Right, Bottom;
     }
 
-    private nint _uia, _isPassword;
+    private nint _uia, _isPassword, _isDocument;
 
     private UiAutomation(nint uia, nint isPassword)
     {
@@ -142,6 +144,56 @@ internal sealed unsafe partial class UiAutomation : IDisposable
         }
     }
 
+    /// <summary>
+    /// The page area of a browser window (FR-133): the biggest document on screen inside
+    /// <paramref name="window"/>, in screen coordinates; null when there's none (the page is
+    /// loading, the browser doesn't say, or it isn't a browser).
+    /// </summary>
+    public Rectangle? DocumentIn(nint window)
+    {
+        if (_uia == 0 || window == 0) return null;
+        if (_isDocument == 0)
+        {
+            var value = new Variant { Vt = VtI4, Data = DocumentControlTypeId };
+            nint condition;
+            if (((delegate* unmanaged[Stdcall]<nint, int, Variant, nint*, int>)Slot(_uia, SlotCreatePropertyCondition))(_uia, ControlTypePropertyId, value, &condition) < 0 || condition == 0) return null;
+            _isDocument = condition;
+        }
+        nint element = 0, found = 0;
+        Rectangle? best = null;
+        try
+        {
+            if (((delegate* unmanaged[Stdcall]<nint, nint, nint*, int>)Slot(_uia, SlotElementFromHandle))(_uia, window, &element) < 0 || element == 0) return null;
+            if (((delegate* unmanaged[Stdcall]<nint, int, nint, nint*, int>)Slot(element, SlotFindAll))(element, TreeScopeDescendants, _isDocument, &found) < 0 || found == 0) return null;
+            int count;
+            if (((delegate* unmanaged[Stdcall]<nint, int*, int>)Slot(found, SlotLength))(found, &count) < 0) return null;
+            for (int i = 0; i < count && i < 64; i++)
+            {
+                nint doc;
+                if (((delegate* unmanaged[Stdcall]<nint, int, nint*, int>)Slot(found, SlotGetElement))(found, i, &doc) < 0 || doc == 0) continue;
+                try
+                {
+                    if (BoundsOf(doc) is { } r && !IsOffscreen(doc) && (best is not { } b || (long)r.Width * r.Height > (long)b.Width * b.Height)) best = r;
+                }
+                finally
+                {
+                    Marshal.Release(doc);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is COMException or SEHException)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+            return null;
+        }
+        finally
+        {
+            if (found != 0) Marshal.Release(found);
+            if (element != 0) Marshal.Release(element);
+        }
+        return best;
+    }
+
     private static Rectangle? BoundsOf(nint element)
     {
         Rect r;
@@ -160,6 +212,8 @@ internal sealed unsafe partial class UiAutomation : IDisposable
     public void Dispose()
     {
         if (_isPassword != 0) Marshal.Release(_isPassword);
+        if (_isDocument != 0) Marshal.Release(_isDocument);
+        _isDocument = 0;
         if (_uia != 0) Marshal.Release(_uia);
         _isPassword = _uia = 0;
     }

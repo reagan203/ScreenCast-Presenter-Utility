@@ -48,8 +48,10 @@ internal sealed partial class ScpApp
         {
             Name = InkStroke.TidyText(name, Scene.MaxNameLength),
             Source = FavouriteMatcher.FromSource(source),
-            Crop = source.Crop,
+            Crop = source.ChosenCrop, // the taskbar and a browser's page are worked out again when it's shown
             Inset = _inset is { } inset ? FavouriteMatcher.FromSource(inset) : null,
+            InsetShape = Settings.InsetShape,
+            Night = Settings.NightFilter,
             SplitWith = [.. _split.Select(FavouriteMatcher.FromSource)],
             SplitLayout = SplitLayoutNow.ToString(),
             InsetCorner = Settings.InsetCorner,
@@ -78,7 +80,15 @@ internal sealed partial class ScpApp
             Message($"{scene.Title(slot)} can't be shown: {Missing(favourite)}.");
             return;
         }
-        await PresentAsync(scene.Crop is { } crop ? source with { Crop = crop } : source);
+        _pendingSection = ($"scene:{slot}", scene.Title(slot), favourite.Minutes);
+        try
+        {
+            await PresentAsync(scene.Crop is { } crop ? source with { Crop = crop } : source);
+        }
+        finally
+        {
+            _pendingSection = null;
+        }
         if (_session.State != SessionState.Presenting || _session.Source is not { } shown || !shown.IsSameSource(source)) return;
 
         Settings.InsetCorner = scene.InsetCorner;
@@ -97,6 +107,8 @@ internal sealed partial class ScpApp
         if (scene.Spotlight != _spotlightOn) SetSpotlight(scene.Spotlight);
         if (Math.Abs(scene.Dim - _session.Dim) > 0.001) await _session.SetDimAsync(scene.Dim);
         if (scene.LiveCaptions is { } captions && captions != LiveCaptionsOn) ToggleLiveCaptions();
+        if (InsetShapes.Parse(scene.InsetShape) != Settings.InsetShapeMode) SetInsetShape(InsetShapes.Parse(scene.InsetShape));
+        if (scene.Night is { } night && NightFilter.Parse(night) != Settings.Night) SetNightFilter(NightFilter.Parse(night));
         Message($"Scene {slot}: {scene.Title(slot)}.", BadgeDot.Accent);
     }
 
@@ -106,12 +118,14 @@ internal sealed partial class ScpApp
         if (f.ScreenDevice is { } device) return _monitors.FirstOrDefault(m => m.DeviceName == device) is { } screen ? SourceWindow.ForScreen(screen) : null;
         if (f.CameraId is { } id) return (await Cameras.ListAsync()).FirstOrDefault(c => c.Id == id) is { } camera ? SourceWindow.ForCamera(camera) : null;
         if (f.PicturePath is { } picture) return PictureSource.Problem(picture) is null ? SourceWindow.ForPicture(picture, f.Title) : null;
+        if (f.VideoPath is not null || f.DocumentPath is not null || f.Special is not null) return await ResolveFileAsync(f);
         return FavouriteMatcher.FindBest(f, WindowEnumerator.GetPresentableWindows()) is { } w && !IsNeverShown(w) ? w : null;
     }
 
     private static string Missing(Favourite f) =>
         f.ScreenDevice is not null ? "its screen isn't connected" : f.CameraId is not null ? "its camera isn't connected"
-        : f.PicturePath is not null ? "its picture can't be found" : $"{f.AppName} isn't open";
+        : f.PicturePath is not null ? "its picture can't be found"
+        : f.VideoPath is not null ? "its video can't be found" : f.DocumentPath is not null ? "its PDF can't be found" : $"{f.AppName} isn't open";
 
     /// <summary>Settings: forget a scene.</summary>
     public void DeleteScene(int slot)
@@ -185,14 +199,23 @@ internal sealed partial class ScpApp
     /// <summary>Shows the next item that can be shown; false when none can.</summary>
     private async Task<bool> ShowNextAsync(PlaylistRun run)
     {
-        List<PlaylistItem> steps = PlaylistPlayer.Expand(run.Playlist.Items); // a folder's pictures as they are now
+        List<PlaylistItem> steps = PlaylistPlayer.Expand(run.Playlist.Items, PdfPageCount); // a folder's pictures and a PDF's pages as they are now
         var resolved = new Dictionary<PlaylistItem, SourceWindow?>();
-        foreach (PlaylistItem item in steps.Distinct()) resolved[item] = await ResolveItemAsync(item, run.Screen);
+        // A PDF's pages are made only when one is shown (not every page on every turn): until then, the PDF being there is enough.
+        foreach (PlaylistItem item in steps.Distinct())
+            resolved[item] = item.IsDocument ? item.Path is { } pdf && PdfPages.Problem(pdf) is null ? SourceWindow.ForPicture(pdf) : null : await ResolveItemAsync(item, run.Screen);
         if (!_playing.TryGetValue(run.Screen, out PlaylistRun? still) || !ReferenceEquals(still, run)) return false; // stopped meanwhile
         int? next = PlaylistPlayer.Next(steps, run.Index is { } at && at < steps.Count ? at : null, item => resolved[item] is not null, run.Playlist.Shuffle, _shuffle);
         if (next is not { } index) return false;
-        if (index == run.Index && run.Index is not null && steps.Count(s => resolved[s] is not null) == 1) return true; // only one can be shown: it stays
+        if (index == run.Index && run.Index is not null && steps.Count(s => resolved[s] is not null) == 1)
+        {
+            // Only one can be shown: it stays. A video that ended plays again (a lobby loop of one video).
+            if (steps[index].IsVideo && run.Screen == PlaylistScreen.Main && _session.Source is { IsVideo: true }) _session.Effects?.Video(VideoCommand.Restart, 0);
+            return true;
+        }
         PlaylistItem chosen = steps[index];
+        if (chosen.IsDocument && await ResolveItemAsync(chosen, run.Screen) is { } page) resolved[chosen] = page;
+        else if (chosen.IsDocument) return false; // its page couldn't be made
         _playlistSwitching = true;
         try
         {
@@ -206,7 +229,8 @@ internal sealed partial class ScpApp
         }
         run.Index = index;
         run.Timer.Stop();
-        run.Timer.Interval = Slideshow.Normalize(chosen.Seconds) * 1000;
+        // A video plays to its end (it says when); the timer is only a backstop for one that never does.
+        run.Timer.Interval = chosen.IsVideo ? (int)TimeSpan.FromHours(4).TotalMilliseconds : Slideshow.Normalize(chosen.Seconds) * 1000;
         run.Timer.Start();
         return true;
     }
@@ -216,6 +240,9 @@ internal sealed partial class ScpApp
     {
         if (item.IsPicture) return item.Path is { } file && PictureSource.Problem(file) is null ? SourceWindow.ForPicture(file) : null;
         if (item.IsCard) return item.Text is { } words && TextCard.Render(CardsFolder, words) is { } card ? SourceWindow.ForPicture(card, TextCard.Title(words)) : null;
+        if (item.IsVideo) return item.Path is { } video && VideoSource.Problem(video) is null && screen == PlaylistScreen.Main ? SourceWindow.ForVideo(video) : null; // a video plays on the main TV
+        if (item.IsDocument) return item.Path is { } pdf && PdfPages.Problem(pdf) is null ? await DocumentPageAsync(pdf, Math.Max(1, item.Slot), quiet: true) : null;
+        if (item.IsRoomSign) return Settings.Calendar is null ? null : RoomSignSource();
         Favourite? f = item.IsScene ? Settings.Scenes[item.Slot - 1]?.Source : Settings.Favourites[item.Slot - 1];
         if (f is null || await ResolveAsync(f) is not { } source) return null;
         if (source.Screen is { } s && (_session.FullScreenOutput is { } tv && s.IsSameScreen(tv) || _second?.FullScreenOutput is { } tv2 && s.IsSameScreen(tv2)
@@ -617,6 +644,12 @@ internal sealed partial class ScpApp
         "replay" => Settings.ReplayOn,
         "voice-commands" => Settings.VoiceCommands,
         "notes" => NotesOpen,
+        "follow-me" => FollowMeOn,
+        "timer" => TimerOn,
+        "night-filter" => Settings.Night != NightMode.Off,
+        "clicker-keys" => Settings.ClickerKeys,
+        "speaker-screen" => SpeakerScreenOpen,
+        "rehearse" => Rehearsing,
         _ => null,
     };
 
@@ -640,6 +673,10 @@ internal sealed partial class ScpApp
             case "replay": SetReplay(on); break;
             case "voice-commands": SetVoiceCommands(on); break;
             case "notes": ToggleNotes(); break;
+            case "timer" when on: StartTimer(Settings.TimerMinutes); break;
+            case "timer": StopTimer(null); break;
+            case "night-filter": SetNightFilter(on ? NightMode.Soften : NightMode.Off); break;
+            case "clicker-keys": SetClickerKeys(on, Settings.ClickerArrows); break;
             default: await RunAsync(what); break; // the others are toggles of their own name
         }
         return IsSwitchedOn(what) == on ? null : LastCommandMessage($"Couldn't switch {what} {(on ? "on" : "off")}.");
@@ -700,8 +737,19 @@ internal sealed partial class ScpApp
     private void PushRemoteStatus(string? note = null) => _remote?.SendStatus(RemoteStatusJson(note));
 
     /// <summary>Next or previous slide in what's shown (Page Down / Page Up, like a clicker).</summary>
-    private void SendSlide(bool forward)
+    private void SendSlide(bool forward, bool fromClicker = false)
     {
+        if (_session.Source is { IsDocument: true })
+        {
+            _ = GuardAsync(() => TurnPageAsync(forward ? 1 : -1)); // FR-115: the PDF's page turns
+            return;
+        }
+        if (JumpVideo(forward ? 1 : -1)) return; // FR-116: a video jumps ten seconds
+        if (fromClicker && _session.State == SessionState.Presenting && _session.Source is { IsWindow: true } window)
+        {
+            SlideKeys.Post(window.Handle, forward); // taken as a clicker key: posted, never typed (it would be taken again)
+            return;
+        }
         if (_session.State != SessionState.Presenting || _session.Source is not { IsWindow: true } source)
         {
             Message("Next and previous slide work on a window that's shown, like PowerPoint or a PDF.");
